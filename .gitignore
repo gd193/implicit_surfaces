@@ -1,0 +1,22 @@
+# --- Python Caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+# If you use Jupyter Lab's workspace storage
+.jupyter_workspace
+
+# --- Environments & Distribution ---
+.env
+.venv
+env/
+venv/
+build/
+dist/
+*.egg-info/

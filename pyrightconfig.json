@@ -1,0 +1,21 @@
+{
+    "typeCheckingMode": "standard",
+    
+    "reportMissingTypeStubs": "none",
+    // files to ignore can be added here if needed
+    "exclude": [
+        "**.ipynb"
+    ],
+
+    "executionEnvironments": [
+        {
+            "root": ".",
+            
+            "reportUnknownMemberType": "none",
+            "reportUnknownVariableType": "none",
+            "reportUnknownArgumentType": "none",
+            "reportInvalidTypeForm": "none",
+        },
+    ]
+
+}
