@@ -1,15 +1,14 @@
-from typing import NamedTuple, Tuple
+from typing import NamedTuple, Tuple, cast
 from matplotlib.pyplot import box
 from implicitSurfaces.implicit_surface import *
 import jnp_bounds.autobounds as jb
 from functools import partial
-from utils.ab_bounds_conversion import autobounds_coefficients_to_power_series
-from utils.bernstein_polynomial_transform_nd import transform_power_series_interval_to_bernstein
 from utils.jnpbounds_roots import roots_2nd_order_tensor
 from utils.jnpbound_empty_sphere import empty_sphere_2nd_order_tensor
-from utils.jnp_array_compaction import perform_compaction, should_compact, init_compaction_sizes, uniform_size_generator
+from utils.jnp_array_compaction import perform_compaction, should_compact, uniform_size_generator
 from rayMarcher.utils import ray_aabb_intersection_inside
 from utils.types import RayMarchState, RayMarchOutput
+
 
 class jnpboundedImplicit(implicitSurface):
     """
@@ -24,10 +23,9 @@ class jnpboundedImplicit(implicitSurface):
     For details see https://github.com/google/autobound/
     """
     def __init__(self, 
-                fn: Callable, 
-                autobounds_max_degree: int, 
-                level_set: float=None,
-                classification_flag: str=None):
+                autobounds_max_degree: int,
+                **kwargs
+                ):
         """
         Initialize the autobounded implicit surface.
 
@@ -36,169 +34,13 @@ class jnpboundedImplicit(implicitSurface):
             params (Optional[dict]): Additional parameters for the jnp autobound library.
             level_set (float): The level set value for the implicit surface.
         """
-        super().__init__(fn, level_set)
+        super().__init__(**kwargs)
         self.autobounds_max_degree = autobounds_max_degree
         self.taylor_bounds = jb.taylor_bounds(self.fn, max_degree=self.autobounds_max_degree)
-        self.fn = self.fn
-
-        if classification_flag == 'bernstein':
-            self.classify_box = self.classify_box_bernstein
-        elif classification_flag == 'control_points':
-            self.classify_box = self.classify_box_control_points
-        else:
-            raise ValueError("classification_flag must be either 'bernstein' or 'control_points'.")
-        self.classification_flag = classification_flag
 
 
-    def upper_bound_below_level_set_control_points(self, operands: tuple):
-        """
-        Check if the upper bound of the function is below the level set value.
+    def ray_step(self, params, ray_origin, ray_direction, trust_region_size, upper_lower_flag=None):
 
-        Args:
-            operands (tuple): A tuple containing the lower bound values at the box edges
-
-        Returns:
-            result (() jnp.ndarray): A boolean scalar  indicating if the upper bound is below the level set.
-        """
-        bounds_lower, bounds_upper = operands
-        return jnp.all(bounds_upper < self.level_set)
-    
-    def upper_bound_below_level_set_bernstein(self, operands: tuple):
-        """
-        Check if the upper bound of the function is below the level set value using Bernstein polynomial coefficients.
-
-        Args:
-            operands (tuple): A tuple containing the bernstein polynomial coefficients
-
-        Returns:
-            result (() jnp.ndarray): A boolean scalar indicating if the upper bound is below the level set.
-        """
-        bs_coeff_lower, bs_coeff_upper = operands
-        return jnp.all(bs_coeff_upper < self.level_set)
-
-    def lower_bound_above_level_set_control_points(self, operands: tuple):
-        """
-        Check if the lower bound of the function is above the level set value.
-
-        Args:
-            operands (tuple): A tuple containing the lower bound values at the box edges
-
-        Returns:
-            result (() jnp.ndarray): A boolean scalar indicating if the lower bound is above the level set.
-        """
-        bounds_lower, bounds_upper = operands
-        return jnp.all(bounds_lower > self.level_set)
-    
-    def lower_bound_above_level_set_bernstein(self, operands: tuple):
-        """
-        Check if the lower bound of the function is above the level set value using Bernstein polynomial coefficients.
-
-        Args:
-            operands (tuple): A tuple containing the bernstein polynomial coefficients
-
-        Returns:
-            result (() jnp.ndarray): A boolean scalar indicating if the lower bound is above the level set.
-        """
-        bs_coeff_lower, bs_coeff_upper = operands
-        return jnp.all(bs_coeff_lower > self.level_set)
-
-
-    def classify_box_control_points(self, box_aa, box_bb):
-        """
-        Determine whether the function contains the level_set value within the box defined by box_aa and box_bb
-        using control points as the box edges.
-
-        Args:
-            box_aa (jnp.ndarray): The lower corner of the axis-aligned bounding box.
-            box_bb (jnp.ndarray): The upper corner of the axis-aligned bounding box.
-
-        Returns:
-            fn_val (jnp.ndarray): The value of the function at the center of the box.
-            box_class (jnp.ndarray): The classification of the box based on the function value and level set.
-        """
-        print("recompile triggered")
-        box_center = (box_aa + box_bb) / 2
-        box_edges = jnp.array([
-            box_aa,
-            jnp.array([box_aa[0], box_bb[1]]),
-            jnp.array([box_bb[0], box_aa[1]]),
-            box_bb,
-        ])
-        auto_bound = self.taylor_bounds(box_center, (box_aa, box_bb))
-        center_fn_val = self.fn(box_center).squeeze()
-        bounds_lower = jax.vmap(auto_bound.lower)(box_edges)
-        bounds_upper = jax.vmap(auto_bound.upper)(box_edges)
-
-        box_level_stable = jax.lax.cond(center_fn_val > self.level_set,
-                                        self.lower_bound_above_level_set_control_points,
-                                        self.upper_bound_below_level_set_control_points,
-                                        (bounds_lower, bounds_upper, box_edges))
-        box_class = jax.lax.select(box_level_stable,
-                                   jax.lax.select(center_fn_val > self.level_set, BC_CLASS[0], BC_CLASS[1]),
-                                   BC_CLASS[2])
-
-        return center_fn_val, box_class
-
-
-    def classify_box_bernstein(self, box_aa, box_bb):
-        """
-        Determine whether the function contains the level_set value within the box defined by box_aa and box_bb
-        using Bernstein polynomial coefficients as the polynomial bounds.
-
-        Args:
-            box_aa (jnp.ndarray): The lower corner of the axis-aligned bounding box.
-            box_bb (jnp.ndarray): The upper corner of the axis-aligned bounding box.
-
-        Returns:
-            fn_val (jnp.ndarray): The value of the function at the center of the box.
-            box_class (jnp.ndarray): The classification of the box based on the function value and level set.
-        """
-        box_center = (box_aa + box_bb) / 2
-        raise NotImplementedError("Bernstein classification not yet implemented")
-        auto_bound = self.taylor_bounds(box_center, jb.Interval(lower=box_aa, upper=box_bb))
-        center_fn_val = auto_bound.lower(auto_bound.x0).squeeze()
-        ps_coeff_lower = autobounds_coefficients_to_power_series(auto_bound.coefficients, 
-                                                                 dimension=box_aa.shape[-1], 
-                                                                 degree=self.autobounds_max_degree, 
-                                                                 upper_lower_flag='lower')
-    
-        ps_coeff_upper = autobounds_coefficients_to_power_series(auto_bound.coefficients,
-                                                                 dimension=box_aa.shape[-1],
-                                                                 degree=self.autobounds_max_degree,
-                                                                 upper_lower_flag='upper')
-
-        bs_coeff_lower = transform_power_series_interval_to_bernstein(ps_coeff_lower, jnp.stack([box_aa - box_center, 
-                                                                                                 box_bb - box_center]))
-        bs_coeff_upper = transform_power_series_interval_to_bernstein(ps_coeff_upper, jnp.stack([box_aa - box_center,
-                                                                                                 box_bb - box_center]))
-        
-        box_level_stable = jax.lax.cond(center_fn_val > self.level_set,
-                                        self.lower_bound_above_level_set_control_points,
-                                        self.upper_bound_below_level_set_control_points,
-                                        (bs_coeff_lower, bs_coeff_upper))
-        box_class = jax.lax.select(box_level_stable,
-                                   jax.lax.select(center_fn_val > self.level_set, BC_CLASS[0], BC_CLASS[1]),
-                                   BC_CLASS[2])
-
-        return center_fn_val, box_class
-    
-
-    def ray_intersection_bounded(self, params: jnp.ndarray,ray_origin: jnp.ndarray, ray_direction: jnp.ndarray, trust_region_size: jnp.ndarray, upper_lower_flag: Optional[str]=None):
-        """
-        Compute the ray intersection with the implicit surface defined by the power series coefficients inside the bounding box.
-        Args:
-            ray_origin (jnp.ndarray): The origin of the ray.
-            ray_direction (jnp.ndarray): The direction of the ray.
-            trust_region_size (jnp.ndarray): ( ) The length of the axis-aligned bounding box edges in each dimension. Same for all dimensions. Centered at ray_origin.
-            upper_lower_flag (Optional[str]): Indicates whether to use the upper or lower bound.
-
-
-        Returns:
-            in_box (jnp.ndarray): A boolean indicating if there is an intersection in the bounding box.
-            hit_point (jnp.ndarray): The coordinates of the intersection point.
-            t (jnp.ndarray): The distance to the intersection point along the ray.
-            t_box_intersection (jnp.ndarray): The distance to the intersection point with the bounding box.
-        """
         auto_bound = self.taylor_bounds(ray_origin, x_trust_region=None, trust_region_size=trust_region_size)
         center_fn_val = auto_bound.polynomial_enclosure[0]
         taylor_enclosure = auto_bound.polynomial_enclosure
@@ -212,9 +54,11 @@ class jnpboundedImplicit(implicitSurface):
         t_box_intersection = ray_aabb_intersection_inside(ray_origin, ray_direction, trust_region_size)
         in_box = jnp.logical_and(hit, t_poly_intersection < t_box_intersection)
         t = jnp.where(in_box, t_poly_intersection, t_box_intersection)
-        hit_point = ray_origin + t * ray_direction
 
-        return in_box.squeeze(), hit_point, t.squeeze(), t_box_intersection.squeeze(), center_fn_val.squeeze()
+        center_fn_val = cast(jnp.ndarray, center_fn_val)
+        t = cast(jnp.ndarray, t)
+
+        return center_fn_val, t, jnp.logical_not(in_box)
     
 
     def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray, upper_lower_flag: Optional[str]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -227,132 +71,129 @@ class jnpboundedImplicit(implicitSurface):
         Returns:
             fn_val (jnp.ndarray)(1,): The value of the function at the current position
             radius (jnp.ndarray)(1,): The radius of the largest empty sphere
-            new_trust_region_size (jnp.ndarray)(1,): The updated trust region size
+            trust_region_empty_flag (jnp.ndarray)(1,): A boolean flag indicating whether the entire trust region is empty (True) or not (False)
         """
         auto_bound = self.taylor_bounds(params, x_trust_region=None, trust_region_size=trust_region_size)
         taylor_enclosure = auto_bound.polynomial_enclosure
         fn_val = taylor_enclosure[0].squeeze()
 
         if upper_lower_flag is None:
-            upper_lower_flag = jnp.where(fn_val > self.level_set, jnp.array(-1), jnp.array(1)).squeeze() # stay on same side of level set
+            upper_lower_flag = jnp.where(fn_val.squeeze() > self.level_set, jnp.array(-1), jnp.array(1)) # stay on same side of level set
         radius = empty_sphere_2nd_order_tensor(taylor_enclosure, upper_lower_flag, dim=x.shape[0], isolevel=self.level_set).squeeze()
         outside_trust_region = radius > trust_region_size * 0.5
         safe_radius = jnp.where(outside_trust_region, trust_region_size * 0.5, radius)
-        trust_region_too_large = radius < trust_region_size * 0.05
-        new_trust_region_size = jnp.where(outside_trust_region, trust_region_size * 2, trust_region_size)
-        new_trust_region_size = jnp.where(trust_region_too_large, trust_region_size * 0.5, new_trust_region_size)
-        return fn_val, safe_radius, new_trust_region_size
+        return fn_val, safe_radius, outside_trust_region
 
 
-    def ray_marching_step_fn(self, spatial_eps: float, level_set_eps: float, max_distance: float, upper_lower_flag: Optional[str]=None):
+#     def ray_marching_step_fn(self, spatial_eps: float, level_set_eps: float, max_distance: float, upper_lower_flag: Optional[str]=None):
 
-        def step_fn(ray: RayMarchState):
-            in_box, hit_point, t, t_box_intersection, center_fn_val = self.ray_intersection_bounded(ray.ray_position, ray.ray_direction, ray.trust_region_size, upper_lower_flag)
+#         def step_fn(ray: RayMarchState):
+#             in_box, hit_point, t, t_box_intersection, center_fn_val = self.ray_intersection_bounded(ray.ray_position, ray.ray_direction, ray.trust_region_size, upper_lower_flag)
 
-            ### Check termination criteria
-            is_hit = (t < spatial_eps) | (jnp.abs(center_fn_val - self.level_set) < level_set_eps)
-            distance_traveled = jnp.linalg.norm(hit_point - ray.ray_origin)
-            is_done = jnp.logical_or(is_hit, distance_traveled >= max_distance)
+#             ### Check termination criteria
+#             is_hit = (t < spatial_eps) | (jnp.abs(center_fn_val - self.level_set) < level_set_eps)
+#             distance_traveled = jnp.linalg.norm(hit_point - ray.ray_origin)
+#             is_done = jnp.logical_or(is_hit, distance_traveled >= max_distance)
             
-            ### Update loop variables
-            new_niter = jnp.where(is_done, ray.niter, ray.niter + 1)
-            new_ray_position = jnp.where(is_done, ray.ray_position, hit_point)
-            new_trust_region_size = jax.lax.cond(
-                is_done,
-                no_update_trust_region, update_trust_region,
-                *(ray.trust_region_size, t, t_box_intersection, in_box)
-            )
+#             ### Update loop variables
+#             new_niter = jnp.where(is_done, ray.niter, ray.niter + 1)
+#             new_ray_position = jnp.where(is_done, ray.ray_position, hit_point)
+#             new_trust_region_size = jax.lax.cond(
+#                 is_done,
+#                 no_update_trust_region, update_trust_region,
+#                 *(ray.trust_region_size, t, t_box_intersection, in_box)
+#             )
 
-            return RayMarchState(new_niter, new_ray_position, ray.ray_direction, new_trust_region_size, ray.ray_origin, is_done, is_hit)
-        return step_fn
+#             return RayMarchState(new_niter, new_ray_position, ray.ray_direction, new_trust_region_size, ray.ray_origin, is_done, is_hit)
+#         return step_fn
 
-    def ray_surface_intersection_batch_fn(self, max_distance: float=1e4, spatial_eps: float=1e-5, level_set_eps: float=1e-5, max_iterations: int=100, init_interval: float=1.0, upper_lower_flag: Optional[str]=None):
-        """
-        Compute the ray intersection with the implicit surface for a batch of rays.
-        Args:
-            max_distance (float): The maximum distance to search for an intersection.
-            spatial_eps (float): The spatial epsilon termination criterion.
-            level_set_eps (float): The level set epsilon termination criterion.
-            max_iterations (int): The maximum number of iterations for the ray-surface intersection.
-            init_interval (float): The initial interval size for the bounding boxes.
-            upper_lower_flag (Optional[str]): Flag to indicate whether to use the upper or lower bound for the intersection.
-        Returns:
-            hit_flags (jnp.ndarray): (N,) A boolean array indicating if there is an intersection with the surface for each ray.
-            hit_points (jnp.ndarray): (N, 3) The coordinates of the intersection points for each ray.
-            n_iters (jnp.ndarray): (N,) The number of iterations taken for each ray.
-        """
-        # Pre-compile the step function (VMAP over the RayMarchState)
-        step_fn_jit_vmap = jax.jit(jax.vmap(self.ray_marching_step_fn(spatial_eps, level_set_eps, max_distance, upper_lower_flag)))
-        def batch_intersection_fn(ray_origins, ray_directions):
+#     def ray_surface_intersection_batch_fn(self, max_distance: float=1e4, spatial_eps: float=1e-5, level_set_eps: float=1e-5, max_iterations: int=100, init_interval: float=1.0, upper_lower_flag: Optional[str]=None):
+#         """
+#         Compute the ray intersection with the implicit surface for a batch of rays.
+#         Args:
+#             max_distance (float): The maximum distance to search for an intersection.
+#             spatial_eps (float): The spatial epsilon termination criterion.
+#             level_set_eps (float): The level set epsilon termination criterion.
+#             max_iterations (int): The maximum number of iterations for the ray-surface intersection.
+#             init_interval (float): The initial interval size for the bounding boxes.
+#             upper_lower_flag (Optional[str]): Flag to indicate whether to use the upper or lower bound for the intersection.
+#         Returns:
+#             hit_flags (jnp.ndarray): (N,) A boolean array indicating if there is an intersection with the surface for each ray.
+#             hit_points (jnp.ndarray): (N, 3) The coordinates of the intersection points for each ray.
+#             n_iters (jnp.ndarray): (N,) The number of iterations taken for each ray.
+#         """
+#         # Pre-compile the step function (VMAP over the RayMarchState)
+#         step_fn_jit_vmap = jax.jit(jax.vmap(self.ray_marching_step_fn(spatial_eps, level_set_eps, max_distance, upper_lower_flag)))
+#         def batch_intersection_fn(ray_origins, ray_directions):
             
-            ### Python control loop variables
-            iter = 0
-            current_compaction_index = 0
-            init_compaction_sizes(uniform_size_generator(ray_directions.shape[0], n_compactions=10))
-            INVALID_IND = ray_directions.shape[0] + 1
-            ### JAX loop and output states
-            active_state, output_state, active_indices = _init_ray_marching_states(ray_directions.shape[0], 
-                                                                                                    init_interval, 
-                                                                                                    ray_origins, 
-                                                                                                    ray_directions)
-            ### Python control loop for ray marching with compaction
-            ### This cannot be jitted because of the dynamic compaction sizes (XLA needs to know static shapes and step numbers)
-            while(True):
-                active_state = step_fn_jit_vmap(active_state)
-                iter += 1
-                N_valid = int(jnp.sum(~active_state.done_flag))
+#             ### Python control loop variables
+#             iter = 0
+#             current_compaction_index = 0
+#             init_compaction_sizes(uniform_size_generator(ray_directions.shape[0], n_compactions=10))
+#             INVALID_IND = ray_directions.shape[0] + 1
+#             ### JAX loop and output states
+#             active_state, output_state, active_indices = _init_ray_marching_states(ray_directions.shape[0], 
+#                                                                                                     init_interval, 
+#                                                                                                     ray_origins, 
+#                                                                                                     ray_directions)
+#             ### Python control loop for ray marching with compaction
+#             ### This cannot be jitted because of the dynamic compaction sizes (XLA needs to know static shapes and step numbers)
+#             while(True):
+#                 active_state = step_fn_jit_vmap(active_state)
+#                 iter += 1
+#                 N_valid = int(jnp.sum(~active_state.done_flag))
 
 
-                should_compact_flag, new_compaction_index, new_compaction_size = should_compact(N_valid, current_compaction_index)
-                if should_compact_flag:
+#                 should_compact_flag, new_compaction_index, new_compaction_size = should_compact(N_valid, current_compaction_index)
+#                 if should_compact_flag:
                     
-                    current_compaction_index = new_compaction_index
+#                     current_compaction_index = new_compaction_index
 
-                    active_state, output_state, active_indices = perform_compaction(
-                        active_state,
-                        output_state,
-                        active_indices,
-                        fill_index_value=INVALID_IND,
-                        new_compacted_size=new_compaction_size
-                    )
-                if N_valid == 0 or iter >= max_iterations:
-                    break
+#                     active_state, output_state, active_indices = perform_compaction(
+#                         active_state,
+#                         output_state,
+#                         active_indices,
+#                         fill_index_value=INVALID_IND,
+#                         new_compacted_size=new_compaction_size
+#                     )
+#                 if N_valid == 0 or iter >= max_iterations:
+#                     break
 
-            return output_state
-        return batch_intersection_fn
-
-
-def update_trust_region(trust_region_size, t, t_box_intersection, in_box):
-    trust_region_size = jnp.where(in_box, trust_region_size, trust_region_size * jnp.sqrt(2))
-
-    box_too_big = t < 0.5 * t_box_intersection
-
-    trust_region_size = jnp.where(box_too_big, trust_region_size * 1/jnp.sqrt(2), trust_region_size)
-    return trust_region_size.squeeze()
-
-def no_update_trust_region(trust_region_size, t, t_box_intersection, in_box):
-    return trust_region_size
+#             return output_state
+#         return batch_intersection_fn
 
 
-@partial(jax.jit, static_argnames=('N_rays', 'init_interval'))
-def _init_ray_marching_states(N_rays: int, init_interval: float, ray_origins: jnp.ndarray, ray_directions: jnp.ndarray) -> tuple[jnp.ndarray, ...]:
-    """
-    Initialize the ray marching loop variables and output arrays.
-    """
-    ### init loop variables
-    niters = jnp.zeros(N_rays, dtype=jnp.int32)
-    ray_origins = jnp.ones_like(ray_directions) * ray_origins
+# def update_trust_region(trust_region_size, t, t_box_intersection, in_box):
+#     trust_region_size = jnp.where(in_box, trust_region_size, trust_region_size * jnp.sqrt(2))
 
-    intervals = jnp.ones(N_rays) * init_interval
-    done_flags = jnp.zeros(N_rays, dtype=bool)
-    hit_flags = jnp.zeros(N_rays, dtype=bool)
+#     box_too_big = t < 0.5 * t_box_intersection
 
-    ### output arrays
-    out_ray_origins = jnp.zeros_like(ray_origins)
-    out_hit_flags = jnp.zeros_like(hit_flags)
-    out_niters = jnp.zeros_like(niters)
+#     trust_region_size = jnp.where(box_too_big, trust_region_size * 1/jnp.sqrt(2), trust_region_size)
+#     return trust_region_size.squeeze()
 
-    ### active indices
-    active_indices = jnp.arange(N_rays)
+# def no_update_trust_region(trust_region_size, t, t_box_intersection, in_box):
+#     return trust_region_size
 
-    return RayMarchState(niters, ray_origins, ray_directions, intervals, ray_origins, done_flags, hit_flags), RayMarchOutput(out_niters, out_ray_origins, out_hit_flags), active_indices
+
+# @partial(jax.jit, static_argnames=('N_rays', 'init_interval'))
+# def _init_ray_marching_states(N_rays: int, init_interval: float, ray_origins: jnp.ndarray, ray_directions: jnp.ndarray) -> tuple[jnp.ndarray, ...]:
+#     """
+#     Initialize the ray marching loop variables and output arrays.
+#     """
+#     ### init loop variables
+#     niters = jnp.zeros(N_rays, dtype=jnp.int32)
+#     ray_origins = jnp.ones_like(ray_directions) * ray_origins
+
+#     intervals = jnp.ones(N_rays) * init_interval
+#     done_flags = jnp.zeros(N_rays, dtype=bool)
+#     hit_flags = jnp.zeros(N_rays, dtype=bool)
+
+#     ### output arrays
+#     out_ray_origins = jnp.zeros_like(ray_origins)
+#     out_hit_flags = jnp.zeros_like(hit_flags)
+#     out_niters = jnp.zeros_like(niters)
+
+#     ### active indices
+#     active_indices = jnp.arange(N_rays)
+
+#     return RayMarchState(niters, ray_origins, ray_directions, intervals, ray_origins, done_flags, hit_flags), RayMarchOutput(out_niters, out_ray_origins, out_hit_flags), active_indices

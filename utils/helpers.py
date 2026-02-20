@@ -88,3 +88,20 @@ def new_subdivide_box(aa: jnp.ndarray, sub_vec: jnp.ndarray, split_axis_id: int)
     add_vec = jnp.zeros_like(aa)
     add_vec = add_vec.at[split_axis_id].set(sub_vec[split_axis_id])
     return aa + jnp.stack([jnp.zeros_like(aa), add_vec], axis=0)
+
+
+def update_trust_region_size(trust_region_size: jnp.ndarray, t_step: jnp.ndarray, in_tr: jnp.ndarray) -> jnp.ndarray:
+    # If we are outside the trust region, we need to decrease the trust region size
+    new_trust_region_size = jnp.where(~in_tr, trust_region_size * 0.5, trust_region_size)
+    # If the step is too small inside the trust region, we can increase the trust region size
+    new_trust_region_size = jnp.where((t_step < 0.5 * trust_region_size) & in_tr, trust_region_size * 2, trust_region_size)
+    return new_trust_region_size
+
+
+
+def spatial_terminiation_criterion(t_step: jnp.ndarray, fn_val: jnp.ndarray, tr_size: jnp.ndarray, level_set_threshold: float, epsilon: float) -> jnp.ndarray:
+    return jnp.logical_and(t_step < epsilon, tr_size < 2*epsilon)
+
+
+def level_set_termination_criterion(t_step: jnp.ndarray, fn_val: jnp.ndarray, tr_size: jnp.ndarray, level_set_threshold: float, epsilon: float) -> jnp.ndarray:
+    return jnp.abs(fn_val - level_set_threshold) < epsilon

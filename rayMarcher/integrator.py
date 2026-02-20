@@ -16,12 +16,15 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 
-from typing import Callable, List
+from typing import Callable, List, cast, Any, Tuple
 
 from rayMarcher.materials import Material
 from rayMarcher.camera import Camera
 from rayMarcher.sampler import generate_antialiased_ray, generate_random_unit_ray
 from rayMarcher import utils
+from utils.types import RayMarchState, RayMarchOutput
+from utils.jnp_array_compaction import perform_compaction, should_compact, init_compaction_sizes, uniform_size_generator
+from utils.helpers import spatial_terminiation_criterion, level_set_termination_criterion, update_trust_region_size
 
 class Integrator:
 
@@ -333,6 +336,3 @@ class Integrator:
         colors_flat = jax.vmap(self.render_pixel, in_axes=(0, 0, 0, None))(i_coords, j_coords, pixel_keys, self.samples_per_pixel)
         image = colors_flat.reshape((H, W, 3))
         return image
-
-
-        

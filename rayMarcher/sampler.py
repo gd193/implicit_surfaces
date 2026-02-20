@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import jax.random as jr
 from rayMarcher.camera import Camera
 from rayMarcher.utils import normalize
+from typing import Tuple
 
 def sample_uniform_1disk(key: jr.PRNGKey) -> jnp.array:
     """
@@ -40,7 +41,7 @@ def defocus_disk_sample(camera: Camera, key: jr.PRNGKey) -> jnp.array:
     disk_sample_2d = sample_uniform_1disk_3d(key)
     return camera.camera_center + disk_sample_2d[0] * camera.defocus_disk_u + disk_sample_2d[1] * camera.defocus_disk_v
 
-def generate_antialiased_ray(camera: Camera, pixel_i: int, pixel_j: int, key: jr.PRNGKey) -> tuple[jnp.array, jnp.array]:
+def generate_antialiased_ray(camera: Camera, pixel_i: jnp.ndarray, pixel_j: jnp.ndarray, key: jax.Array) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Generate an antialiased ray from the camera through the pixel (pixel_i, pixel_j).
     Args:

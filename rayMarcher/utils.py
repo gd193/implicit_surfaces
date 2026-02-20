@@ -25,7 +25,7 @@ def reflectance(cosine: jnp.array, ref_idx: float) -> jnp.array:
     return r0 + (1 - r0) * jnp.power((1 - cosine), 5)
 
 
-def ray_aabb_intersection_inside(ray_origin: jnp.array, ray_direction: jnp.array, trust_region_size: jnp.array) -> tuple[jnp.array, jnp.array]:
+def ray_aabb_intersection_inside(ray_origin: jnp.array, ray_direction: jnp.array, trust_region_size: jnp.array) -> jnp.array:
     """
     Computes the intersection of a ray with an AABB, assuming the ray_origin is 
     strictly inside the box. Finds the single exit point.
@@ -36,14 +36,13 @@ def ray_aabb_intersection_inside(ray_origin: jnp.array, ray_direction: jnp.array
         trust_region_size: jnp.array of shape () size of the trust region (box).
 
     Returns:
-        tuple[jnp.array, jnp.array]: 
-        (t_hit: float, hit_point: jnp.array)
+        jnp.array: The distance to the exit point of the ray within the AABB.
     """
 
     # --- 1. Calculate intersection times (t) for all 6 planes ---
     
     # Pre-calculate the inverse of the direction for stability and optimization
-    inv_direction = 1.0 / ray_direction
+    inv_direction = 1.0 / (ray_direction + jnp.sign(ray_direction) * 1e-12)  # add small epsilon to avoid division by zero
     
     # Intersection distances (t) for the three pairs of planes (X, Y, Z axes).
     # t_min_planes: Time to hit the box_min planes (e.g., -X, -Y, -Z face)

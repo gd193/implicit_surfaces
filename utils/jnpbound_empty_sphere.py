@@ -58,6 +58,8 @@ def empty_sphere_2nd_order_tensor(taylor_enclosure: MixedIntervalPolynomial,
         return bounded_dist_isosurf_2nd_order_2d(taylor_enclosure, upper_or_lower, isolevel)
     elif dim == 1:
         return bounded_dist_isosurf_2nd_order_1d(taylor_enclosure, upper_or_lower, isolevel)
+    else:
+        raise ValueError(f"Dimension {dim} not supported for empty sphere computation.")
     
 
 def bounded_dist_isosurf_2nd_order_2d(taylor_enclosure: MixedIntervalPolynomial, 
