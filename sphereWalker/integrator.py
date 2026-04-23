@@ -7,8 +7,15 @@ from typing import Callable, TypeVar, Generic, Optional, Any, Union, cast
 from functools import partial
 import abc
 
-from sphereWalker.types import WalkerState, WalkerOutput, DifferentialWalkerState 
-from sphereWalker.sampling import *
+from sphereWalker.types import WalkerState, WalkerOutput, DifferentialWalkerState
+from utils.sampling_primitives import (
+    sample_uniform_1sphere,
+    sample_uniform_2sphere,
+    sample_uniform_1ball,
+    sample_uniform_2ball,
+    weighted_greens_fn_1ball,
+    weighted_greens_fn_2ball,
+)
 
 
 sphere_sampling_fn_select = {

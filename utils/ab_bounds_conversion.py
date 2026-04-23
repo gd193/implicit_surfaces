@@ -139,13 +139,13 @@ def add_3rd_order_3d(ps_tensor, coeff):
     ps_tensor = ps_tensor.at[2, 0, 1].set(coeff3[0, 0, 2] + coeff3[0, 2, 0] + coeff3[2, 0, 0]) #x0² x2
 
     ps_tensor = ps_tensor.at[1, 2, 0].set(coeff3[0, 1, 1] + coeff3[1, 0, 1] + coeff3[1, 1, 0]) #x0 x1²
-    ps_tensor = ps_tensor.at[1, 0, 2].set(coeff3[0, 2, 2] + coeff3[2, 0, 2] + coeff3[2, 2, 0]) #x0 x1²
+    ps_tensor = ps_tensor.at[1, 0, 2].set(coeff3[0, 2, 2] + coeff3[2, 0, 2] + coeff3[2, 2, 0]) #x0 x2²
 
     ps_tensor = ps_tensor.at[0, 2, 1].set(coeff3[1, 1, 2] + coeff3[1, 2, 1] + coeff3[2, 1, 1]) #x1² x2
     ps_tensor = ps_tensor.at[0, 1, 2].set(coeff3[2, 2, 1] + coeff3[2, 1, 2] + coeff3[1, 2, 2]) #x1 x2²
 
-    ps_tensor = ps_tensor.at[1, 1, 1].set(coeff3[0, 1, 2] + coeff3[2, 0, 1] + coeff3[2, 1, 0] + #x1 x2 x3
-                                          coeff3[1, 0, 2] + coeff3[2, 1, 0] + coeff3[0, 2, 1])
+    ps_tensor = ps_tensor.at[1, 1, 1].set(coeff3[0, 1, 2] + coeff3[2, 0, 1] + coeff3[2, 1, 0] + #x0 x1 x2
+                                          coeff3[1, 0, 2] + coeff3[1, 2, 0] + coeff3[0, 2, 1])
     
     return ps_tensor
 

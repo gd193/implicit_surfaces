@@ -34,7 +34,7 @@ class Camera(NamedTuple):
                  focus_distance: float = 1.0):
 
         aspect_ratio = image_width / image_height
-        focal_length = float(len(lookfrom - lookat))
+        focal_length = float(jnp.linalg.norm(lookfrom - lookat))
 
 
         theta = jnp.deg2rad(vfov)

@@ -91,10 +91,10 @@ def new_subdivide_box(aa: jnp.ndarray, sub_vec: jnp.ndarray, split_axis_id: int)
 
 
 def update_trust_region_size(trust_region_size: jnp.ndarray, t_step: jnp.ndarray, in_tr: jnp.ndarray) -> jnp.ndarray:
-    # If we are outside the trust region, we need to decrease the trust region size
+    # Shrink if the step exited the trust region
     new_trust_region_size = jnp.where(~in_tr, trust_region_size * 0.5, trust_region_size)
-    # If the step is too small inside the trust region, we can increase the trust region size
-    new_trust_region_size = jnp.where((t_step < 0.5 * trust_region_size) & in_tr, trust_region_size * 2, trust_region_size)
+    # Grow if we stayed inside and the step was conservatively small
+    new_trust_region_size = jnp.where((t_step < 0.5 * trust_region_size) & in_tr, trust_region_size * 2.0, new_trust_region_size)
     return new_trust_region_size
 
 

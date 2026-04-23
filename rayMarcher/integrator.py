@@ -221,7 +221,7 @@ class Integrator:
             color += background_contribution * attenuation
             done_flag = done_flag | (~hit)
 
-            scatter_direction, outward_normal, albedo, metal_absorbed, should_reflect, key_recursive = self.compute_scatter(material_idx, ray_direction, hit_normal, hit_point, key_recursive)
+            scatter_direction, outward_normal, albedo, metal_absorbed, should_reflect, key_recursive = self.compute_scatter(material_idx, current_direction, hit_normal, hit_point, key_recursive)
             ray_offset_normal = jnp.where((self.materials.type[material_idx] == 2) & (~should_reflect), -outward_normal, outward_normal)
 
             # Update ray for next bounce
