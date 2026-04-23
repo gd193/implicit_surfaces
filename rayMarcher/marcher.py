@@ -1,4 +1,42 @@
 
+from typing import Callable, Tuple, Any, cast
+
+import jax
+import jax.numpy as jnp
+import jax.random as jr
+
+from rayMarcher.camera import Camera
+from rayMarcher.sampler import generate_antialiased_ray
+from rayMarcher import utils
+from utils.types import RayMarchState, RayMarchOutput
+from utils.helpers import update_trust_region_size, level_set_termination_criterion
+from utils.jnp_array_compaction import perform_compaction, should_compact, uniform_size_generator
+
+
+def write_done_to_output_arrays(current_state: RayMarchState, output_state: RayMarchOutput, active_indices: jnp.ndarray) -> RayMarchOutput:
+    """
+    Scatters completed rays from the current local batch into the global output buffers.
+    Only transfers fields present in RayMarchOutput.
+    """
+    new_out_niter = output_state.niter.at[active_indices].set(
+        current_state.niter, mode='drop'
+    )
+    new_out_position = output_state.ray_position.at[active_indices].set(
+        current_state.ray_origin + current_state.t[:, None] * current_state.ray_direction, mode='drop'
+    )
+    new_out_hit = output_state.hit_flag.at[active_indices].set(
+        current_state.hit_flag, mode='drop'
+    )
+
+    return output_state._replace(
+        niter=new_out_niter,
+        ray_position=new_out_position,
+        hit_flag=new_out_hit
+    )
+
+def update_ray_march_state(state: RayMarchState, valid_mask: jnp.ndarray) -> RayMarchState:
+    forced_done_flags = jnp.logical_or(state.done_flag, ~valid_mask)
+    return state._replace(done_flag=forced_done_flags)
 
 class SimpleIntegrator:
     """
@@ -50,7 +88,7 @@ class SimpleIntegrator:
                 )
             niter_next = jnp.where(done_flag_next, state.niter, state.niter + 1)
             t_next = jnp.where(done_flag_next, state.t, state.t + t_step)
-            t_next = cast(t_next, jnp.ndarray)
+            t_next = cast(jnp.ndarray, t_next)
             trust_region_size = jnp.where(done_flag_next, state.trust_region_size, update_trust_region_size(state.trust_region_size, t_step, in_tr))
 
             return RayMarchState(niter_next, t_next, state.ray_origin, state.ray_direction, trust_region_size, done_flag_next, hit_flag_next)
@@ -111,7 +149,7 @@ class SimpleIntegrator:
         ### Python control loop variables
         iter = 0
         current_compaction_index = 0
-        init_compaction_sizes(uniform_size_generator(ray_directions.shape[0], n_compactions=n_compactions))
+        compaction_sizes = uniform_size_generator(ray_directions.shape[0], n_compactions=n_compactions)()
         INVALID_IND = ray_directions.shape[0] + 1
         ### This cannot be jitted because of the dynamic compaction sizes (XLA needs to know static shapes and step numbers)
         while(True):
@@ -120,7 +158,7 @@ class SimpleIntegrator:
             N_valid = int(jnp.sum(~active_states.done_flag))
 
 
-            should_compact_flag, new_compaction_index, new_compaction_size = should_compact(N_valid, current_compaction_index)
+            should_compact_flag, new_compaction_index, new_compaction_size = should_compact(N_valid, current_compaction_index, compaction_sizes)
             if should_compact_flag:
                 
                 current_compaction_index = new_compaction_index
@@ -129,8 +167,11 @@ class SimpleIntegrator:
                     active_states,
                     output_states,
                     active_indices,
+                    active_states.done_flag,
                     fill_index_value=INVALID_IND,
-                    new_compacted_size=new_compaction_size
+                    new_compacted_size=new_compaction_size,
+                    write_to_output_fn=write_done_to_output_arrays,
+                    update_state_fn=update_ray_march_state
                 )
             if N_valid == 0:
                 break
@@ -138,5 +179,3 @@ class SimpleIntegrator:
         ### Postprocessing to get the actual image
         image, niter = post_process_fn(params, output_states, image_height, image_width)
         return image, niter
-
-
