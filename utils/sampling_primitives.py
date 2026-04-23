@@ -71,7 +71,7 @@ def sample_uniform_ray_bbox_3d(key: jax.Array, bbox_mins: jnp.ndarray, bbox_maxs
         intersection_point: jnp.ndarray of shape (3,) representing the intersection point of the ray with the bounding box
         max_t_in_box: jnp.ndarray representing the maximum t value for which the ray is inside the bounding box
     """
-    # box porperties
+    # box properties
     box_center = (bbox_mins + bbox_maxs) / 2.0
     box_size = bbox_maxs - bbox_mins
     box_diagonal_length = jnp.sqrt(jnp.sum(box_size ** 2))

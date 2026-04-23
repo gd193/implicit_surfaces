@@ -1,5 +1,6 @@
-from typing import Tuple
-from implicitSurfaces.implicit_surface import *
+import jax.numpy as jnp
+
+from implicitSurfaces.implicit_surface import implicitSurface
 
 
 class lipschitzImplicit(implicitSurface):

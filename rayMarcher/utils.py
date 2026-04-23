@@ -13,7 +13,7 @@ def refract(v: jnp.array, n: jnp.array, eta: float) -> jnp.array:
     """
     cos_theta = jnp.minimum(jnp.dot(-v, n), 1.0)
     r_out_perp = eta * (v + cos_theta * n)
-    r_out_parallel = -jnp.sqrt(jnp.abs(1.0 - jnp.linalg.norm(r_out_perp)**2)) * n
+    r_out_parallel = -jnp.sqrt(jnp.abs(1.0 - jnp.sum(r_out_perp**2))) * n
     return r_out_perp + r_out_parallel
 
 def reflectance(cosine: jnp.array, ref_idx: float) -> jnp.array:
