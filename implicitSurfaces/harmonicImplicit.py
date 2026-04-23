@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Optional
 
 from implicitSurfaces.implicit_surface import *
 from utils.helpers import mesh_2d, mesh_to_vec_2d
@@ -51,12 +51,14 @@ class harmonicImplicit(implicitSurface):
         raise NotImplementedError("Box classification is not implemented yet")
     
     
-    def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray, upper_lower_flag: Optional[str]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """
         Compute the largest empty sphere around the given position within the trust region.
         args:
             x (jnp.ndarray)(dim,): The current position of the walker
             trust_region_size (jnp.ndarray)(,): The current trust region size
+            upper_lower_flag (Optional[str]): If 'upper', use upper bounds for computing the empty sphere. 
+            If 'lower', use lower bounds. If None, use both and take the minimum radius to not switch level set sides.
         Returns:
             fn_val (jnp.ndarray)(,): The value of the function at the current position
             radius (jnp.ndarray)(,): The radius of the largest empty sphere
@@ -68,6 +70,15 @@ class harmonicImplicit(implicitSurface):
         R = trust_region_size * 0.5
         h_bound = self.harnack_bound(params, x, fn_val, R)
         return fn_val, h_bound, trust_region_size
+
+    def ray_step(self, params: jnp.ndarray, ray_origin: jnp.ndarray, 
+                 ray_direction: jnp.ndarray, trust_region_size: jnp.ndarray, 
+                 upper_lower_flag: Optional[str]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """
+        Compute the ray step from the current position along the ray direction.
+        Since we have Harnack bounds, we can just use the empty sphere radius as the safe step size.
+        """
+        return self.empty_sphere(params, ray_origin, trust_region_size, upper_lower_flag)
 
 
 class poissonSurface(harmonicImplicit):

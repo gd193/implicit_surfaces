@@ -23,7 +23,7 @@ from rayMarcher.camera import Camera
 from rayMarcher.sampler import generate_antialiased_ray, generate_random_unit_ray
 from rayMarcher import utils
 from utils.types import RayMarchState, RayMarchOutput
-from utils.jnp_array_compaction import perform_compaction, should_compact, init_compaction_sizes, uniform_size_generator
+from utils.jnp_array_compaction import perform_compaction, should_compact, uniform_size_generator
 from utils.helpers import spatial_terminiation_criterion, level_set_termination_criterion, update_trust_region_size
 
 class Integrator:

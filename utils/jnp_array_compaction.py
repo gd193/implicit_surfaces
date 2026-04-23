@@ -1,9 +1,8 @@
 import jax
 import jax.numpy as jnp
-from typing import Callable, List, Tuple
+from typing import Callable, List, Tuple, Any
 from math import floor
 import functools
-from utils.types import RayMarchState, RayMarchOutput
 
 
 def uniform_size_generator(size: int, n_compactions: int) -> Callable[[], List[int]]:
@@ -25,43 +24,14 @@ def should_compact(N_valid: int, current_compaction_index: int, compaction_sizes
     return False, -1, -1
 
 
-def write_done_to_output_arrays(current_state: RayMarchState, output_state: RayMarchOutput, active_indices: jnp.ndarray) -> RayMarchOutput:
+def compact_tree(state: Any, 
+                 is_active: jnp.ndarray,
+                 new_size: int, 
+                 fill_index_value: int) -> Tuple[Any, jnp.ndarray, jnp.ndarray]:
     """
-    Scatters completed rays from the current local batch into the global output buffers.
-    Only transfers fields present in RayMarchOutput.
-    """
-    # 1. Update niter
-    new_out_niter = output_state.niter.at[active_indices].set(
-        current_state.niter, mode='drop'
-    )
-    
-    # 2. Update ray_position
-    new_out_position = output_state.ray_position.at[active_indices].set(
-        current_state.ray_origin + current_state.t[:, None] * current_state.ray_direction, mode='drop'
-    )
-    
-    # 3. Update hit_flag
-    new_out_hit = output_state.hit_flag.at[active_indices].set(
-        current_state.hit_flag, mode='drop'
-    )
-
-    return output_state._replace(
-        niter=new_out_niter,
-        ray_position=new_out_position,
-        hit_flag=new_out_hit
-    )
-
-
-def compact_state_tree(state: RayMarchState, 
-                       new_size: int, 
-                       fill_index_value: int) -> Tuple[RayMarchState, jnp.ndarray, jnp.ndarray]:
-    """
-    Compacts the entire RayMarchState PyTree based on its own done_flags.
+    Compacts an arbitrary PyTree state based on a boolean is_active mask.
     Returns (new_compacted_state, valid_mask, target_indices).
     """
-    done_flags = state.done_flag
-    
-    is_active = ~done_flags
     N_in = jnp.sum(is_active)
     
     target_indices = jnp.nonzero(is_active, size=new_size, fill_value=fill_index_value)[0]
@@ -76,22 +46,24 @@ def compact_state_tree(state: RayMarchState,
     return new_state, valid_mask, target_indices
 
 
-@functools.partial(jax.jit, static_argnames=('fill_index_value', 'new_compacted_size'))
-def perform_compaction(loop_state: RayMarchState,
-                       output_state: RayMarchOutput,
+@functools.partial(jax.jit, static_argnames=('fill_index_value', 'new_compacted_size', 'write_to_output_fn', 'update_state_fn'))
+def perform_compaction(loop_state: Any,
+                       output_state: Any,
                        active_indices: jnp.ndarray,
+                       is_done: jnp.ndarray,
                        fill_index_value: int,
-                       new_compacted_size: int) -> Tuple[RayMarchState, RayMarchOutput, jnp.ndarray]:
+                       new_compacted_size: int,
+                       write_to_output_fn: Callable,
+                       update_state_fn: Callable) -> Tuple[Any, Any, jnp.ndarray]:
     
-    write_indices = jnp.where(loop_state.done_flag, active_indices, fill_index_value)
+    write_indices = jnp.where(is_done, active_indices, fill_index_value)
 
-    new_output_state = write_done_to_output_arrays(
+    new_output_state = write_to_output_fn(loop_state, output_state, write_indices)
+    
+    is_active = ~is_done
+    compacted_state, valid_mask, target_gather_indices = compact_tree(
         loop_state,
-        output_state,
-        write_indices
-    )
-    compacted_state, valid_mask, target_gather_indices = compact_state_tree(
-        loop_state, 
+        is_active,
         new_compacted_size, 
         fill_index_value
     )
@@ -99,8 +71,8 @@ def perform_compaction(loop_state: RayMarchState,
     new_active_indices = active_indices.at[target_gather_indices].get(mode='drop')
     # Mask padding indices to fill_value so we don't accidentally write to index 0 later
     new_active_indices = jnp.where(valid_mask, new_active_indices, fill_index_value)
-    forced_done_flags = jnp.logical_or(compacted_state.done_flag, ~valid_mask)
-    # Update the state with the fixed flags
-    compacted_state = compacted_state._replace(done_flag=forced_done_flags)
+    
+    # Let the user update specific tracking fields like 'done_flag' or 'niter' given the valid mask
+    compacted_state = update_state_fn(compacted_state, valid_mask)
 
     return compacted_state, new_output_state, new_active_indices

@@ -8,13 +8,49 @@ from functools import partial
 from utils.sampling_primitives import sample_uniform_ray_bbox_2d, sample_uniform_ray_bbox_3d
 from utils.types import RayBuffer, MultiHitRayState, MultiHitRayOutput
 from utils.helpers import update_trust_region_size
-from utils.jnp_array_compaction import should_compact, uniform_size_generator
+from utils.jnp_array_compaction import perform_compaction, should_compact, uniform_size_generator
 
 
 samping_ray_bbox_selector = {
     2: sample_uniform_ray_bbox_2d,
     3: sample_uniform_ray_bbox_3d
 }
+
+
+def write_multi_hit_done_to_output(current_state: MultiHitRayState, 
+                                   output_state: MultiHitRayOutput, 
+                                   write_indices: jnp.ndarray) -> MultiHitRayOutput:
+    """
+    Scatters completed rays from the current local batch into the global output buffers.
+    """
+    new_out_niter = output_state.niter.at[write_indices].set(
+        current_state.niter, mode='drop'
+    )
+    new_out_origin = output_state.ray_origin.at[write_indices].set(
+        current_state.ray_origin, mode='drop'
+    )
+    new_out_direction = output_state.ray_direction.at[write_indices].set(
+        current_state.ray_direction, mode='drop'
+    )
+    new_out_t_hits = output_state.t_hits.at[write_indices].set(
+        current_state.t_hits, mode='drop'
+    )
+    new_out_hit_counts = output_state.hit_counts.at[write_indices].set(
+        current_state.hit_counts, mode='drop'
+    )
+
+    return output_state._replace(
+        niter=new_out_niter,
+        ray_origin=new_out_origin,
+        ray_direction=new_out_direction,
+        t_hits=new_out_t_hits,
+        hit_counts=new_out_hit_counts
+    )
+
+
+def update_multi_hit_state(state: MultiHitRayState, valid_mask: jnp.ndarray, max_steps: int) -> MultiHitRayState:
+    new_niter = jnp.where(valid_mask, state.niter, max_steps + 1)
+    return state._replace(niter=new_niter)
 
 
 class SurfaceSampler:
@@ -79,23 +115,26 @@ class SurfaceSampler:
             keys = jr.split(key_batch, batch_size)
 
             # Generate a batch of candidate rays
-            valid_mask, dirs, pts, max_ts = generate_batch_fn(keys, bbox_mins, bbox_maxs, dtype)
+            is_hit, ray_direction, ray_origins, max_t_in_box = generate_batch_fn(keys, bbox_mins, bbox_maxs, dtype)
 
             # Compact the valid points
-            sort_indices = jnp.argsort(~valid_mask)
-            sorted_dirs = dirs[sort_indices]
-            sorted_pts = pts[sort_indices]
-            sorted_max_ts = max_ts[sort_indices]
+            sort_indices = jnp.argsort(~is_hit)
+            sorted_dirs = ray_direction[sort_indices]
+            sorted_pts = ray_origins[sort_indices]
+            sorted_max_ts = max_t_in_box[sort_indices]
 
             # Arithmetic for bounds checking
-            num_valid = jnp.sum(valid_mask)
+            num_valid = jnp.sum(is_hit)
             space_left = num_rays - count
             n_to_write = jnp.minimum(num_valid, space_left)
+            target_indices = count + jnp.arange(0, batch_size)
+            write_mask = target_indices < (count + n_to_write)
+            to_write_indices = jnp.where(write_mask, target_indices, num_rays) # use num_rays as an invalid index for out-of-bounds writes
 
             # Write valid rays into our global buffers
-            new_dirs = jax.lax.dynamic_update_slice(buffer.ray_direction, sorted_dirs, (count, 0))
-            new_pts = jax.lax.dynamic_update_slice(buffer.ray_origin, sorted_pts, (count, 0))
-            new_ts = jax.lax.dynamic_update_slice(buffer.max_ts, sorted_max_ts, (count,))
+            new_dirs = buffer.ray_direction.at[to_write_indices].set(sorted_dirs, mode='drop')
+            new_pts = buffer.ray_origin.at[to_write_indices].set(sorted_pts, mode='drop')
+            new_ts = buffer.max_ts.at[to_write_indices].set(sorted_max_ts, mode='drop')
 
             new_buffer = RayBuffer(ray_direction=new_dirs, ray_origin=new_pts, max_ts=new_ts)
 
@@ -190,6 +229,8 @@ class SurfaceSampler:
         current_compaction_index = 0
         compaction_sizes = uniform_size_generator(num_rays, n_compactions=self.n_compactions)()
         INVALID_IND = num_rays + 1
+        
+        update_fn = partial(update_multi_hit_state, max_steps=self.max_step)
 
         ### This cannot be jitted because of the dynamic compaction sizes (XLA needs to know static shapes and step numbers)
         while(True):
@@ -203,14 +244,18 @@ class SurfaceSampler:
             if should_compact_flag or is_done:
                 
                 current_compaction_index = new_compaction_index
+                
+                done_flags = jnp.logical_or(active_states.t >= active_states.t_max, active_states.niter >= self.max_step)
 
-                active_states, output_states, active_indices = perform_multi_hit_compaction(
+                active_states, output_states, active_indices = perform_compaction(
                     active_states,
                     output_states,
                     active_indices,
+                    done_flags,
                     fill_index_value=INVALID_IND,
                     new_compacted_size=new_compaction_size,
-                    max_steps=self.max_step
+                    write_to_output_fn=write_multi_hit_done_to_output,
+                    update_state_fn=update_fn
                 )
             if is_done:
                 break
@@ -240,100 +285,6 @@ def gather_hit_points(output_states: MultiHitRayOutput) -> jnp.ndarray:
     return hit_coordinates
 
 
-
 @partial(jax.jit, static_argnames=('max_steps'))
 def get_n_active_rays(state: MultiHitRayState, max_steps: int) -> jnp.ndarray:
     return jnp.sum(jnp.logical_not(jnp.logical_or(state.t >= state.t_max, state.niter >= max_steps)))
-
-
-def write_multi_hit_done_to_output(current_state: MultiHitRayState, 
-                                   output_state: MultiHitRayOutput, 
-                                   write_indices: jnp.ndarray) -> MultiHitRayOutput:
-    """
-    Scatters completed rays from the current local batch into the global output buffers.
-    """
-    new_out_niter = output_state.niter.at[write_indices].set(
-        current_state.niter, mode='drop'
-    )
-    new_out_origin = output_state.ray_origin.at[write_indices].set(
-        current_state.ray_origin, mode='drop'
-    )
-    new_out_direction = output_state.ray_direction.at[write_indices].set(
-        current_state.ray_direction, mode='drop'
-    )
-    new_out_t_hits = output_state.t_hits.at[write_indices].set(
-        current_state.t_hits, mode='drop'
-    )
-    new_out_hit_counts = output_state.hit_counts.at[write_indices].set(
-        current_state.hit_counts, mode='drop'
-    )
-
-    return output_state._replace(
-        niter=new_out_niter,
-        ray_origin=new_out_origin,
-        ray_direction=new_out_direction,
-        t_hits=new_out_t_hits,
-        hit_counts=new_out_hit_counts
-    )
-
-
-def compact_multi_hit_tree(state: MultiHitRayState, 
-                           new_size: int, 
-                           fill_index_value: int,
-                           max_steps: int) -> Tuple[MultiHitRayState, jnp.ndarray, jnp.ndarray]:
-    """
-    Compacts the entire MultiHitRayState PyTree.
-    """
-    done_flags = jnp.logical_or(state.t >= state.t_max, state.niter >= max_steps)
-    
-    is_active = jnp.logical_not(done_flags)
-    N_in = jnp.sum(is_active)
-    
-    target_indices = jnp.nonzero(is_active, size=new_size, fill_value=fill_index_value)[0]
-    valid_mask = jnp.arange(new_size) < N_in
-    safe_gather_indices = jnp.where(valid_mask, target_indices, 0)
-    
-    def compact_leaf(arr):
-        # This safely gathers 1D, 2D (like t_hits), and 3D arrays identically
-        return arr.at[safe_gather_indices].get(mode='drop')
-
-    new_state = jax.tree_util.tree_map(compact_leaf, state)
-    
-    return new_state, valid_mask, target_indices
-
-
-@partial(jax.jit, static_argnames=('fill_index_value', 'new_compacted_size', 'max_steps'))
-def perform_multi_hit_compaction(loop_states: MultiHitRayState,
-                                 output_states: MultiHitRayOutput,
-                                 active_indices: jnp.ndarray,
-                                 fill_index_value: int,
-                                 new_compacted_size: int,
-                                 max_steps: int) -> Tuple[MultiHitRayState, MultiHitRayOutput, jnp.ndarray]:
-    """
-    Orchestrates the writing of finished rays and compaction of active ones.
-    """
-    # 1. Identify where finished rays should be written in the global buffer
-    is_done = jnp.logical_or(loop_states.t >= loop_states.t_max, loop_states.niter >= max_steps)
-    write_indices = jnp.where(is_done, active_indices, fill_index_value)
-
-    # 2. Write finished data to output arrays
-    new_output_states = write_multi_hit_done_to_output(
-        loop_states,
-        output_states,
-        write_indices
-    )
-    
-    # 3. Compact the active state
-    compacted_state, valid_mask, target_gather_indices = compact_multi_hit_tree(
-        loop_states, 
-        new_compacted_size, 
-        fill_index_value,
-        max_steps
-    )
-    compacted_state = compacted_state._replace(niter=jnp.where(valid_mask, compacted_state.niter, max_steps + 1)) # ensure dropped rays are marked done
-
-    # 4. Compact the tracking indices
-    new_active_indices = active_indices.at[target_gather_indices].get(mode='drop')
-    new_active_indices = jnp.where(valid_mask, new_active_indices, fill_index_value)
-
-    return compacted_state, new_output_states, new_active_indices
