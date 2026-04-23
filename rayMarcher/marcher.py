@@ -149,7 +149,7 @@ class SimpleIntegrator:
         ### Python control loop variables
         iter = 0
         current_compaction_index = 0
-        compaction_sizes = uniform_size_generator(ray_directions.shape[0], n_compactions=n_compactions)()
+        compaction_sizes = uniform_size_generator(ray_directions.shape[0], n_compactions=n_compactions)
         INVALID_IND = ray_directions.shape[0] + 1
         ### This cannot be jitted because of the dynamic compaction sizes (XLA needs to know static shapes and step numbers)
         while(True):

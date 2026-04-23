@@ -356,15 +356,19 @@ def solve_3rd_order_bound(K0: jnp.ndarray, K1: jnp.ndarray, K2: jnp.ndarray, K3:
     Highly optimized branchless solver for K3*d^3 + K2*d^2 + K1*d - K0 = 0
     Assumes K0, K1, K2, K3 are all >= 0.
     """
-    # Adding 1e-12 prevents division by zero if a Taylor order is 0
+    # Initial guess: min over single-term upper bounds on the root d*.
+    # Since K0, K1, K2, K3 >= 0, each term in K1*d + K2*d^2 + K3*d^3 = K0 is non-negative,
+    # so individually K_i * d^i <= K0, giving d <= (K0/K_i)^(1/i) for each i. The minimum
+    # across i is the tightest such upper bound, and Newton on a monotonically increasing
+    # convex function converges quadratically from above.
+    # Adding 1e-12 prevents division by zero if a Taylor order is 0.
     b1 = K0 / (K1 + 1e-12)
     b2 = jnp.sqrt(K0 / (K2 + 1e-12))
     b3 = jnp.cbrt(K0 / (K3 + 1e-12))
-    
+
     d = jnp.minimum(jnp.minimum(b1, b2), b3)
-    
+
     # Unrolled Newton-Raphson
-    # Because the function is monotonically increasing and convex,
     for _ in range(steps):
         # Horner's method for fast polynomial evaluation: d*(K1 + d*(K2 + d*K3))
         val = d * (K1 + d * (K2 + d * K3)) - K0

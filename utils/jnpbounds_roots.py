@@ -1,3 +1,13 @@
+"""
+Polynomial root-finders along a ray for Taylor enclosures of orders 1, 2, and 3.
+
+Sentinel convention for `roots_*_order_polynomial`:
+    Public return:  `t == -jnp.inf`  iff no positive real root exists.
+                    Always branch on the returned `hit` flag, never on the sign of `t`.
+    Cubic-internal: `+jnp.inf` is used as the neutral element for `jnp.minimum`,
+                    marking "this candidate branch produced no usable root."
+                    It is converted to the public `-jnp.inf` sentinel before return.
+"""
 import jax
 import jax.numpy as jnp
 import jnp_bounds.autobounds as jb
