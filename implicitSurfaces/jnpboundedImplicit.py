@@ -73,7 +73,7 @@ class jnpboundedImplicit(implicitSurface):
             radius (jnp.ndarray)(1,): The radius of the largest empty sphere
             trust_region_empty_flag (jnp.ndarray)(1,): A boolean flag indicating whether the entire trust region is empty (True) or not (False)
         """
-        auto_bound = self.taylor_bounds(params, x_trust_region=None, trust_region_size=trust_region_size)
+        auto_bound = self.taylor_bounds(x, x_trust_region=None, trust_region_size=trust_region_size)
         taylor_enclosure = auto_bound.polynomial_enclosure
         fn_val = taylor_enclosure[0].squeeze()
 
