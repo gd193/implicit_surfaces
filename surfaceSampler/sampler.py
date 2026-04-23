@@ -2,8 +2,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 
-from typing import Callable, Tuple, Any, cast
-from functools import partial
+from typing import Callable, Tuple, Any
 
 from utils.sampling_primitives import sample_uniform_ray_bbox_2d, sample_uniform_ray_bbox_3d
 from utils.types import RayBuffer, MultiHitRayState, MultiHitRayOutput
@@ -48,9 +47,9 @@ def write_multi_hit_done_to_output(current_state: MultiHitRayState,
     )
 
 
-def update_multi_hit_state(state: MultiHitRayState, valid_mask: jnp.ndarray, max_steps: int) -> MultiHitRayState:
-    new_niter = jnp.where(valid_mask, state.niter, max_steps + 1)
-    return state._replace(niter=new_niter)
+def update_multi_hit_state(state: MultiHitRayState, valid_mask: jnp.ndarray) -> MultiHitRayState:
+    forced_done_flags = jnp.logical_or(state.done_flag, ~valid_mask)
+    return state._replace(done_flag=forced_done_flags)
 
 
 class SurfaceSampler:
@@ -161,7 +160,7 @@ class SurfaceSampler:
         is_hitting_surface = jnp.abs(fn_val - self.level_set) < self.epsilon
         is_new_hit = jnp.logical_and(is_hitting_surface, state.inside_surface == False)
         can_record_hit = state.hit_counts < self.max_hits
-        ray_still_valid = (state.t < state.t_max) & (state.niter < self.max_step)
+        ray_still_valid = jnp.logical_not(state.done_flag)
         should_record_hit = jnp.logical_and(is_new_hit, jnp.logical_and(can_record_hit, ray_still_valid))
         step_size = jnp.maximum(t_step, jnp.array(self.epsilon, dtype=state.t.dtype)) # ensure we always make some progress
 
@@ -171,12 +170,11 @@ class SurfaceSampler:
         new_hit_counts = jnp.where(should_record_hit, state.hit_counts + 1, state.hit_counts)
 
         # Update ray marching state
-        
         new_iter = jnp.where(ray_still_valid, state.niter + 1, state.niter)
         new_inside_surface = jnp.where(ray_still_valid, is_hitting_surface, state.inside_surface)
         new_t = jnp.where(ray_still_valid, state.t + step_size, state.t)
         new_trust_region_size = jnp.where(ray_still_valid, update_trust_region_size(state.trust_region_size, t_step, inside_tr), state.trust_region_size)
-        
+        new_done_flag = jnp.logical_or(state.done_flag, jnp.logical_or(new_t >= state.t_max, new_iter >= self.max_step))
 
         return MultiHitRayState(
             niter=new_iter,
@@ -187,7 +185,8 @@ class SurfaceSampler:
             inside_surface=new_inside_surface,
             ray_origin=state.ray_origin,
             ray_direction=state.ray_direction,
-            trust_region_size=new_trust_region_size
+            trust_region_size=new_trust_region_size,
+            done_flag=new_done_flag,
         )
 
 
@@ -214,6 +213,7 @@ class SurfaceSampler:
             ray_origin=raybuffer.ray_origin,
             ray_direction=raybuffer.ray_direction,
             trust_region_size=jnp.ones(num_rays, dtype=bbox_min.dtype) * self.init_trust_region_size,
+            done_flag=jnp.zeros(num_rays, dtype=jnp.bool_),
         )
         active_indices = jnp.arange(num_rays)
         output_states = MultiHitRayOutput(
@@ -227,35 +227,31 @@ class SurfaceSampler:
         ### Python control loop variables
         iter = 0
         current_compaction_index = 0
-        compaction_sizes = uniform_size_generator(num_rays, n_compactions=self.n_compactions)()
+        compaction_sizes = uniform_size_generator(num_rays, n_compactions=self.n_compactions)
         INVALID_IND = num_rays + 1
-        
-        update_fn = partial(update_multi_hit_state, max_steps=self.max_step)
 
         ### This cannot be jitted because of the dynamic compaction sizes (XLA needs to know static shapes and step numbers)
         while(True):
             active_states = self.step_states_fn(params, active_states)
             iter += 1
-            N_valid = int(get_n_active_rays(active_states, self.max_step))
+            N_valid = int(jnp.sum(~active_states.done_flag))
             is_done = N_valid == 0
 
 
             should_compact_flag, new_compaction_index, new_compaction_size = should_compact(N_valid, current_compaction_index, compaction_sizes)
             if should_compact_flag or is_done:
-                
+
                 current_compaction_index = new_compaction_index
-                
-                done_flags = jnp.logical_or(active_states.t >= active_states.t_max, active_states.niter >= self.max_step)
 
                 active_states, output_states, active_indices = perform_compaction(
                     active_states,
                     output_states,
                     active_indices,
-                    done_flags,
+                    active_states.done_flag,
                     fill_index_value=INVALID_IND,
                     new_compacted_size=new_compaction_size,
                     write_to_output_fn=write_multi_hit_done_to_output,
-                    update_state_fn=update_fn
+                    update_state_fn=update_multi_hit_state
                 )
             if is_done:
                 break
@@ -285,6 +281,3 @@ def gather_hit_points(output_states: MultiHitRayOutput) -> jnp.ndarray:
     return hit_coordinates
 
 
-@partial(jax.jit, static_argnames=('max_steps'))
-def get_n_active_rays(state: MultiHitRayState, max_steps: int) -> jnp.ndarray:
-    return jnp.sum(jnp.logical_not(jnp.logical_or(state.t >= state.t_max, state.niter >= max_steps)))

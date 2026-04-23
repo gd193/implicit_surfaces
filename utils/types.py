@@ -34,6 +34,7 @@ class MultiHitRayState(NamedTuple):
     ray_origin: jnp.ndarray   # (N_rays, 3) ray origins
     ray_direction: jnp.ndarray # (N_rays, 3) Ray directions
     trust_region_size: jnp.ndarray # (N_rays,) Current trust region sizes
+    done_flag: jnp.ndarray     # (N_rays,) Boolean flags indicating if this ray has finished marching
 
 class MultiHitRayOutput(NamedTuple):
     niter: jnp.ndarray         # (N_rays,) Number of iterations taken
