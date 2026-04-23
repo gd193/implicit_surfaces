@@ -22,9 +22,11 @@ def sphere_sdf(params, x):
     """
     center = params['center']
     radius = params['radius']
-    assert center.shape == x.shape, "Center and point must have the same dimensions"
-    assert radius.shape == () if isinstance(radius, jnp.ndarray) else True, "Radius must be a scalar"
-    return  safe_norm(x - center, 2) - radius
+    if center.shape != x.shape:
+        raise ValueError(f"Center and point must have the same dimensions (got {center.shape} and {x.shape})")
+    if isinstance(radius, jnp.ndarray) and radius.shape != ():
+        raise ValueError(f"Radius must be a scalar (got shape {radius.shape})")
+    return safe_norm(x - center, 2) - radius
 
 
 def bbox_sdf(params, x):
@@ -37,8 +39,10 @@ def bbox_sdf(params, x):
     """
     min_corner = params['min_corner']
     max_corner = params['max_corner']
-    assert min_corner.shape == x.shape, "Min corner and point must have the same dimensions"
-    assert max_corner.shape == x.shape, "Max corner and point must have the same dimensions"
+    if min_corner.shape != x.shape:
+        raise ValueError(f"Min corner and point must have the same dimensions (got {min_corner.shape} and {x.shape})")
+    if max_corner.shape != x.shape:
+        raise ValueError(f"Max corner and point must have the same dimensions (got {max_corner.shape} and {x.shape})")
     
     center = (min_corner + max_corner) * 0.5
     half_extents = (max_corner - min_corner) * 0.5
@@ -63,7 +67,8 @@ def arc2d(params, x):
     Returns:
         Scalar signed distance.
     """
-    assert x.shape == (2,), "Point x must be 2-dimensional."
+    if x.shape != (2,):
+        raise ValueError(f"Point x must be 2-dimensional (got shape {x.shape})")
     sc = params['sc']  # sin and cos of the arc's aperture
     ra = params['ra']  # radius of the arc center line
     rb = params['rb']  # thickness (radius) of the arc border

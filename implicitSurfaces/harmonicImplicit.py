@@ -1,6 +1,9 @@
 from typing import Tuple, Optional
 
-from implicitSurfaces.implicit_surface import *
+import jax
+import jax.numpy as jnp
+
+from implicitSurfaces.implicit_surface import implicitSurface
 from utils.helpers import mesh_2d, mesh_to_vec_2d
 
 
@@ -65,6 +68,9 @@ class harmonicImplicit(implicitSurface):
             new_trust_region_size (jnp.ndarray)(,): The updated trust region size
         """
         fn_val = self(params, x)
+        # TODO: revisit. Currently the alpha * min-distance-to-monopole bound is computed
+        # and then immediately discarded in favor of the trust-region-based R. Intent unclear:
+        # should these be combined (jnp.minimum), or is one of them the right choice?
         r = jnp.linalg.norm(x[None, :] - params['p'], axis=-1)
         R = self.alpha * jnp.min(r, axis=-1)
         R = trust_region_size * 0.5

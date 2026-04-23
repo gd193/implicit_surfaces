@@ -24,7 +24,7 @@ from rayMarcher.sampler import generate_antialiased_ray, generate_random_unit_ra
 from rayMarcher import utils
 from utils.types import RayMarchState, RayMarchOutput
 from utils.jnp_array_compaction import perform_compaction, should_compact, uniform_size_generator
-from utils.helpers import spatial_terminiation_criterion, level_set_termination_criterion, update_trust_region_size
+from utils.helpers import spatial_termination_criterion, level_set_termination_criterion, update_trust_region_size
 
 class Integrator:
 
@@ -267,16 +267,17 @@ class Integrator:
         
         return final_color
     
-    def render_pixel_simple(self, pixel_i: jnp.array, pixel_j: jnp.array, key: jr.PRNGKey) -> jnp.array:
+    def render_pixel_simple(self, pixel_i: jnp.array, pixel_j: jnp.array, key: jr.PRNGKey) -> tuple[jnp.array, jnp.array]:
         """
-        Render a single pixel using a simple ray marching algorithm. Also returns niter actually needed 
+        Render a single pixel using a simple ray marching algorithm. Also returns niter actually needed
         for intersections for debugging/diagnostic purposes.
         Args:
             pixel_i: int, pixel x-coordinate
             pixel_j: int, pixel y-coordinate
             key: jax.random.PRNGKey
         Returns:
-            jnp.array of shape (3,) color
+            color: jnp.array of shape (3,)
+            niter: jnp.array, number of marching iterations taken
         """
         key_ray, key_camera, carry_key_next = jr.split(key, 3)
         ray_origin, ray_direction = generate_antialiased_ray(self.camera, pixel_i, pixel_j, key_camera)

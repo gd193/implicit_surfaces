@@ -99,7 +99,7 @@ def update_trust_region_size(trust_region_size: jnp.ndarray, t_step: jnp.ndarray
 
 
 
-def spatial_terminiation_criterion(t_step: jnp.ndarray, fn_val: jnp.ndarray, tr_size: jnp.ndarray, level_set_threshold: float, epsilon: float) -> jnp.ndarray:
+def spatial_termination_criterion(t_step: jnp.ndarray, fn_val: jnp.ndarray, tr_size: jnp.ndarray, level_set_threshold: float, epsilon: float) -> jnp.ndarray:
     return jnp.logical_and(t_step < epsilon, tr_size < 2*epsilon)
 
 
