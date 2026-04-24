@@ -88,19 +88,19 @@ def main():
         background_color=jnp.array([0.5, 0.7, 1.0]),
         ray_march_fn=surface.ray_step,
         surface_normal_fn=surface.normal_at,
-    )
-
-    image, niter = integrator.render(
-        params=params,
-        key=jax.random.PRNGKey(0),
         image_height=args.height,
         image_width=args.width,
         max_ray_march_steps=128,
         max_ray_distance=20.0,
         level_set=0.0,
         epsilon=1e-3,
-        init_trust_region_size=1.0,
         n_compactions=4,
+    )
+
+    image, niter = integrator.render(
+        params=params,
+        key=jax.random.PRNGKey(0),
+        init_trust_region_size=1.0,
     )
 
     plt.imsave(args.out, jnp.clip(image, 0.0, 1.0))
