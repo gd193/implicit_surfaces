@@ -155,7 +155,7 @@ def main():
     )
     # Rebuild taylor_bounds against the 1-arg variant (jnp_bounds expects single input).
     import jnp_bounds.autobounds as jb
-    surface.taylor_bounds = jb.taylor_bounds(neural_fn_1arg, max_degree=2)
+    surface.taylor_bounds = jb.taylor_bounds(neural_fn_1arg, max_degree=2, use_warp=True)
 
     def neural_normal(_params, x):
         grad = jax.grad(lambda y: neural_fn_1arg(y)[0])(x)
@@ -176,20 +176,20 @@ def main():
         background_color=jnp.array([0.5, 0.7, 1.0]),
         ray_march_fn=surface.ray_step,
         surface_normal_fn=neural_normal,
+        image_height=args.height,
+        image_width=args.width,
+        max_ray_march_steps=1000,
+        max_ray_distance=20.0,
+        level_set=0.0,
+        epsilon=1e-3,
+        n_compactions=10,
     )
 
     print("rendering (first call JIT-compiles the Taylor-bounded marcher; can take minutes)")
     image, niter = integrator.render(
         params={},
         key=jax.random.PRNGKey(1),
-        image_height=args.height,
-        image_width=args.width,
-        max_ray_march_steps=128,
-        max_ray_distance=20.0,
-        level_set=0.0,
-        epsilon=1e-3,
         init_trust_region_size=0.5,
-        n_compactions=4,
     )
 
     plt.imsave(args.out, jnp.clip(image, 0.0, 1.0))
