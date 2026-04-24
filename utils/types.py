@@ -5,8 +5,8 @@ class RayMarchState(NamedTuple):
     ### Ray marching loop state
     niter: jnp.ndarray          # (N_rays,) Number of iterations taken so far
     t: jnp.ndarray    # (N_rays,) Current distance traveled along the ray
-    ray_direction: jnp.ndarray # (N_rays, 3) Ray directions
     ray_origin: jnp.ndarray   # (N_rays, 3) ray origins
+    ray_direction: jnp.ndarray # (N_rays, 3) Ray directions
     trust_region_size: jnp.ndarray # (N_rays,) Current trust region sizes
     done_flag: jnp.ndarray     # (N_rays,) Boolean flags indicating if the ray marching is done for each ray
     hit_flag: jnp.ndarray      # (N_rays,) Boolean flags indicating if the ray has hit the surface
