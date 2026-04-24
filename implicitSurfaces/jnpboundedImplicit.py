@@ -40,13 +40,16 @@ class jnpboundedImplicit(implicitSurface):
 
     def ray_step(self, params, ray_origin, ray_direction, trust_region_size, upper_lower_flag=None):
 
-        auto_bound = self.taylor_bounds(ray_origin, x_trust_region=None, trust_region_size=trust_region_size)
+        # jb.taylor_bounds asserts trust_region_size is either 0-d or shape-matched to x0;
+        # broadcast to ray_origin.shape so the per-axis form is always satisfied.
+        trust_region_vec = jnp.broadcast_to(trust_region_size, ray_origin.shape)
+        auto_bound = self.taylor_bounds(ray_origin, x_trust_region=None, trust_region_size=trust_region_vec)
         center_fn_val = auto_bound.polynomial_enclosure[0]
         taylor_enclosure = auto_bound.polynomial_enclosure
 
         if upper_lower_flag is None:
             upper_lower_flag = jnp.where(center_fn_val > self.level_set, jnp.array(-1), jnp.array(1)).squeeze() # -1 for lower, 1 for upper
-            
+
         taylor_enclosure.real_coeffs = taylor_enclosure.real_coeffs.at[0].add(-self.level_set)
         hit, t_poly_intersection = roots_2nd_order_tensor(taylor_enclosure, ray_direction, upper_lower_flag, dim=ray_origin.shape[0])
         ### check if point is within bounds
@@ -54,8 +57,12 @@ class jnpboundedImplicit(implicitSurface):
         in_box = jnp.logical_and(hit, t_poly_intersection < t_box_intersection)
         t = jnp.where(in_box, t_poly_intersection, t_box_intersection)
 
-        center_fn_val = cast(jnp.ndarray, center_fn_val)
-        t = cast(jnp.ndarray, t)
+        # Networks that return shape (1,) (e.g., MLPs without an internal squeeze) propagate
+        # a trailing axis through Taylor bounds. Squeeze to scalar so downstream state shapes
+        # stay consistent with the marcher's per-ray scalar contract.
+        center_fn_val = cast(jnp.ndarray, jnp.squeeze(center_fn_val))
+        t = cast(jnp.ndarray, jnp.squeeze(t))
+        in_box = jnp.squeeze(in_box)
 
         return center_fn_val, t, jnp.logical_not(in_box)
     

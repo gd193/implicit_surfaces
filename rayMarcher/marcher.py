@@ -91,15 +91,24 @@ class SimpleIntegrator:
             t_next = cast(jnp.ndarray, t_next)
             trust_region_size = jnp.where(done_flag_next, state.trust_region_size, update_trust_region_size(state.trust_region_size, t_step, in_tr))
 
-            return RayMarchState(niter_next, t_next, state.ray_origin, state.ray_direction, trust_region_size, done_flag_next, hit_flag_next)
+            return RayMarchState(
+                niter=niter_next,
+                t=t_next,
+                ray_origin=state.ray_origin,
+                ray_direction=state.ray_direction,
+                trust_region_size=trust_region_size,
+                done_flag=done_flag_next,
+                hit_flag=hit_flag_next,
+            )
         return step_fn
 
     def post_process_output(self, params, output_states: RayMarchOutput, image_height: int, image_width: int) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        unit_direction_background = jax.vmap(utils.normalize)(output_states.ray_position)
-        t = 0.5 * (unit_direction_background[1] + 1.0)
-        background_colors = (1.0 - t) * jnp.array([1.0, 1.0, 1.0]) + t * self.background_color                           
+        # Approximate view directions from the camera center to each final ray endpoint.
+        view_dirs = jax.vmap(utils.normalize)(output_states.ray_position - self.camera.camera_center)
+        t = 0.5 * (view_dirs[:, 1] + 1.0)  # shape (N,)
+        background_colors = (1.0 - t[:, None]) * jnp.array([1.0, 1.0, 1.0]) + t[:, None] * self.background_color
         hit_normals = jax.vmap(self.surface_normal_fn, in_axes=(None, 0))(params, output_states.ray_position)
-        test_colors = jnp.clip(0.5 * hit_normals + jnp.array([1., 1., 1.]), 0.0, 1.0)
+        test_colors = jnp.clip(0.5 * hit_normals + 0.5, 0.0, 1.0)
         colors = jnp.where(output_states.hit_flag[:, None], test_colors, background_colors)
         image = colors.reshape((image_height, image_width, 3)) # type: ignore
         return image, output_states.niter.reshape((image_height, image_width))
@@ -144,7 +153,7 @@ class SimpleIntegrator:
             in_axes=(None, 0)
             )
         )
-        post_process_fn = jax.jit(self.post_process_output, static_argnums=(3, 4))
+        post_process_fn = jax.jit(self.post_process_output, static_argnums=(2, 3))
 
         ### Python control loop variables
         iter = 0
