@@ -242,7 +242,8 @@ def main():
         print(f"  frame {i + 1}/{args.frames}")
 
     if args.out.lower().endswith(".gif"):
-        imageio.mimsave(args.out, frames, duration=1.0 / args.fps)
+        # loop=0 -> infinite loop in viewers/browsers
+        imageio.mimsave(args.out, frames, duration=1.0 / args.fps, loop=0)
     else:
         imageio.mimsave(args.out, frames, fps=args.fps)
     print(f"wrote {args.out}  ({args.frames} frames @ {args.fps} fps)")
