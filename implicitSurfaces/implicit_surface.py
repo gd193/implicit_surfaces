@@ -8,6 +8,12 @@ from .sdf_primitives import safe_norm
 
 
 class implicitSurface(abc.ABC):
+    # Whether `classify_subcubes` is meaningfully tighter/cheaper than N independent
+    # `classify_box` calls. Surfaces with a local model (autobound polynomial) override
+    # this to True; the tree builder uses it to pick the right driver (parent-classifies-
+    # children vs classify-then-split). Class-level default; subclasses may flip per-instance.
+    use_classify_subcubes: bool = False
+
     def __init__(self, fn: Callable[[Any, jnp.ndarray], jnp.ndarray], level_set: float, dim: int):
         self.fn = fn
         self.level_set = level_set
@@ -39,9 +45,61 @@ class implicitSurface(abc.ABC):
         """
         raise NotImplementedError("This method should be implemented by subclasses.")
     
+    def classify_box(self, params: Any, lower: jnp.ndarray, upper: jnp.ndarray) -> jnp.ndarray:
+        """
+        Three-valued sign of (f - level_set) over the axis-aligned box [lower, upper].
+        Returns int8 in {-1, 0, +1}: -1 strictly below, +1 strictly above, 0 unknown.
+
+        Default: reduce to empty_sphere over the circumscribed sphere of the box. Conservative,
+        but correct. Subclasses with a tighter native AABB bound should override.
+        """
+        center = 0.5 * (lower + upper)
+        half_diag = 0.5 * jnp.linalg.norm(upper - lower)
+        # Convention: trust_region_size = 2 * half_diag — empty_sphere uses 0.5 * tr internally
+        # in jnpbounded/harmonic/ni, so this matches the circumscribed-sphere radius.
+        fn_val, radius, _ = self.empty_sphere(params, center, 2.0 * half_diag)
+        sign = jnp.sign(fn_val - self.level_set).astype(jnp.int8)
+        # Tolerance absorbs floating clamp at trust_region_size/2 in jnpbounded.
+        classified = radius >= half_diag * (1.0 - 1e-6)
+        return jnp.where(classified, sign, jnp.int8(0))
+
+
+    def box_bounds(self, params: Any, lower: jnp.ndarray, upper: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+        """
+        Provably-valid (lo, hi) interval of f over the axis-aligned box [lower, upper].
+        Strictly more informative than classify_box; not every surface family supports it.
+        Default: NotImplementedError; surfaces with native interval bounds override.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not implement box_bounds.")
+
+
+    def classify_subcubes(self,
+                          params: Any,
+                          parent_lower: jnp.ndarray,
+                          parent_upper: jnp.ndarray,
+                          sub_lowers: jnp.ndarray,
+                          sub_uppers: jnp.ndarray) -> jnp.ndarray:
+        """
+        Classify N axis-aligned sub-boxes inside the parent box [parent_lower, parent_upper].
+
+        Args:
+            parent_lower, parent_upper:    (3,) parent AABB
+            sub_lowers, sub_uppers:        (N, 3) sub-box AABBs (must lie inside parent)
+
+        Returns:
+            (N,) int8 in {-1, 0, +1} — same convention as classify_box.
+
+        Default: independent classify_box on each sub-box (N forward passes).
+        Surfaces backed by a local model (e.g. autobound polynomial) should override and
+        compute one parent-level model, then evaluate it over each sub-box. That collapses
+        N forward passes to one.
+        """
+        return jax.vmap(lambda lo, hi: self.classify_box(params, lo, hi))(sub_lowers, sub_uppers)
+
+
     @abc.abstractmethod
-    def ray_step(self, params: jnp.ndarray, ray_origin: jnp.ndarray, 
-                 ray_direction: jnp.ndarray, trust_region_size: jnp.ndarray, 
+    def ray_step(self, params: jnp.ndarray, ray_origin: jnp.ndarray,
+                 ray_direction: jnp.ndarray, trust_region_size: jnp.ndarray,
                  upper_lower_flag: Optional[str]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """
         Compute the ray step from the current position along the ray direction.

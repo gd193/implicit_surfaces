@@ -154,8 +154,11 @@ def main():
         dim=3,
     )
     # Rebuild taylor_bounds against the 1-arg variant (jnp_bounds expects single input).
+    # use_warp inherited from the constructor (default True).
     import jnp_bounds.autobounds as jb
-    surface.taylor_bounds = jb.taylor_bounds(neural_fn_1arg, max_degree=2, use_warp=True)
+    surface.taylor_bounds = jb.taylor_bounds(
+        neural_fn_1arg, max_degree=2, use_warp=surface.use_warp,
+    )
 
     def neural_normal(_params, x):
         grad = jax.grad(lambda y: neural_fn_1arg(y)[0])(x)
