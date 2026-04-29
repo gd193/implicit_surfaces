@@ -91,11 +91,43 @@ def new_subdivide_box(aa: jnp.ndarray, sub_vec: jnp.ndarray, split_axis_id: int)
 
 
 def update_trust_region_size(trust_region_size: jnp.ndarray, t_step: jnp.ndarray, in_tr: jnp.ndarray) -> jnp.ndarray:
-    # Shrink if the step exited the trust region
-    new_trust_region_size = jnp.where(~in_tr, trust_region_size * 0.5, trust_region_size)
-    # Grow if we stayed inside and the step was conservatively small
-    new_trust_region_size = jnp.where((t_step < 0.5 * trust_region_size) & in_tr, trust_region_size * 2.0, new_trust_region_size)
-    return new_trust_region_size
+    # Conservative default: shrink on unsafe step; grow only when the step was unusually
+    # small relative to tr (rare; mostly serves as a safety hedge). NIQ's `cast_rays_iter`
+    # uses a more aggressive grow-on-safe rule which suits its classify-and-step semantics
+    # but destabilises autobound's root-find (slop scales as tr², so growing tr loosens
+    # the polynomial enclosure → spurious roots → oscillation). For NIQ-style behavior
+    # use `update_trust_region_size_niq_grow` below.
+    new = jnp.where(~in_tr, trust_region_size * 0.5, trust_region_size)
+    new = jnp.where((t_step < 0.5 * trust_region_size) & in_tr, trust_region_size * 2.0, new)
+    return new
+
+
+def update_trust_region_size_niq_grow(trust_region_size: jnp.ndarray, t_step: jnp.ndarray,
+                                      in_tr: jnp.ndarray,
+                                      max_tr: float = 2.0, min_tr: float = 1e-6) -> jnp.ndarray:
+    # NIQ-style adaptive update (cast_rays_iter, queries.py): grow ×1.5 on every safe step,
+    # shrink ×0.5 on every unsafe step. Suited to NIQ's classify-and-step ray_step
+    # (classified → full safe step → grow; UNKNOWN → no step → shrink).
+    new_tr = jnp.where(in_tr, trust_region_size * 1.5, trust_region_size * 0.5)
+    return jnp.clip(new_tr, min_tr, max_tr)
+
+
+def update_trust_region_size_autobound(trust_region_size: jnp.ndarray, t_step: jnp.ndarray,
+                                       in_tr: jnp.ndarray,
+                                       max_tr: float = 0.2, min_tr: float = 1e-6) -> jnp.ndarray:
+    # Autobound-suited adaptive update:
+    #   * Ray passed through trust region (no root → in_tr=True): grow ×2.
+    #   * Polynomial root in TR with small step (< 0.5·tr): shrink ×0.5.
+    #   * Polynomial root in TR with big step (≥ 0.5·tr): keep.
+    # Decouples "found a root" from "shrink": only the *magnitude* of the step decides
+    # shrink, avoiding the grow/shrink oscillation that pure NIQ-style update produces
+    # under autobound's tr²-scaling polynomial slop.
+    pass_through = in_tr                                                      # in_box = False
+    small_step = (~in_tr) & (t_step < 0.5 * trust_region_size)                # in_box = True, partial step
+    new_tr = jnp.where(pass_through, trust_region_size * 1.5,
+              jnp.where(small_step,    trust_region_size * 0.5,
+                                       trust_region_size))
+    return jnp.clip(new_tr, min_tr, max_tr)
 
 
 

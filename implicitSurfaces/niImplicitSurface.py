@@ -88,7 +88,6 @@ class niImplicitSurface(implicitSurface):
                  max_trust_region_size: float = 2.0,
                  min_trust_region_size: float = 1e-6,
                  ray_safety_factor: float = 0.98,
-                 ray_min_step: float = 1e-3,
                  **affine_kwargs):
         impl_mlp_utils, impl_fn = _import_niq()
         SIGN_UNKNOWN = impl_fn.SIGN_UNKNOWN
@@ -104,7 +103,6 @@ class niImplicitSurface(implicitSurface):
         self._max_tr = float(max_trust_region_size)
         self._min_tr = float(min_trust_region_size)
         self._ray_safety_factor = float(ray_safety_factor)
-        self._ray_min_step = float(ray_min_step)
         self._classify_general_box = jax.jit(impl.classify_general_box)
         self._eval_fn = jax.jit(lambda p, x: impl(p, x))
 
@@ -158,17 +156,17 @@ class niImplicitSurface(implicitSurface):
                  ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """One adaptive ray-march step using NIQ's affine/interval/slope_interval bound.
 
-        Faithful port of `cast_rays_iter` from `~/neural-implicit-queries/src/queries.py`:
-        classify the 1-D box of half-width `0.5 * trust_region_size` along the ray; if
-        the box is decided (no level-set crossing), advance by `safety_factor * tr`;
-        otherwise inch forward by `ray_min_step`. The integrator's tr-update handles
-        grow/shrink based on the returned `(t_step, in_tr)` pair — exactly the semantics
-        used by `jnpboundedImplicit.ray_step`, so `SimpleIntegrator` can drive either
-        surface unchanged.
+        Strict-safety variant of NIQ's `cast_rays_iter`: classify the 1-D box of half-width
+        `0.5 * trust_region_size` along the ray. If the box is decided (no level-set
+        crossing), advance by `safety_factor * tr`. If UNKNOWN, **return t_step = 0** — do
+        not advance into a region we can't prove is empty. The integrator's tr-update
+        shrinks tr in this case, eventually arriving at a tr small enough to classify.
+        (This departs from NIQ's `hit_eps` inch step, which advances into UNKNOWN regions
+        without a safety guarantee.)
 
         Returns (fn_val, t_step, in_tr):
           fn_val: f(ray_origin) - level_set.
-          t_step: distance to advance along ray_direction.
+          t_step: `safety_factor * tr` if classified, 0 otherwise.
           in_tr:  True when the trust region was decided (= safe step taken); False when
                   UNKNOWN (= shrink tr next iteration). Convention matches
                   `update_trust_region_size` in `utils/helpers.py`.
@@ -176,8 +174,6 @@ class niImplicitSurface(implicitSurface):
         if params is None:
             params = self.params
 
-        # 1-D box along the ray: midpoint at half the trust-region distance, single
-        # direction-vector spanning ±half_vec around that midpoint.
         half_vec = 0.5 * trust_region_size * ray_direction
         pos_mid = ray_origin + half_vec
         sign = self._classify_general_box(params, pos_mid, half_vec[None, :])
@@ -186,7 +182,7 @@ class niImplicitSurface(implicitSurface):
         fn_val = self._eval_fn(params, ray_origin).squeeze() - self.level_set
 
         safe_step = self._ray_safety_factor * trust_region_size
-        unsafe_step = jnp.asarray(self._ray_min_step, dtype=trust_region_size.dtype)
-        t_step = jnp.where(in_tr, safe_step, unsafe_step)
+        zero_step = jnp.asarray(0.0, dtype=trust_region_size.dtype)
+        t_step = jnp.where(in_tr, safe_step, zero_step)
 
         return fn_val, t_step, in_tr

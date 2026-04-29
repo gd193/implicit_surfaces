@@ -62,7 +62,8 @@ class SimpleIntegrator:
                  level_set: float,
                  epsilon: float,
                  n_compactions: int,
-                 termination_crit_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, float, float], jnp.ndarray] = level_set_termination_criterion):
+                 termination_crit_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, float, float], jnp.ndarray] = level_set_termination_criterion,
+                 update_tr_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray] = update_trust_region_size):
         self.camera = camera
         self.background_color = background_color
         self.ray_march_fn = ray_march_fn
@@ -82,6 +83,7 @@ class SimpleIntegrator:
             epsilon,
             level_set,
             termination_crit_fn,
+            update_tr_fn,
         )
         self._step_states_fn = jax.jit(jax.vmap(step_fn, in_axes=(None, 0)))
 
@@ -108,7 +110,8 @@ class SimpleIntegrator:
                         max_ray_distance: float,
                         epsilon: float,
                         level_set_threshold: float,
-                        termination_crit_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, float, float], jnp.ndarray]
+                        termination_crit_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, float, float], jnp.ndarray],
+                        update_tr_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray] = update_trust_region_size,
                         ) -> Callable[[Any, RayMarchState], RayMarchState]:
         def step_fn(params: Any, state: RayMarchState) -> RayMarchState:
             current_position = state.ray_origin + state.t * state.ray_direction
@@ -127,7 +130,7 @@ class SimpleIntegrator:
             niter_next = jnp.where(done_flag_next, state.niter, state.niter + 1)
             t_next = jnp.where(done_flag_next, state.t, state.t + t_step)
             t_next = cast(jnp.ndarray, t_next)
-            trust_region_size = jnp.where(done_flag_next, state.trust_region_size, update_trust_region_size(state.trust_region_size, t_step, in_tr))
+            trust_region_size = jnp.where(done_flag_next, state.trust_region_size, update_tr_fn(state.trust_region_size, t_step, in_tr))
 
             return RayMarchState(
                 niter=niter_next,
