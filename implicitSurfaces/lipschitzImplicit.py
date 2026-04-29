@@ -30,6 +30,18 @@ class lipschitzImplicit(implicitSurface):
         return fn_val, distance_to_level_set, jnp.array(False)
     
 
+    def box_bounds(self, params, lower, upper):
+        """
+        For Lipschitz f, |f(x) - f(c)| <= L * ||x - c|| <= L * half_diag for x in the box,
+        so [f(c) - L*half_diag, f(c) + L*half_diag] is a provably-valid enclosure.
+        """
+        center = 0.5 * (lower + upper)
+        half_diag = 0.5 * jnp.linalg.norm(upper - lower)
+        fn_c = self(params, center)
+        slack = self.lipschitz_bound * half_diag
+        return fn_c - slack, fn_c + slack
+
+
     def ray_step(self, params, ray_origin, ray_direction, trust_region_size, upper_lower_flag = None):
         """
         Compute the ray step from the current position along the ray direction.

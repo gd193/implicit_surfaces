@@ -50,10 +50,6 @@ class harmonicImplicit(implicitSurface):
         raise NotImplementedError("Harnack bound computation is implemented for specific harmonic functions.")
     
     
-    def classify_box(self, box_aa, box_bb):
-        raise NotImplementedError("Box classification is not implemented yet")
-    
-    
     def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray, upper_lower_flag: Optional[str]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """
         Compute the largest empty sphere around the given position within the trust region.
