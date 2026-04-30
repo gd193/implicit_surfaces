@@ -12,6 +12,10 @@ from typing import Optional, Tuple
 import sys
 
 import jax
+# Match jnpboundedImplicit: force fp32 matmuls (disable TF32 auto-promotion
+# for fp32 matmuls on Ampere+ GPUs). Required for clean cross-method
+# comparisons and to avoid silent ~1e-3 precision loss in the MLP forward.
+jax.config.update("jax_default_matmul_precision", "highest")
 import jax.numpy as jnp
 
 from implicitSurfaces.implicit_surface import implicitSurface

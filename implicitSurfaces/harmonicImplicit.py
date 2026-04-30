@@ -51,19 +51,13 @@ class harmonicImplicit(implicitSurface):
     
     
     def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray, upper_lower_flag: Optional[str]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """Largest provably-empty sphere around `x` within the trust region.
+
+        Returns (fn_val − level_set, radius, next_tr) — matches NIQ /
+        jnpboundedImplicit. Adaptive TR: grow when the Harnack ball reaches
+        the TR boundary, shrink otherwise.
         """
-        Compute the largest empty sphere around the given position within the trust region.
-        args:
-            x (jnp.ndarray)(dim,): The current position of the walker
-            trust_region_size (jnp.ndarray)(,): The current trust region size
-            upper_lower_flag (Optional[str]): If 'upper', use upper bounds for computing the empty sphere. 
-            If 'lower', use lower bounds. If None, use both and take the minimum radius to not switch level set sides.
-        Returns:
-            fn_val (jnp.ndarray)(,): The value of the function at the current position
-            radius (jnp.ndarray)(,): The radius of the largest empty sphere
-            new_trust_region_size (jnp.ndarray)(,): The updated trust region size
-        """
-        fn_val = self(params, x)
+        fn_val = self(params, x) - self.level_set
         # TODO: revisit. Currently the alpha * min-distance-to-monopole bound is computed
         # and then immediately discarded in favor of the trust-region-based R. Intent unclear:
         # should these be combined (jnp.minimum), or is one of them the right choice?
@@ -71,16 +65,22 @@ class harmonicImplicit(implicitSurface):
         R = self.alpha * jnp.min(r, axis=-1)
         R = trust_region_size * 0.5
         h_bound = self.harnack_bound(params, x, fn_val, R)
-        return fn_val, h_bound, trust_region_size
+        # NIQ-style adaptive TR: grow if the Harnack ball reached the TR
+        # boundary, otherwise shrink. Use ×1.5 / ×0.5 to mirror NIQ.
+        outside_tr = h_bound >= trust_region_size * 0.5
+        next_tr = jnp.where(outside_tr, trust_region_size * 1.5, trust_region_size * 0.5)
+        return fn_val, h_bound, next_tr
 
-    def ray_step(self, params: jnp.ndarray, ray_origin: jnp.ndarray, 
-                 ray_direction: jnp.ndarray, trust_region_size: jnp.ndarray, 
+    def ray_step(self, params: jnp.ndarray, ray_origin: jnp.ndarray,
+                 ray_direction: jnp.ndarray, trust_region_size: jnp.ndarray,
                  upper_lower_flag: Optional[str]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        """
-        Compute the ray step from the current position along the ray direction.
-        Since we have Harnack bounds, we can just use the empty sphere radius as the safe step size.
-        """
-        return self.empty_sphere(params, ray_origin, trust_region_size, upper_lower_flag)
+        """Sphere-trace step. Uses Harnack ball radius as safe forward step.
+        Returns (fn_val − level_set, t_step, in_tr_complement) where the third
+        return is True iff the step stayed within an empty sphere (no level-set
+        crossing inside it)."""
+        fn_val, radius, _next_tr = self.empty_sphere(params, ray_origin, trust_region_size, upper_lower_flag)
+        # The Harnack ball is provably empty by construction.
+        return fn_val, radius, jnp.asarray(True)
 
 
 class poissonSurface(harmonicImplicit):

@@ -1,5 +1,5 @@
 
-from typing import Callable, Tuple, Any, cast
+from typing import Callable, Tuple, Any, Optional, cast
 
 import jax
 import jax.numpy as jnp
@@ -62,12 +62,25 @@ class SimpleIntegrator:
                  level_set: float,
                  epsilon: float,
                  n_compactions: int,
-                 termination_crit_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, float, float], jnp.ndarray] = level_set_termination_criterion,
-                 update_tr_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray] = update_trust_region_size):
+                 termination_crit_fn: Callable[..., jnp.ndarray] = level_set_termination_criterion,
+                 update_tr_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray] = update_trust_region_size,
+                 # Used only when `termination_crit_fn.needs_grad` is True: the
+                 # marcher calls this in place of `ray_march_fn`. Pass
+                 # `surface.ray_step_with_grad`. Default base-class implementation
+                 # of that method is `ray_step + jax.grad(surface)`; subclasses
+                 # with a cheap grad path (e.g. autobound) override it to use
+                 # bookkeeping they already do.
+                 ray_march_with_grad_fn: Optional[Callable[..., tuple]] = None):
         self.camera = camera
         self.background_color = background_color
         self.ray_march_fn = ray_march_fn
         self.surface_normal_fn = surface_normal_fn
+        self.ray_march_with_grad_fn = ray_march_with_grad_fn
+        if getattr(termination_crit_fn, 'needs_grad', False) and ray_march_with_grad_fn is None:
+            raise ValueError(
+                f"termination_crit_fn={termination_crit_fn.__name__} declares needs_grad; "
+                f"pass ray_march_with_grad_fn (e.g. surface.ray_step_with_grad)."
+            )
         self.image_height = image_height
         self.image_width = image_width
         self.n_rays = image_height * image_width
@@ -110,14 +123,26 @@ class SimpleIntegrator:
                         max_ray_distance: float,
                         epsilon: float,
                         level_set_threshold: float,
-                        termination_crit_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray, float, float], jnp.ndarray],
+                        termination_crit_fn: Callable[..., jnp.ndarray],
                         update_tr_fn: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray] = update_trust_region_size,
                         ) -> Callable[[Any, RayMarchState], RayMarchState]:
+        needs_grad = getattr(termination_crit_fn, 'needs_grad', False)
+        # Pick the per-ray step kernel ONCE at construction, based on whether the
+        # criterion needs the gradient. No flag threaded through traced code.
+        if needs_grad:
+            ray_march_step = self.ray_march_with_grad_fn
+        else:
+            ray_march_step = self.ray_march_fn
+
         def step_fn(params: Any, state: RayMarchState) -> RayMarchState:
             current_position = state.ray_origin + state.t * state.ray_direction
-            fn_val, t_step, in_tr = self.ray_march_fn(params, current_position, state.ray_direction, state.trust_region_size)
-
-            hit_now = termination_crit_fn(t_step, fn_val, state.trust_region_size, level_set_threshold, epsilon)
+            if needs_grad:
+                fn_val, t_step, in_tr, grad = ray_march_step(params, current_position, state.ray_direction, state.trust_region_size)
+                grad_norm = jnp.linalg.norm(grad)
+                hit_now = termination_crit_fn(t_step, fn_val, state.trust_region_size, level_set_threshold, epsilon, grad_norm=grad_norm)
+            else:
+                fn_val, t_step, in_tr = ray_march_step(params, current_position, state.ray_direction, state.trust_region_size)
+                hit_now = termination_crit_fn(t_step, fn_val, state.trust_region_size, level_set_threshold, epsilon)
             hit_flag_next = jnp.logical_or(state.hit_flag, hit_now)
             done_flag_next = jnp.logical_or(
                 state.done_flag, jnp.logical_or(
@@ -206,6 +231,15 @@ class SimpleIntegrator:
                 )
             if N_valid == 0:
                 break
+
+        # Final flush: write any state that hasn't been written to output_states
+        # yet (rays that terminated since the last compaction, or all rays when
+        # n_compactions=0). Without this, n_compactions=0 produces all-zero
+        # output buffers because compaction is the only path that writes the
+        # output. Always-on; cheap when most rays already flushed.
+        output_states = write_done_to_output_arrays(
+            active_states, output_states, active_indices,
+        )
 
         ### Postprocessing to get the actual image
         image, niter = self._post_process_jit(

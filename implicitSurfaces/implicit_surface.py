@@ -28,7 +28,7 @@ class implicitSurface(abc.ABC):
     
     
     @abc.abstractmethod
-    def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray, 
+    def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray,
                      upper_lower_flag: Optional[str]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """
         Compute the largest empty sphere around the given position within the trust region.
@@ -36,12 +36,15 @@ class implicitSurface(abc.ABC):
             params (jnp.ndarray): The parameters of the implicit surface function.
             x (jnp.ndarray)(dim,): The current position of the walker
             trust_region_size (jnp.ndarray)(,): The current trust region size
-            upper_lower_flag (Optional[str]): If 'upper', use upper bounds for computing the empty sphere. 
+            upper_lower_flag (Optional[str]): If 'upper', use upper bounds for computing the empty sphere.
             If 'lower', use lower bounds. If None, use both and take the minimum radius to not switch level set sides.
         Returns:
-            fn_val (jnp.ndarray)(,): The value of the function at the current position
-            radius (jnp.ndarray)(,): The radius of the largest empty sphere
-            trust_region_empty_flag (jnp.ndarray)(,): A boolean flag indicating whether the entire trust region is empty (True) or not (False)
+            fn_val (jnp.ndarray)(,): f(x) − level_set at the current position
+            radius (jnp.ndarray)(,): radius of the largest provably-empty sphere
+            next_trust_region_size (jnp.ndarray)(,): adaptive TR size for the *next* step.
+                Convention: grow when the empty sphere reached the TR boundary, shrink
+                otherwise; clipped to surface-specific [min_tr, max_tr]. Matches NIQ
+                cast_rays_iter step-size update so WoSIntegrator can consume it directly.
         """
         raise NotImplementedError("This method should be implemented by subclasses.")
     
@@ -108,14 +111,35 @@ class implicitSurface(abc.ABC):
             ray_origin (jnp.ndarray)(dim,): The current position of the walker
             ray_direction (jnp.ndarray)(dim,): The current ray direction
             trust_region_size (jnp.ndarray)(,): The current trust region size
-            upper_lower_flag (Optional[str]): If 'upper', use upper bounds for computing the ray step. 
+            upper_lower_flag (Optional[str]): If 'upper', use upper bounds for computing the ray step.
             If 'lower', use lower bounds. If None, use both and take the minimum step size to not switch level set sides.
         Returns:
-            fn_val (jnp.ndarray)(,): The value of the function at the current position
-            step_size (jnp.ndarray)(,): The computed step size along the ray direction
-            trust_region_empty_flag (jnp.ndarray)(,): A boolean flag indicating whether the entire trust region is empty (True) or not (False)
+            fn_val (jnp.ndarray)(,): f(ray_origin) − level_set at the current position
+            step_size (jnp.ndarray)(,): forward step distance along the ray
+            in_tr_complement (jnp.ndarray)(,): bool. True iff the polynomial / classifier
+                proved no level-set crossing inside the trust region (= safe, full step
+                taken, integrator should *grow* tr next iteration). False when a crossing
+                was found inside tr (= step stopped at root, integrator should *shrink* tr).
+                Naming reflects the integrator's tr-update logic in
+                `update_trust_region_size_*` in `utils/helpers.py`.
         """
         raise NotImplementedError("This method should be implemented by subclasses.")
+
+    def ray_step_with_grad(self, params: Any, ray_origin: jnp.ndarray,
+                           ray_direction: jnp.ndarray, trust_region_size: jnp.ndarray,
+                           upper_lower_flag: Optional[str] = None
+                           ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+        """
+        Same as `ray_step` but also returns ∇f(ray_origin) — shape (dim,).
+        Default: call `ray_step`, then `jax.grad(self.__call__)`. Subclasses with a
+        cheaper grad path (e.g. autobound's polynomial) override this to avoid the
+        extra autograd pass. SimpleIntegrator picks this method at construction
+        only when the chosen termination criterion declares `needs_grad = True`.
+        """
+        fn_val, t_step, in_tr = self.ray_step(params, ray_origin, ray_direction,
+                                               trust_region_size, upper_lower_flag)
+        grad = self.spatial_derivative(params, ray_origin)
+        return fn_val, t_step, in_tr, grad
 
     def parameter_derivative(self, params: Any, x: jnp.ndarray) -> jnp.ndarray:
         """

@@ -3,11 +3,16 @@ import jax.numpy as jnp
 import jax.random as jr
 
 import timeit
-from typing import Callable, TypeVar, Generic, Optional, Any, Union, cast
+from typing import Callable, Tuple, TypeVar, Generic, Optional, Any, Union, cast
 from functools import partial
 import abc
 
 from sphereWalker.types import WalkerState, WalkerOutput, DifferentialWalkerState
+from utils.jnp_array_compaction import (
+    uniform_size_generator,
+    should_compact,
+    compact_tree,
+)
 from utils.sampling_primitives import (
     sample_uniform_1sphere,
     sample_uniform_2sphere,
@@ -175,16 +180,71 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
 
         return final_states, next_parents, updated_accumulated_w, updated_accumulated_nSteps, n_free
 
+    def pre_warm_compaction_buckets(self,
+                                    params: Any,
+                                    initial_position_batch: jnp.ndarray,
+                                    rng_key: jnp.ndarray,
+                                    init_trust_region_size: float,
+                                    n_samples: int,
+                                    steps_between_refill: int = 50,
+                                    unroll_loop: bool = False,
+                                    max_active_states: int = 1000**2,
+                                    jit_buck_size: int = 1000,
+                                    n_compactions: int = 20) -> None:
+        """Force one JIT compile per compaction-bucket size.
+
+        `_process_active_states` is jitted with `active_buffer_size` as a
+        static_argname, so each unique buffer size triggers a fresh compile.
+        Random-key warmup runs visit only the buckets the walker absorbing-
+        time distribution happens to hit, leaving the others uncached. This
+        method invokes `_process_active_states` once per bucket size with
+        synthetic state, guaranteeing the JIT cache covers all of them
+        before timed runs.
+        """
+        positions_padded, _ = _pad_to_bucket(initial_position_batch, bucket_size=jit_buck_size)
+        N_positions = positions_padded.shape[0]
+        N_total_samples = N_positions * n_samples
+        active_buffer_size = min(N_total_samples, max_active_states)
+        compaction_sizes = uniform_size_generator(active_buffer_size, n_compactions)
+
+        accumulated_w = self._get_accumulator_initial(params, positions_padded)
+        accumulated_nSteps = jnp.zeros((N_positions,), dtype=jnp.int32)
+        next_task_index_dummy = jnp.array(N_total_samples, dtype=jnp.int32)
+        # All-valid parents so the kernel takes its main branch (some processing
+        # happens, no refills since next_task_index ≥ N_total).
+        for buf in compaction_sizes:
+            if buf == 0:
+                continue
+            dummy_keys = jax.vmap(lambda i: jr.fold_in(rng_key, i))(jnp.arange(buf))
+            dummy_pos = jnp.broadcast_to(positions_padded[0:1], (buf, positions_padded.shape[1]))
+            dummy_state = self._get_initial_state(
+                dummy_pos, dummy_keys, init_trust_region_size, buf,
+            )
+            dummy_parents = jnp.zeros((buf,), dtype=jnp.int32)
+            out = self._process_active_states(
+                dummy_state, dummy_parents,
+                accumulated_w, accumulated_nSteps,
+                next_task_index_dummy,
+                params, positions_padded, rng_key,
+                init_trust_region_size,
+                int(buf),                     # active_buffer_size — STATIC
+                N_total_samples, n_samples,
+                steps_between_refill, unroll_loop,
+            )
+            jax.block_until_ready(out[0].position)
+
+
     def integrate_batch(self,
                         params: jnp.ndarray,
-                        initial_position_batch: jnp.ndarray, 
-                        rng_key: jnp.ndarray, 
-                        init_trust_region_size: float, 
+                        initial_position_batch: jnp.ndarray,
+                        rng_key: jnp.ndarray,
+                        init_trust_region_size: float,
                         n_samples: int,
                         steps_between_refill: int=50,
                         unroll_loop: bool=False,
                         max_active_states: int=1000**2,
-                        jit_buck_size: int=1000) -> WalkerOutput:
+                        jit_buck_size: int=1000,
+                        n_compactions: int=0) -> WalkerOutput:
         
         # 1. Pad Positions
         positions_padded, N_original = _pad_to_bucket(initial_position_batch, bucket_size=jit_buck_size)
@@ -211,11 +271,44 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
             active_buffer_size
         )
 
+        # Compaction schedule. WoS path lengths are highly uneven (random walks
+        # have a heavy tail), so during the drain phase a few stragglers can pin
+        # a wide buffer. `compaction_sizes` is a descending list of buffer
+        # widths; we walk down it as the active set fits each smaller bucket.
+        # `n_compactions=0` yields a single-size schedule = current behavior.
+        compaction_sizes = uniform_size_generator(active_buffer_size, n_compactions)
+        current_compaction_index = 0
+        current_buffer_size = compaction_sizes[current_compaction_index]
+
         process_calls = 0
         while True:
-            active_count = jnp.sum(active_parent_indices != -1)
-            if active_count == 0 and next_task_index >= N_total_samples:
+            active_count_int = int(jnp.sum(active_parent_indices != -1))
+            if active_count_int == 0 and next_task_index >= N_total_samples:
                 break
+
+            # Drain-phase compaction: only kick in once dispatch is done (pending
+            # tasks exhausted). Until then, completed slots are refilled with
+            # fresh tasks and the buffer should stay full.
+            if (n_compactions > 0
+                    and next_task_index >= N_total_samples
+                    and current_compaction_index < len(compaction_sizes) - 1):
+                will_compact, new_idx, new_size = should_compact(
+                    active_count_int, current_compaction_index, compaction_sizes,
+                )
+                if will_compact and new_size > 0:
+                    is_active_mask = active_parent_indices != -1
+                    fill_idx = current_buffer_size + 1   # OOB for the OLD buffer
+                    active_states, valid_mask, target_indices = compact_tree(
+                        active_states, is_active_mask, new_size, fill_index_value=fill_idx,
+                    )
+                    new_parents = active_parent_indices.at[target_indices].get(mode='drop')
+                    new_parents = jnp.where(valid_mask, new_parents,
+                                             jnp.array(-1, dtype=new_parents.dtype))
+                    active_parent_indices = new_parents
+                    current_compaction_index = new_idx
+                    current_buffer_size = new_size
+                    if self.print_progress:
+                        print(f"  → compacted to buffer size {current_buffer_size}")
 
             active_states, active_parent_indices, accumulated_w, accumulated_nSteps, n_filled = self._process_active_states(
                 active_states,
@@ -227,7 +320,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                 positions_padded,
                 rng_key,
                 init_trust_region_size,
-                active_buffer_size,
+                current_buffer_size,
                 N_total_samples,
                 n_samples,
                 steps_between_refill,
@@ -237,7 +330,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
             process_calls += 1
             next_task_index += n_filled
             if self.print_progress:
-                print(f"Remaining Active States: {jnp.sum(active_parent_indices != -1)} | Next Task Index: {next_task_index}/{N_total_samples}")
+                print(f"Remaining Active States: {jnp.sum(active_parent_indices != -1)} | Next Task Index: {next_task_index}/{N_total_samples}  (buffer={current_buffer_size})")
                 print(f"Process called so far. {process_calls}")
 
         # 4. Final Slicing (Remove Padding)
@@ -267,12 +360,24 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         sample_ball_position = state.position + (sample_ball_radius * sample_ball_direction)
 
         ### update state
-        is_done = jnp.logical_or(state.done_flag, jnp.linalg.norm(fn_val - self.level_set) <= self.eps)
+        # surfaces return fn_val = f(x) - level_set already; compare to 0, not to level_set again.
+        # Force-terminate walkers that exhaust max_steps without reaching the surface;
+        # without this, ill-conditioned walkers (very small empty-sphere radius forever)
+        # trap the integrator's Python while-loop in `integrate_batch`.
+        reached_surface = jnp.abs(fn_val) <= self.eps
+        exhausted = state.nSteps >= self.max_steps
+        is_done = jnp.logical_or(state.done_flag, jnp.logical_or(reached_surface, exhausted))
         new_nSteps = jnp.where(is_done, state.nSteps, state.nSteps + 1)
-        new_position = jnp.where(is_done, state.position, 
+        new_position = jnp.where(is_done, state.position,
                                  state.position + sample_sphere)
-        new_w = jnp.where(is_done, state.w,
-                          state.w + self.source_term(sample_ball_position) * self.weighted_greens_fn(r=sample_ball_radius, R=radius))
+        # Guard the source-Greens accumulation against radius=0 (empty-sphere classifier
+        # failed → no ball to integrate over → contribution is 0, not NaN). Without this,
+        # weighted_greens(0, 0) → NaN poisons state.w forever.
+        source_contrib = jnp.where(radius > 0,
+                                   self.source_term(sample_ball_position) *
+                                       self.weighted_greens_fn(r=sample_ball_radius, R=radius),
+                                   jnp.asarray(0.0, dtype=state.w.dtype))
+        new_w = jnp.where(is_done, state.w, state.w + source_contrib)
         new_nSteps, new_position, new_w = cast(jnp.ndarray, new_nSteps), cast(jnp.ndarray, new_position), cast(jnp.ndarray, new_w) # type hints b.c. of jnp.where
         
         
@@ -381,9 +486,15 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
         Phase 0: Walk -> Hit Boundary -> Offset Position -> Switch Walker to Phase 1
         Phase 1: Walk -> Hit Boundary -> Done
         """
-        fn_val, radius, trust_region_empty_flag = self.empty_sphere(params, state.position, state.trust_region_size)
-        new_trust_region_size = jnp.where(trust_region_empty_flag, state.trust_region_size * 2, state.trust_region_size) # If trust region is empty, expand it for the next step. Otherwise, keep it the same.
-        new_trust_region_size = jnp.where(radius < state.trust_region_size * 0.05, state.trust_region_size * 0.5, new_trust_region_size) # If radius is very small, shrink the trust region for the next step to avoid getting stuck.
+        # `empty_sphere` now returns the surface's recommended next trust-region
+        # size (matching NIQ + WoSIntegrator). Adopt it directly, and keep the
+        # safety net: if the empty-sphere radius collapsed to a tiny fraction of
+        # tr the polynomial got stuck → shrink further regardless of the
+        # surface's recommendation.
+        fn_val, radius, next_tr_from_es = self.empty_sphere(params, state.position, state.trust_region_size)
+        new_trust_region_size = jnp.where(radius < state.trust_region_size * 0.05,
+                                          state.trust_region_size * 0.5,
+                                          next_tr_from_es)
 
         ### sample new position on sphere and inside ball
         sphere_key, ball_key, new_key = jr.split(state.rng_key, 3)
@@ -392,10 +503,13 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
         sample_ball_radius *= radius
         sample_ball_position = state.position + (sample_ball_radius * sample_ball_direction)
 
-        ### update state
-        is_done = jnp.logical_or(state.done_flag, jnp.linalg.norm(fn_val - self.level_set) <= self.eps)
+        ### update state — surfaces return fn_val = f(x) - level_set already; compare to 0.
+        # Same max_steps force-termination as WoSIntegrator (avoid loop deadlock).
+        reached_surface = jnp.abs(fn_val) <= self.eps
+        exhausted = state.nSteps >= self.max_steps
+        is_done = jnp.logical_or(state.done_flag, jnp.logical_or(reached_surface, exhausted))
         new_nSteps = jnp.where(is_done, state.nSteps, state.nSteps + 1)
-        new_position = jnp.where(is_done, state.position, 
+        new_position = jnp.where(is_done, state.position,
                                  state.position + sample_sphere)
         new_position, new_nSteps = cast(jnp.ndarray, new_position), cast(jnp.ndarray, new_nSteps) # type hints b.c. of jnp.where
         

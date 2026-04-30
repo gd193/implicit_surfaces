@@ -180,7 +180,16 @@ def weighted_greens_fn_1ball(r: jnp.ndarray, R: jnp.ndarray) -> jnp.ndarray:
         jnp.ndarray of shape (...,) weighted Green's function value
     """
     ball_volume = jnp.pi * R * R
-    green_fn_val = 1 / (2.0 * jnp.pi) * (jnp.log(R / r))
+    # Guard against r=0 / R=0 (sample_uniform_*ball can produce r=0; an empty-
+    # sphere classifier failure can produce R=0). The Greens function is a
+    # density and contributes zero to a volume integral on a measure-zero set,
+    # so the limit value is 0. Without this we'd produce ±inf · 0 → NaN that
+    # poisons accumulator buffers.
+    safe = jnp.logical_and(r > 0, R > 0)
+    safe_r = jnp.where(safe, r, 1.0)
+    safe_R = jnp.where(safe, R, 1.0)
+    green_fn_val = 1 / (2.0 * jnp.pi) * (jnp.log(safe_R / safe_r))
+    green_fn_val = jnp.where(safe, green_fn_val, 0.0)
     return green_fn_val * ball_volume
 
 
@@ -194,5 +203,9 @@ def weighted_greens_fn_2ball(r: jnp.ndarray, R: jnp.ndarray) -> jnp.ndarray:
         jnp.ndarray of shape (...,) weighted Green's function value
     """
     ball_volume = (4.0 / 3.0) * jnp.pi * R * R * R
-    green_fn_val = 1 / (4.0 * jnp.pi) * (R - r) / (r * R)
+    # Guard against r=0 / R=0 (see 1ball above for why).
+    safe = jnp.logical_and(r > 0, R > 0)
+    safe_denom = jnp.where(safe, r * R, 1.0)
+    green_fn_val = 1 / (4.0 * jnp.pi) * (R - r) / safe_denom
+    green_fn_val = jnp.where(safe, green_fn_val, 0.0)
     return green_fn_val * ball_volume

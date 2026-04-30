@@ -1,6 +1,14 @@
 from typing import Optional, Tuple, cast
 
 import jax
+# Force fp32 matmuls. JAX/XLA's default precision lets large fp32 matmuls
+# (batch ≥ 2) be promoted to TF32 (19-bit mantissa, ~1e-3 relative error)
+# on Ampere+ GPUs. The autobound polynomial *constant* term `a000` is the
+# MLP forward at the Taylor centre; TF32 corrupts it by ~5e-3 absolute,
+# which crosses the surface sign boundary in `ray_step`'s flag selection
+# and causes wrong-envelope root-finding → ray-march tunneling. Set here
+# at import time so anyone instantiating jnpboundedImplicit gets the fix.
+jax.config.update("jax_default_matmul_precision", "highest")
 import jax.numpy as jnp
 import jnp_bounds.autobounds as jb
 
@@ -38,6 +46,10 @@ class jnpboundedImplicit(implicitSurface):
                 autobounds_max_degree: int,
                 use_classify_subcubes: bool = True,
                 use_warp: bool = True,
+                grow_factor: float = 1.5,
+                shrink_factor: float = 0.5,
+                max_trust_region_size: float = float('inf'),
+                min_trust_region_size: float = 1e-6,
                 **kwargs
                 ):
         """
@@ -47,11 +59,18 @@ class jnpboundedImplicit(implicitSurface):
             fn (Callable): A jnp autobound-able JAX function that defines the implicit surface.
             params (Optional[dict]): Additional parameters for the jnp autobound library.
             level_set (float): The level set value for the implicit surface.
+            grow_factor / shrink_factor / max_trust_region_size / min_trust_region_size:
+                Trust-region update for `empty_sphere` (used by `WoSIntegrator`).
+                Mirrors NIQ's interval_grow_fac / interval_shrink_fac /  hit_eps clip.
         """
         super().__init__(**kwargs)
         self.autobounds_max_degree = autobounds_max_degree
         self.use_classify_subcubes = use_classify_subcubes
         self.use_warp = use_warp
+        self._grow = float(grow_factor)
+        self._shrink = float(shrink_factor)
+        self._max_tr = float(max_trust_region_size)
+        self._min_tr = float(min_trust_region_size)
         # use_warp routes polynomial composition through fused NVIDIA-Warp kernels for the
         # supported activations (softplus / swish / sigmoid). GPU-only fast path; harmless
         # but unused on CPU. Default True since neural-surface workloads are the common case.
@@ -60,52 +79,38 @@ class jnpboundedImplicit(implicitSurface):
         )
 
 
-    def ray_step(self, params, ray_origin, ray_direction, trust_region_size, upper_lower_flag=None):
-        """Sphere-trace step with the Taylor centre shifted forward by tr/2 along the ray.
+    # Polynomial linear-coef indices in the autobound 3D-degree-2 ordering
+    # (multi_index_3d_2nd_order = [[0,0,0],[0,0,1],[0,1,0],[1,0,0],...]):
+    #   poly[3] = ∂f/∂x, poly[2] = ∂f/∂y, poly[1] = ∂f/∂z   at the Taylor centre.
+    # Constants here so we don't recompute the lookup inside the jit'd ray_step.
+    _GRAD_INDICES = (3, 2, 1)
 
-        The original implementation centred the Taylor pass at `ray_origin`, so the
-        per-axis trust region [origin - tr/2, origin + tr/2] only had `tr/2` of forward
-        extent. NIQ's `cast_rays_iter` instead probes a 1-D box of half-width `tr/2` AHEAD
-        of the current position, giving the full `tr` of forward stride. This version
-        mirrors NIQ's geometry: shift `x0_shift = ray_origin + 0.5·tr·dir`, do the Taylor
-        pass there, root-find a 1-D polynomial *parameterised in absolute distance from
-        ray_origin* (substitute `s_local = s_absolute - 0.5·tr` into the local-frame coefs).
-
-        Returns (fn_val, t_step, in_tr_complement) matching `SimpleIntegrator`'s contract:
-          fn_val: f(ray_origin) - level_set, used by the level-set termination criterion.
-          t_step: distance to advance from ray_origin along the ray.
-          in_tr_complement: True iff the polynomial *did not* find a root inside the trust
-                            region (so the integrator keeps tr); False iff a root was found
-                            and stepped to (so the integrator shrinks tr). Convention matches
-                            the original implementation and `niImplicitSurface.ray_step`.
-        """
+    def _ray_step_internals(self, params, ray_origin, ray_direction, trust_region_size, upper_lower_flag=None):
+        """Single Taylor pass; returns everything `ray_step` and `ray_step_with_grad`
+        need. The grad output is a slice of the polynomial (free byproduct of the
+        Taylor pass). When called via `ray_step` the slice is unused → JIT
+        dead-code-eliminates it; no runtime cost."""
         SAFETY_FACTOR = 0.98  # mirror NIQ's cast_rays_iter
         half_tr = 0.5 * trust_region_size
-        x0_shift = ray_origin + half_tr * ray_direction
 
         trust_region_vec = jnp.broadcast_to(trust_region_size, ray_origin.shape)
-        auto_bound = self.taylor_bounds(x0_shift, x_trust_region=None,
+        auto_bound = self.taylor_bounds(ray_origin, x_trust_region=None,
                                         trust_region_size=trust_region_vec)
         poly = auto_bound.polynomial_enclosure
 
-        # f at the (shifted) Taylor centre — used to pick the lower/upper flag.
-        center_fn_val = poly[0]
+        # f at the Taylor centre = f at ray_origin, exact.
+        fn_val_at_origin = jnp.squeeze(poly[0]) - self.level_set
 
-        # f at ray_origin — used by the level-set termination test in SimpleIntegrator.
-        # Evaluate the polynomial at local offset δ = -half_tr·dir; take Interval midpoint.
-        delta_origin = -half_tr * ray_direction
-        res = mp_eval(poly, delta_origin)
-        if isinstance(res, Interval):
-            fn_val_at_origin = 0.5 * (res.lower + res.upper) - self.level_set
-        else:
-            fn_val_at_origin = res - self.level_set
+        # ∇f at the Taylor centre (= ray_origin), exact. Free byproduct of the
+        # Taylor pass — same polynomial we're already inspecting.
+        idx_dx, idx_dy, idx_dz = self._GRAD_INDICES
+        grad = jnp.array([jnp.squeeze(poly[idx_dx]),
+                          jnp.squeeze(poly[idx_dy]),
+                          jnp.squeeze(poly[idx_dz])])
 
-        # Classify-first guard: bound the polynomial over the full trust region. If the
-        # box is provably decided (hi < level_set or lo > level_set), the surface can't
-        # lie inside, so take the full forward step and don't shrink tr. With grow-on-safe
-        # tr update, this is essential — without it the polynomial's spurious lower-bound
-        # roots in free space trigger in_box=True (shrink), creating tr oscillation as
-        # the integrator alternately grows and shrinks.
+        # Classify-first guard: bound the polynomial over the full TR. If decided
+        # (hi < level OR lo > level), the surface cannot lie inside → take the full
+        # forward exit step without root-finding, no shrink.
         half_extent_vec = half_tr * jnp.ones_like(ray_origin)
         lo_box, hi_box = _poly_box_value_bounds(poly, half_extent_vec)
         decided = jnp.logical_or(hi_box - self.level_set < 0,
@@ -113,45 +118,47 @@ class jnpboundedImplicit(implicitSurface):
 
         if upper_lower_flag is None:
             upper_lower_flag = jnp.where(
-                jnp.squeeze(center_fn_val) > self.level_set, jnp.array(-1), jnp.array(1),
+                fn_val_at_origin > 0, jnp.array(-1), jnp.array(1),
             )
 
-        # Get 1-D polynomial coefs along the ray, in local frame from x0_shift:
-        #   p(s_local · dir) = a · s_local² + b · s_local + c
-        # transform_2nd_order_3d returns [c, b, a].
-        coeffs_local = transform_2nd_order_3d(poly, ray_direction, upper_lower_flag)
-        c_loc = coeffs_local[0] - self.level_set
-        b_loc = coeffs_local[1]
-        a_loc = coeffs_local[2]
-
-        # Substitute s_local = s_absolute - half_tr to get coefs in absolute step from ray_origin:
-        #   p(s_abs) = a · s_abs² + (b - 2·a·half_tr) · s_abs + (a · half_tr² - b · half_tr + c)
-        c_abs = a_loc * half_tr ** 2 - b_loc * half_tr + c_loc
-        b_abs = b_loc - 2.0 * a_loc * half_tr
-        a_abs = a_loc
+        # 1-D polynomial along the ray, in local frame from ray_origin.
+        coeffs = transform_2nd_order_3d(poly, ray_direction, upper_lower_flag)
+        c_abs = coeffs[0] - self.level_set
+        b_abs = coeffs[1]
+        a_abs = coeffs[2]
 
         hit, s_root = roots_2nd_order_polynomial(jnp.stack([c_abs, b_abs, a_abs]))
 
-        # AABB exit distance from ray_origin: the AABB is centred at x0_shift with
-        # half-width tr/2 per axis, so the ray (entering at the −face) exits at
-        # s_exit = (tr/2) · (1 + 1 / max(|dir_i|)), i.e. `tr` for axis-aligned rays
-        # and up to `tr·√3` for diagonal rays.
         max_abs_dir = jnp.max(jnp.abs(ray_direction))
-        s_exit = half_tr * (1.0 + 1.0 / (max_abs_dir + 1e-12))
+        s_exit = half_tr / (max_abs_dir + 1e-12)
 
-        # Decided box → full forward step (in_box=False, in_tr=True, no shrink).
-        # Undecided + root in TR → step to root (in_box=True, in_tr=False, shrink).
-        # Undecided + no root → step to s_exit (in_box=False, in_tr=True, no shrink).
         in_box = jnp.logical_and(jnp.logical_not(decided),
                                  jnp.logical_and(hit, s_root < s_exit))
         s_step = jnp.where(in_box, s_root, s_exit)
         s_step = SAFETY_FACTOR * s_step
 
-        fn_val_at_origin = cast(jnp.ndarray, jnp.squeeze(fn_val_at_origin))
         s_step = cast(jnp.ndarray, jnp.squeeze(s_step))
         in_box = jnp.squeeze(in_box)
 
-        return fn_val_at_origin, s_step, jnp.logical_not(in_box)
+        return fn_val_at_origin, s_step, jnp.logical_not(in_box), grad
+
+
+    def ray_step(self, params, ray_origin, ray_direction, trust_region_size, upper_lower_flag=None):
+        """Sphere-trace step with the Taylor centre at ray_origin. Returns
+        (fn_val, t_step, in_tr) — the gradient byproduct of the Taylor pass is
+        dropped here; JIT dead-code-eliminates the unused slice. See class
+        docstring for full step-decision semantics."""
+        fn_val, t_step, in_tr, _grad = self._ray_step_internals(
+            params, ray_origin, ray_direction, trust_region_size, upper_lower_flag)
+        return fn_val, t_step, in_tr
+
+
+    def ray_step_with_grad(self, params, ray_origin, ray_direction, trust_region_size, upper_lower_flag=None):
+        """Same step decision as `ray_step` but also returns ∇f(ray_origin).
+        Override of base default: extracts the gradient from the polynomial
+        linear coefficients (free) instead of doing a separate `jax.grad` pass."""
+        return self._ray_step_internals(
+            params, ray_origin, ray_direction, trust_region_size, upper_lower_flag)
     
 
     def _box_polynomial(self, lower: jnp.ndarray, upper: jnp.ndarray):
@@ -230,15 +237,15 @@ class jnpboundedImplicit(implicitSurface):
 
     def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray, upper_lower_flag: Optional[str]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         """
-        Compute the largest empty sphere around the given position within the trust region.
-        We assume global bounds from the autobound library, hence the trust_region_size is inf
-        args:
-            x (jnp.ndarray)(dim,): The current position of the walker
-            trust_region_size (jnp.ndarray)(1,): The current trust region size
-        Returns:
-            fn_val (jnp.ndarray)(1,): The value of the function at the current position
-            radius (jnp.ndarray)(1,): The radius of the largest empty sphere
-            trust_region_empty_flag (jnp.ndarray)(1,): A boolean flag indicating whether the entire trust region is empty (True) or not (False)
+        Largest provably-empty sphere around `x` within the trust region.
+
+        Returns (fn_val, safe_radius, next_trust_region_size) matching NIQ's
+        `empty_sphere` and `WoSIntegrator.step`'s contract:
+          * fn_val: f(x) − level_set
+          * safe_radius: largest empty-sphere radius, clamped to TR/2
+          * next_tr: TR · grow_factor when the polynomial-derived radius fills
+            the TR (surface provably outside TR), else TR · shrink_factor.
+            Clipped to [min_tr, max_tr].
         """
         auto_bound = self.taylor_bounds(x, x_trust_region=None, trust_region_size=trust_region_size)
         taylor_enclosure = auto_bound.polynomial_enclosure
@@ -247,7 +254,18 @@ class jnpboundedImplicit(implicitSurface):
         if upper_lower_flag is None:
             upper_lower_flag = jnp.where(fn_val.squeeze() > self.level_set, jnp.array(-1), jnp.array(1)) # stay on same side of level set
         radius = empty_sphere_2nd_order_tensor(taylor_enclosure, upper_lower_flag, dim=x.shape[0], isolevel=self.level_set).squeeze()
+        # Sanitize: empty_sphere_2nd_order_tensor can return NaN/negative for
+        # degenerate polynomial cases (root-find on near-flat coefs). Treat those
+        # as "no usable radius" → 0; downstream logic shrinks tr next step.
+        radius = jnp.where(jnp.isfinite(radius), radius, jnp.asarray(0.0, dtype=radius.dtype))
+        radius = jnp.maximum(radius, jnp.asarray(0.0, dtype=radius.dtype))
+        # Surface provably outside TR ⇔ radius reaches the TR boundary (= TR/2).
         outside_trust_region = radius > trust_region_size * 0.5
         safe_radius = jnp.where(outside_trust_region, trust_region_size * 0.5, radius)
-        return fn_val, safe_radius, outside_trust_region
+        # NIQ-style adaptive TR update.
+        next_tr = jnp.where(outside_trust_region,
+                            trust_region_size * self._grow,
+                            trust_region_size * self._shrink)
+        next_tr = jnp.clip(next_tr, self._min_tr, self._max_tr)
+        return fn_val, safe_radius, next_tr
 

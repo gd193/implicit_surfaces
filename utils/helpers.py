@@ -104,17 +104,19 @@ def update_trust_region_size(trust_region_size: jnp.ndarray, t_step: jnp.ndarray
 
 def update_trust_region_size_niq_grow(trust_region_size: jnp.ndarray, t_step: jnp.ndarray,
                                       in_tr: jnp.ndarray,
-                                      max_tr: float = 2.0, min_tr: float = 1e-6) -> jnp.ndarray:
+                                      max_tr: float = float('inf'),
+                                      min_tr: float = 1e-3) -> jnp.ndarray:
     # NIQ-style adaptive update (cast_rays_iter, queries.py): grow ×1.5 on every safe step,
     # shrink ×0.5 on every unsafe step. Suited to NIQ's classify-and-step ray_step
     # (classified → full safe step → grow; UNKNOWN → no step → shrink).
+    # Defaults mirror NIQ: no upper cap, lower clip at hit_eps (=1e-3).
     new_tr = jnp.where(in_tr, trust_region_size * 1.5, trust_region_size * 0.5)
     return jnp.clip(new_tr, min_tr, max_tr)
 
 
 def update_trust_region_size_autobound(trust_region_size: jnp.ndarray, t_step: jnp.ndarray,
                                        in_tr: jnp.ndarray,
-                                       max_tr: float = 0.2, min_tr: float = 1e-6) -> jnp.ndarray:
+                                       max_tr: float = 0.15, min_tr: float = 1e-6) -> jnp.ndarray:
     # Autobound-suited adaptive update:
     #   * Ray passed through trust region (no root → in_tr=True): grow ×2.
     #   * Polynomial root in TR with small step (< 0.5·tr): shrink ×0.5.
@@ -133,7 +135,22 @@ def update_trust_region_size_autobound(trust_region_size: jnp.ndarray, t_step: j
 
 def spatial_termination_criterion(t_step: jnp.ndarray, fn_val: jnp.ndarray, tr_size: jnp.ndarray, level_set_threshold: float, epsilon: float) -> jnp.ndarray:
     return jnp.logical_and(t_step < epsilon, tr_size < 2*epsilon)
+spatial_termination_criterion.needs_grad = False
 
 
 def level_set_termination_criterion(t_step: jnp.ndarray, fn_val: jnp.ndarray, tr_size: jnp.ndarray, level_set_threshold: float, epsilon: float) -> jnp.ndarray:
+    """|f − level_set| < ε. Pure value-based; bound-tightness-independent.
+    Stops when the function value at the current position is within ε of the
+    level set, without consulting the gradient."""
     return jnp.abs(fn_val - level_set_threshold) < epsilon
+level_set_termination_criterion.needs_grad = False
+
+
+def geometric_termination_criterion(t_step: jnp.ndarray, fn_val: jnp.ndarray, tr_size: jnp.ndarray, level_set_threshold: float, epsilon: float, *, grad_norm: jnp.ndarray) -> jnp.ndarray:
+    """|f − level_set| / |∇f| < ε. First-order Euclidean-distance-to-surface
+    estimate (one Newton step). Equivalent to declaring hit when a single
+    gradient-step would land on the surface within ε of the current point.
+    Tighter than `level_set_termination_criterion` for shallow gradients
+    (|∇f| < 1) and stricter for steep ones."""
+    return jnp.abs(fn_val - level_set_threshold) / (grad_norm + 1e-12) < epsilon
+geometric_termination_criterion.needs_grad = True
