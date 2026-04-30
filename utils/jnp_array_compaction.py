@@ -6,6 +6,8 @@ import functools
 
 
 def uniform_size_generator(size: int, n_compactions: int) -> List[int]:
+    if n_compactions <= 0:
+        return [size]
     return [floor(size * i / n_compactions) for i in range(0, n_compactions + 1)][::-1]
 
 

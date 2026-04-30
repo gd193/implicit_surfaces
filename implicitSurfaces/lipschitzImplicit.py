@@ -19,15 +19,14 @@ class lipschitzImplicit(implicitSurface):
 
 
     def empty_sphere(self, params, x, trust_region_size, upper_lower_flag = None):
-        """
-        Compute the largest empty sphere around the given position within the trust region.
-        We assume a global Lipschitz bound, hence the trust_region_size is inf
-        and is the surface is always inside the trust region, so the trust_region_empty_flag is always False.
-        """
-        trust_region_size = jnp.array(jnp.inf) # assume global Lipschitz bound
-        fn_val = self(params, x)
-        distance_to_level_set = jnp.abs(fn_val - self.level_set) / self.lipschitz_bound
-        return fn_val, distance_to_level_set, jnp.array(False)
+        """Lipschitz-derived empty sphere: r = |f(x) - level_set| / L is the
+        smallest distance to the level set. Returns (fn_val_minus_level_set,
+        radius, next_tr). With a global Lipschitz constant the TR is irrelevant
+        for safety, so we pass the radius itself as next_tr — WoSIntegrator
+        will then sample within that ball next iteration."""
+        fn_val = self(params, x) - self.level_set
+        radius = jnp.abs(fn_val) / self.lipschitz_bound
+        return fn_val, radius, radius
     
 
     def box_bounds(self, params, lower, upper):
@@ -43,15 +42,14 @@ class lipschitzImplicit(implicitSurface):
 
 
     def ray_step(self, params, ray_origin, ray_direction, trust_region_size, upper_lower_flag = None):
-        """
-        Compute the ray step from the current position along the ray direction.
-        We assume a global Lipschitz bound, hence the trust_region_size is inf
-        and is the surface is always inside the trust region, so the trust_region_empty_flag is always False.
-        """
-        trust_region_size = jnp.array(jnp.inf) # assume global Lipschitz bound
-        fn_val = self(params, ray_origin)
-        distance_to_level_set = jnp.abs(fn_val - self.level_set) / self.lipschitz_bound
-        return fn_val, distance_to_level_set, jnp.array(False)
+        """Lipschitz sphere-trace step: t_step = |f - level_set| / L.
+        Third return is `in_tr_complement` (True ⇔ no level-set crossing inside
+        the step we just bounded). For Lipschitz, the step is the *largest
+        guaranteed-empty distance*, so we step into a region that's provably
+        away from the surface — return True (no crossing in this step)."""
+        fn_val = self(params, ray_origin) - self.level_set
+        t_step = jnp.abs(fn_val) / self.lipschitz_bound
+        return fn_val, t_step, jnp.asarray(True)
 
 
 class sdfImplicit(lipschitzImplicit):
