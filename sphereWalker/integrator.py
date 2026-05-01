@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 
+import time
 import timeit
 from typing import Callable, Tuple, TypeVar, Generic, Optional, Any, Union, cast
 from functools import partial
@@ -39,6 +40,23 @@ weight_greens_fn_select = {
 }
 
 StateT = TypeVar('StateT', bound=Union[WalkerState, DifferentialWalkerState])
+
+
+@partial(jax.jit, static_argnames=('new_size',))
+def _compact_step(states, parents, is_active, new_size):
+    """One full compaction transition jit'd as a single kernel.
+
+    Replaces an eager sequence of `compact_tree(...)` + `parents.at[ti].get(...)` +
+    `jnp.where(...)` whose individual ops were re-tracing per (input_size, new_size)
+    pair on the WoS hot path. Bundled together they share one cache entry per
+    `new_size`. Module-level so the JIT cache survives across BaseIntegrator
+    instances.
+    """
+    new_states, valid_mask, target_indices = compact_tree(states, is_active, new_size)
+    new_parents = parents.at[target_indices].get(mode='drop')
+    new_parents = jnp.where(valid_mask, new_parents,
+                             jnp.array(-1, dtype=new_parents.dtype))
+    return new_states, new_parents
 
 
 class BaseIntegrator(Generic[StateT], abc.ABC):
@@ -233,6 +251,37 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
             )
             jax.block_until_ready(out[0].position)
 
+        # `compact_tree` is jit-cached on `new_size` only (fill_index_value was
+        # dropped — was unused). Pre-compile one entry per bucket size on a
+        # state of the largest buffer; downstream transitions from any larger
+        # buffer to this `new_size` reuse the same compile.
+        nonzero_sizes = [b for b in compaction_sizes if b > 0]
+
+        def _wait_all(state_out, parents_out):
+            jax.tree_util.tree_map(jax.block_until_ready, state_out)
+            jax.block_until_ready(parents_out)
+
+        if nonzero_sizes:
+            big = nonzero_sizes[0]
+            big_keys = jax.vmap(lambda i: jr.fold_in(rng_key, 100 + i))(jnp.arange(big))
+            big_pos = jnp.broadcast_to(positions_padded[0:1], (big, positions_padded.shape[1]))
+            big_state = self._get_initial_state(big_pos, big_keys, init_trust_region_size, big)
+            big_parents = jnp.zeros((big,), dtype=jnp.int32)
+            is_active_big = jnp.ones((big,), dtype=jnp.bool_)
+            for new in nonzero_sizes[1:]:
+                _wait_all(*_compact_step(big_state, big_parents, is_active_big, int(new)))
+            # Pre-warm transitions from each non-`big` size — JIT cache key
+            # includes input array shapes which scale with the source buffer.
+            for old in nonzero_sizes[1:-1]:
+                old_keys = jax.vmap(lambda i: jr.fold_in(rng_key, 200 + i))(jnp.arange(old))
+                old_pos = jnp.broadcast_to(positions_padded[0:1], (old, positions_padded.shape[1]))
+                old_state = self._get_initial_state(old_pos, old_keys, init_trust_region_size, old)
+                old_parents = jnp.zeros((old,), dtype=jnp.int32)
+                is_active_old = jnp.ones((old,), dtype=jnp.bool_)
+                idx_old = nonzero_sizes.index(old)
+                for new in nonzero_sizes[idx_old + 1:]:
+                    _wait_all(*_compact_step(old_state, old_parents, is_active_old, int(new)))
+
 
     def integrate_batch(self,
                         params: jnp.ndarray,
@@ -244,8 +293,17 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                         unroll_loop: bool=False,
                         max_active_states: int=1000**2,
                         jit_buck_size: int=1000,
-                        n_compactions: int=0) -> WalkerOutput:
-        
+                        n_compactions: int=0,
+                        diag_log: Optional[list]=None) -> WalkerOutput:
+        """Run WoS to completion across `initial_position_batch`.
+
+        diag_log: if a list is passed, each outer iteration appends a dict
+            with `{outer_idx, buffer_size, n_active, ms_total, ms_compact,
+            ms_process, ms_sync}`. The caller can use this to break the wall
+            time into per-step kernel work vs Python/host overhead and per-
+            bucket-size cost. Pass None to skip instrumentation entirely.
+        """
+
         # 1. Pad Positions
         positions_padded, N_original = _pad_to_bucket(initial_position_batch, bucket_size=jit_buck_size)
 
@@ -282,13 +340,20 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
 
         process_calls = 0
         while True:
+            t_iter = time.perf_counter() if diag_log is not None else None
+            # Reading active_parent_indices != -1 forces a host sync; we
+            # measure that cost as part of `ms_sync` for diagnostics.
+            t_sync_start = time.perf_counter() if diag_log is not None else None
             active_count_int = int(jnp.sum(active_parent_indices != -1))
+            ms_sync = (time.perf_counter() - t_sync_start) * 1000 if diag_log is not None else 0.0
             if active_count_int == 0 and next_task_index >= N_total_samples:
                 break
 
             # Drain-phase compaction: only kick in once dispatch is done (pending
             # tasks exhausted). Until then, completed slots are refilled with
             # fresh tasks and the buffer should stay full.
+            t_compact_start = time.perf_counter() if diag_log is not None else None
+            ms_compact = 0.0
             if (n_compactions > 0
                     and next_task_index >= N_total_samples
                     and current_compaction_index < len(compaction_sizes) - 1):
@@ -297,19 +362,20 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                 )
                 if will_compact and new_size > 0:
                     is_active_mask = active_parent_indices != -1
-                    fill_idx = current_buffer_size + 1   # OOB for the OLD buffer
-                    active_states, valid_mask, target_indices = compact_tree(
-                        active_states, is_active_mask, new_size, fill_index_value=fill_idx,
+                    active_states, active_parent_indices = _compact_step(
+                        active_states, active_parent_indices, is_active_mask, int(new_size),
                     )
-                    new_parents = active_parent_indices.at[target_indices].get(mode='drop')
-                    new_parents = jnp.where(valid_mask, new_parents,
-                                             jnp.array(-1, dtype=new_parents.dtype))
-                    active_parent_indices = new_parents
                     current_compaction_index = new_idx
                     current_buffer_size = new_size
                     if self.print_progress:
                         print(f"  → compacted to buffer size {current_buffer_size}")
+            if diag_log is not None:
+                # block_until_ready on the compacted result so compaction wall
+                # time is attributed to ms_compact, not to ms_process below.
+                jax.block_until_ready(active_parent_indices)
+                ms_compact = (time.perf_counter() - t_compact_start) * 1000
 
+            t_process_start = time.perf_counter() if diag_log is not None else None
             active_states, active_parent_indices, accumulated_w, accumulated_nSteps, n_filled = self._process_active_states(
                 active_states,
                 active_parent_indices,
@@ -326,6 +392,20 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                 steps_between_refill,
                 unroll_loop,
             )
+            if diag_log is not None:
+                jax.block_until_ready(active_states.position)
+                ms_process = (time.perf_counter() - t_process_start) * 1000
+                ms_total = (time.perf_counter() - t_iter) * 1000
+                diag_log.append(dict(
+                    outer_idx=process_calls,
+                    buffer_size=int(current_buffer_size),
+                    n_active=int(active_count_int),
+                    next_task_index=int(next_task_index),
+                    ms_total=ms_total,
+                    ms_compact=ms_compact,
+                    ms_process=ms_process,
+                    ms_sync=ms_sync,
+                ))
 
             process_calls += 1
             next_task_index += n_filled

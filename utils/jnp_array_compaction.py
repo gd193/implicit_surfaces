@@ -22,10 +22,16 @@ def should_compact(N_valid: int, current_compaction_index: int, compaction_sizes
     return False, -1, -1
 
 
+# `fill_index_value` was retained for compatibility with `perform_compaction`
+# (used downstream as the OOB sentinel when scattering finished rays into the
+# output buffer). Inside `compact_tree` itself the fill is masked away by
+# `safe_gather_indices`, so for the WoS hot path we use this internal-only
+# variant whose static_args are just `new_size`. Single cache axis → far
+# fewer JIT compiles when the bucket schedule transitions through many sizes.
+@functools.partial(jax.jit, static_argnames=('new_size',))
 def compact_tree(state: Any,
                  is_active: jnp.ndarray,
-                 new_size: int,
-                 fill_index_value: int) -> Tuple[Any, jnp.ndarray, jnp.ndarray]:
+                 new_size: int) -> Tuple[Any, jnp.ndarray, jnp.ndarray]:
     """
     Compacts an arbitrary PyTree state based on a boolean is_active mask.
     Returns (new_compacted_state, valid_mask, target_indices).
@@ -35,19 +41,38 @@ def compact_tree(state: Any,
     silently truncated (the scheduler in `should_compact` is responsible for keeping
     `new_size` large enough). Callers using a custom compaction schedule must preserve
     this invariant.
+
+    JIT-cached on `new_size`. Pre-warming via
+    `WoSIntegrator.pre_warm_compaction_buckets` populates this cache before
+    timed runs (one compile per bucket size; 800 ms each on the 1 M-buffer
+    hot path otherwise).
     """
     N_in = jnp.sum(is_active)
-    
-    target_indices = jnp.nonzero(is_active, size=new_size, fill_value=fill_index_value)[0]
+
+    # fill_value here is masked away by safe_gather_indices, so any constant works.
+    target_indices = jnp.nonzero(is_active, size=new_size, fill_value=0)[0]
     valid_mask = jnp.arange(new_size) < N_in
     safe_gather_indices = jnp.where(valid_mask, target_indices, 0)
-    
+
     def compact_leaf(arr):
         return arr.at[safe_gather_indices].get(mode='drop')
 
     new_state = jax.tree_util.tree_map(compact_leaf, state)
-    
+
     return new_state, valid_mask, target_indices
+
+
+def compact_tree_with_fill(state: Any,
+                           is_active: jnp.ndarray,
+                           new_size: int,
+                           fill_index_value: int) -> Tuple[Any, jnp.ndarray, jnp.ndarray]:
+    """Backward-compat wrapper: returns target_indices that are *also* set to
+    `fill_index_value` for padding slots. Used by `perform_compaction` whose
+    caller scatters finished rays via the same indices into an output buffer.
+    """
+    new_state, valid_mask, target_indices_compact = compact_tree(state, is_active, new_size)
+    target_indices_full = jnp.where(valid_mask, target_indices_compact, fill_index_value)
+    return new_state, valid_mask, target_indices_full
 
 
 @functools.partial(jax.jit, static_argnames=('fill_index_value', 'new_compacted_size', 'write_to_output_fn', 'update_state_fn'))
@@ -71,13 +96,13 @@ def perform_compaction(loop_state: Any,
     write_indices = jnp.where(is_done, active_indices, fill_index_value)
 
     new_output_state = write_to_output_fn(loop_state, output_state, write_indices)
-    
+
     is_active = ~is_done
-    compacted_state, valid_mask, target_gather_indices = compact_tree(
+    compacted_state, valid_mask, target_gather_indices = compact_tree_with_fill(
         loop_state,
         is_active,
-        new_compacted_size, 
-        fill_index_value
+        new_compacted_size,
+        fill_index_value,
     )
 
     new_active_indices = active_indices.at[target_gather_indices].get(mode='drop')
