@@ -31,6 +31,7 @@ from implicitSurfaces.niImplicitSurface import niImplicitSurface
 from implicitSurfaces.jnpboundedImplicit import jnpboundedImplicit
 from sphereWalker.integrator import WoSIntegrator
 from utils.rejection_sampling import sample_points_batched
+from utils.paper_utils.results import record, make_id, record_failure
 
 print(f"JAX: {[d.platform for d in jax.devices()]}", flush=True)
 
@@ -43,6 +44,16 @@ DEFAULT_MODES = ["interval", "affine_fixed", "slope_interval", "affine_truncate"
 p = argparse.ArgumentParser()
 p.add_argument("--network", default="bunny_softplus")
 p.add_argument("--activation", default="softplus")
+p.add_argument("--shape", default="bunny",
+               help="paper_utils.results 'shape' field (e.g. bunny, fox, hammer)")
+p.add_argument("--depth", type=int, default=3,
+               help="MLP hidden-layer count (for results metadata)")
+p.add_argument("--width", type=int, default=32,
+               help="MLP hidden width (for results metadata)")
+p.add_argument("--loss", default="SDF",
+               help="loss the network was trained with (for results metadata)")
+p.add_argument("--no_record", action="store_true",
+               help="skip writing to paper_utils.results")
 p.add_argument("--variant", default=None,
                help="substring filter on variant labels (comma-separated for multiple)")
 p.add_argument("--modes", nargs="+", default=DEFAULT_MODES,
@@ -145,7 +156,8 @@ def sample_interior_points(n, bbox_half, isolevel, mlp, seed):
         key=jr.PRNGKey(seed),
         aa=aa, bb=bb,
         num_points=n,
-        batch_size=max(8 * n, 4096),
+        # batch_size must be ≤ num_points (sample_points_batched dynamic_update_slice).
+        batch_size=min(max(4096, n), n),
     )
     if not bool(ok):
         raise RuntimeError(f"rejection sampling exhausted before producing {n} interior points")
@@ -313,6 +325,44 @@ def run_method(label, surface, params):
              warm_ms=t_min, median_ms=t_med,
              peak_bytes=gpu_peak_bytes(),
              n_walkers=args.n_walkers, n_walkers_high=args.n_walkers_high)
+
+    # Record to paper_utils.results JSONL.
+    if not args.no_record:
+        net = dict(depth=args.depth, width=args.width,
+                   activation=args.activation, loss=args.loss)
+        variant_id = _slug(label).replace("warp_true", "warp")
+        try:
+            record({
+                "id": make_id(args.shape, net, variant_id, "wos", seed=args.seed),
+                "shape": args.shape,
+                "network": net,
+                "variant": variant_id,
+                "algorithm": "wos",
+                "metrics": {
+                    "warm_best_ms": float(t_min),
+                    "warm_median_ms": float(t_med),
+                    "mean_n_steps": float(n_steps_mean),
+                    "rms_u_low_minus_high": float(rms),
+                    "max_u_low_minus_high": float(max_abs),
+                    "peak_gb": float(peak_gb),
+                    "in_use_gb": float(in_use_gb),
+                    "n_test_points": int(test_points.shape[0]),
+                    "n_walkers": int(args.n_walkers),
+                    "n_walkers_high": int(args.n_walkers_high),
+                    "max_steps": int(args.max_steps),
+                    "init_tr": float(args.init_tr),
+                    "eps": float(args.eps),
+                    "boundary_fn": args.boundary_fn,
+                    "n_compactions": int(args.n_compactions),
+                    "n_warmup": int(args.n_warmup),
+                    "n_timed": int(args.n_timed),
+                },
+                "system": {"gpu_index": os.environ.get("CUDA_VISIBLE_DEVICES")},
+                "seed": int(args.seed),
+            })
+            print(f'  recorded → paper_utils.results / wos.jsonl', flush=True)
+        except Exception as e:
+            print(f'  [warn] record() failed: {type(e).__name__}: {e}', flush=True)
     print(f'  saved → {method_dir}/u.npz', flush=True)
 
 
