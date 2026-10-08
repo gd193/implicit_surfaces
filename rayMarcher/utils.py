@@ -1,4 +1,35 @@
 import jax.numpy as jnp
+import numpy as np
+
+SceneBounds = tuple[tuple[float, float, float], tuple[float, float, float]]
+DEFAULT_SCENE_BOUNDS: SceneBounds = ((-2.0, -2.0, -2.0), (2.0, 2.0, 2.0))
+
+
+def validate_scene_bounds(bounds: SceneBounds | None) -> SceneBounds | None:
+    """Validate static world-space bounds at integrator construction."""
+    if bounds is None:
+        return None
+    values = np.asarray(bounds, dtype=float)
+    if (values.shape != (2, 3) or not np.all(np.isfinite(values))
+            or not np.all(values[0] < values[1])):
+        raise ValueError("scene_bounds must contain finite lower < upper corners of shape (2, 3)")
+    return tuple(map(tuple, values))
+
+
+def ray_scene_interval(origin: jnp.ndarray, direction: jnp.ndarray,
+                       bounds: SceneBounds | None) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Forward ray/AABB interval; handles parallel rays, including box faces."""
+    if bounds is None:
+        return jnp.asarray(0.0), jnp.asarray(jnp.inf), jnp.asarray(True)
+    lower, upper = jnp.asarray(bounds)
+    parallel = direction == 0
+    divisor = jnp.where(parallel, 1.0, direction)
+    t0, t1 = (lower - origin) / divisor, (upper - origin) / divisor
+    entry = jnp.maximum(0.0, jnp.max(jnp.where(parallel, -jnp.inf, jnp.minimum(t0, t1))))
+    exit = jnp.min(jnp.where(parallel, jnp.inf, jnp.maximum(t0, t1)))
+    valid = ((entry <= exit) & jnp.any(~parallel)
+             & ~jnp.any(parallel & ((origin < lower) | (origin > upper))))
+    return entry, exit, valid
 
 def normalize(v: jnp.array) -> jnp.array:
     return v / jnp.linalg.norm(v)
