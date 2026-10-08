@@ -39,7 +39,9 @@ class Integrator:
                  samples_per_pixel: int,
                  max_depth: int,
                  epsilon: float = 1e-3,
-                 max_sphere_trace_dist: float = 100,):        
+                 max_sphere_trace_dist: float = 100,
+                 max_sphere_trace_steps: int = 256,
+                 scene_bounds: utils.SceneBounds | None = utils.DEFAULT_SCENE_BOUNDS):
         
         self.camera = camera
         self.materials = materials
@@ -52,6 +54,11 @@ class Integrator:
         self.scene_normal_fns = scene_normal_fns
         self.epsilon = epsilon
         self.max_sphere_trace_dist = max_sphere_trace_dist
+        if max_sphere_trace_steps < 1:
+            raise ValueError("max_sphere_trace_steps must be positive")
+        self.max_sphere_trace_steps = max_sphere_trace_steps
+        # World-space lower/upper corners; None disables fallback-tracer clipping.
+        self.scene_bounds = utils.validate_scene_bounds(scene_bounds)
 
     def get_scene_dist(self, point: jnp.array) -> tuple[jnp.array, jnp.array]:
         # This helper is clean and reusable
@@ -122,25 +129,34 @@ class Integrator:
 
     def sphere_trace(self, ray_origin: jnp.array, ray_direction: jnp.array):
 
-        current_origin = ray_origin
-        current_dist = 1.0 + self.epsilon
+        # SDF steps are world-space distances; bounce directions need not be unit.
+        direction_length = jnp.linalg.norm(ray_direction)
+        valid_direction = jnp.isfinite(direction_length) & (direction_length > 0)
+        ray_direction = ray_direction / jnp.where(valid_direction, direction_length, 1.0)
+        entry, exit, intersects = utils.ray_scene_interval(
+            ray_origin, ray_direction, self.scene_bounds)
+        intersects = intersects & valid_direction
 
         def sphere_trace_body_fn(state):
-            current_position, ray_direction, current_dist, min_dist_material_idx = state
+            t, current_dist, min_dist_material_idx, niter, done = state
+            current_position = ray_origin + t * ray_direction
             min_dist, min_dist_material_idx = self.get_scene_dist(current_position)
-            new_position = current_position + min_dist * ray_direction
-            current_dist = min_dist
-            return (new_position, ray_direction, current_dist, min_dist_material_idx)
+            done = ((min_dist <= self.epsilon)
+                    | (min_dist >= self.max_sphere_trace_dist) | (t >= exit))
+            next_t = jnp.where(done, t, jnp.minimum(t + min_dist, exit))
+            return (next_t, min_dist, min_dist_material_idx, niter + 1, done)
 
         def sphere_trace_cond_fn(state):
-            min_dist = state[2]
-            return (min_dist > self.epsilon) & (min_dist < self.max_sphere_trace_dist)
+            return ~state[4] & (state[3] < self.max_sphere_trace_steps)
         
-        init_state = (current_origin, ray_direction, current_dist, -1)
+        init_state = (jnp.where(intersects, entry, 0.0), jnp.asarray(jnp.inf),
+                      -1, 0, ~intersects)
         final_state = jax.lax.while_loop(sphere_trace_cond_fn, sphere_trace_body_fn, init_state)
-        final_origin, final_direction, final_dist, final_material_idx = final_state
-        hit = final_dist < self.epsilon
-        hit_point = final_origin
+        final_t, final_dist, final_material_idx, _, _ = final_state
+        # Exhausting the step budget without reaching the surface is a miss;
+        # the caller already turns hit=False into a background contribution.
+        hit = intersects & (final_dist < self.epsilon)
+        hit_point = ray_origin + final_t * ray_direction
         hit_normal = jax.lax.switch(
             final_material_idx,
             self.scene_normal_fns,
@@ -296,7 +312,8 @@ class Integrator:
         Render batch of pixels using a simple ray marching algorithm. Also returns niter actually needed
         """
         ray_origins, ray_directions = jax.vmap(generate_antialiased_ray, in_axes=(None, 0, 0, 0))(self.camera, pixel_i_coords, pixel_j_coords, keys)
-        unit_directions_background = utils.normalize(ray_directions)
+        # generate_antialiased_ray already normalizes each direction independently.
+        unit_directions_background = ray_directions
         ts = 0.5 * (unit_directions_background[:, 1] + 1.0)
         background_colors = (1.0 - ts[:, None]) * jnp.array([1.0, 1.0, 1.0]) + ts[:, None] * self.background_color
         hits, hit_points, niters = self.scene_intersection_batch_fn(ray_origins, ray_directions)

@@ -47,6 +47,9 @@ class SimpleIntegrator:
     and survive across render() calls. `camera` and `background_color` are mutable
     instance attributes — assign new values between calls to orbit/animate without
     triggering a re-trace.
+
+    scene_bounds is a world-space (lower, upper) box, defaulting to [-2, 2]^3.
+    Set it to None to disable scene clipping. Cameras may start outside it.
     """
     def __init__(self,
                  camera: Camera,
@@ -70,12 +73,14 @@ class SimpleIntegrator:
                  # of that method is `ray_step + jax.grad(surface)`; subclasses
                  # with a cheap grad path (e.g. autobound) override it to use
                  # bookkeeping they already do.
-                 ray_march_with_grad_fn: Optional[Callable[..., tuple]] = None):
+                 ray_march_with_grad_fn: Optional[Callable[..., tuple]] = None,
+                 scene_bounds: utils.SceneBounds | None = utils.DEFAULT_SCENE_BOUNDS):
         self.camera = camera
         self.background_color = background_color
         self.ray_march_fn = ray_march_fn
         self.surface_normal_fn = surface_normal_fn
         self.ray_march_with_grad_fn = ray_march_with_grad_fn
+        self.scene_bounds = utils.validate_scene_bounds(scene_bounds)
         if getattr(termination_crit_fn, 'needs_grad', False) and ray_march_with_grad_fn is None:
             raise ValueError(
                 f"termination_crit_fn={termination_crit_fn.__name__} declares needs_grad; "
@@ -100,7 +105,7 @@ class SimpleIntegrator:
         )
         self._step_states_fn = jax.jit(jax.vmap(step_fn, in_axes=(None, 0)))
 
-        # Built once: post-process. camera_center and background_color are passed
+        # Built once: post-process. ray directions and background_color are passed
         # as traced arguments (NOT closed over), so mutating self.camera does not
         # invalidate this cache.
         self._post_process_jit = jax.jit(
@@ -135,10 +140,14 @@ class SimpleIntegrator:
             ray_march_step = self.ray_march_fn
 
         def step_fn(params: Any, state: RayMarchState) -> RayMarchState:
-            current_position = state.ray_origin + state.t * state.ray_direction
-            # Surface steps already return f - level_set, so criteria compare
-            # the residual against zero. The level_set_threshold argument is
-            # retained for compatibility with existing callers.
+            entry, exit, intersects = utils.ray_scene_interval(
+                state.ray_origin, state.ray_direction, self.scene_bounds)
+            end_t = jnp.minimum(exit, max_ray_distance)
+            intersects = intersects & (entry <= end_t)
+            current_t = jnp.where(intersects & ~state.done_flag,
+                                  jnp.maximum(state.t, entry), state.t)
+            current_position = state.ray_origin + current_t * state.ray_direction
+            # Surface steps return f - level_set; compare the residual to zero.
             if needs_grad:
                 fn_val, t_step, in_tr, grad = ray_march_step(params, current_position, state.ray_direction, state.trust_region_size)
                 grad_norm = jnp.linalg.norm(grad)
@@ -146,18 +155,18 @@ class SimpleIntegrator:
             else:
                 fn_val, t_step, in_tr = ray_march_step(params, current_position, state.ray_direction, state.trust_region_size)
                 hit_now = termination_crit_fn(t_step, fn_val, state.trust_region_size, 0.0, epsilon)
-            hit_now = hit_now & ~state.done_flag & (state.t <= max_ray_distance)
+            hit_now = hit_now & intersects & (current_t <= end_t) & ~state.done_flag
             hit_flag_next = jnp.logical_or(state.hit_flag, hit_now)
             done_flag_next = jnp.logical_or(
-                state.done_flag, jnp.logical_or(
+                state.done_flag | ~intersects, jnp.logical_or(
                     hit_flag_next,
                     jnp.logical_or(
                         state.niter >= max_ray_march_steps,
-                        state.t >= max_ray_distance)
+                        current_t >= end_t)
                     )
                 )
             niter_next = jnp.where(done_flag_next, state.niter, state.niter + 1)
-            t_next = jnp.where(done_flag_next, state.t, jnp.minimum(state.t + t_step, max_ray_distance))
+            t_next = jnp.where(done_flag_next, current_t, jnp.minimum(current_t + t_step, end_t))
             t_next = cast(jnp.ndarray, t_next)
             trust_region_size = jnp.where(done_flag_next, state.trust_region_size, update_tr_fn(state.trust_region_size, t_step, in_tr))
 
@@ -177,10 +186,10 @@ class SimpleIntegrator:
                            output_states: RayMarchOutput,
                            image_height: int,
                            image_width: int,
-                           camera_center: jnp.ndarray,
+                           ray_directions: jnp.ndarray,
                            background_color: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        # Approximate view directions from the camera center to each final ray endpoint.
-        view_dirs = jax.vmap(utils.normalize)(output_states.ray_position - camera_center)
+        # Misses may terminate at t=0; use the actual sampled directions.
+        view_dirs = ray_directions
         t = 0.5 * (view_dirs[:, 1] + 1.0)  # shape (N,)
         background_colors = (1.0 - t[:, None]) * jnp.array([1.0, 1.0, 1.0]) + t[:, None] * background_color
         hit_normals = jax.vmap(self.surface_normal_fn, in_axes=(None, 0))(params, output_states.ray_position)
@@ -251,7 +260,7 @@ class SimpleIntegrator:
             output_states,
             self.image_height,
             self.image_width,
-            self.camera.camera_center,
+            ray_directions,
             self.background_color,
         )
         return image, niter
