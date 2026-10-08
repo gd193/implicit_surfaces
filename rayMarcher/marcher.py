@@ -136,13 +136,17 @@ class SimpleIntegrator:
 
         def step_fn(params: Any, state: RayMarchState) -> RayMarchState:
             current_position = state.ray_origin + state.t * state.ray_direction
+            # Surface steps already return f - level_set, so criteria compare
+            # the residual against zero. The level_set_threshold argument is
+            # retained for compatibility with existing callers.
             if needs_grad:
                 fn_val, t_step, in_tr, grad = ray_march_step(params, current_position, state.ray_direction, state.trust_region_size)
                 grad_norm = jnp.linalg.norm(grad)
-                hit_now = termination_crit_fn(t_step, fn_val, state.trust_region_size, level_set_threshold, epsilon, grad_norm=grad_norm)
+                hit_now = termination_crit_fn(t_step, fn_val, state.trust_region_size, 0.0, epsilon, grad_norm=grad_norm)
             else:
                 fn_val, t_step, in_tr = ray_march_step(params, current_position, state.ray_direction, state.trust_region_size)
-                hit_now = termination_crit_fn(t_step, fn_val, state.trust_region_size, level_set_threshold, epsilon)
+                hit_now = termination_crit_fn(t_step, fn_val, state.trust_region_size, 0.0, epsilon)
+            hit_now = hit_now & ~state.done_flag & (state.t <= max_ray_distance)
             hit_flag_next = jnp.logical_or(state.hit_flag, hit_now)
             done_flag_next = jnp.logical_or(
                 state.done_flag, jnp.logical_or(
@@ -153,7 +157,7 @@ class SimpleIntegrator:
                     )
                 )
             niter_next = jnp.where(done_flag_next, state.niter, state.niter + 1)
-            t_next = jnp.where(done_flag_next, state.t, state.t + t_step)
+            t_next = jnp.where(done_flag_next, state.t, jnp.minimum(state.t + t_step, max_ray_distance))
             t_next = cast(jnp.ndarray, t_next)
             trust_region_size = jnp.where(done_flag_next, state.trust_region_size, update_tr_fn(state.trust_region_size, t_step, in_tr))
 

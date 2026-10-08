@@ -39,7 +39,7 @@ class Camera(NamedTuple):
 
         theta = jnp.deg2rad(vfov)
         h = jnp.tan(theta / 2)
-        viewport_height = 2.0 * h
+        viewport_height = 2.0 * h * focus_distance
         viewport_width = aspect_ratio * viewport_height
 
         camera_center = lookfrom
