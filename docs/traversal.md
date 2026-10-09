@@ -146,6 +146,39 @@ query might contain a closer one. The image-rendering convenience methods retain
 best-effort rendering (background on misses); inspect geometry results when
 completion guarantees matter.
 
+## Walk-on-spheres completion
+
+WoS and differential WoS distinguish `ACTIVE`, `BOUNDARY_HIT`, `MAX_STEPS`,
+and `INVALID` using `sphereWalker.types.WalkerTermination`. Only successful
+samples enter the accumulated contribution. A differential sample succeeds
+only after both phases hit the boundary; the step budget is shared across phases.
+A boundary hit at the final allowed step is accepted.
+
+`integrate_batch(...)` still returns `WalkerOutput` when all requested samples
+succeed. It raises `RuntimeError` if any actual input position has an exhausted
+or invalid sample. To diagnose an incomplete run:
+
+```python
+from sphereWalker.types import WalkerTermination
+
+details = walker.integrate_batch(
+    params, positions, key, init_trust_region_size=0.5,
+    n_samples=128, return_details=True)
+sums = details.contribution_sum  # same array/PyTree structure as the estimate
+successes = details.successful_samples
+exhausted = details.termination_counts[:, WalkerTermination.MAX_STEPS]
+invalid = details.termination_counts[:, WalkerTermination.INVALID]
+complete_positions = details.complete
+```
+
+These are sums of completed sample contributions, not estimates averaged over
+successful samples. Discarding failed walks or treating their contributions as
+zero can bias a solution. `details.nSteps` averages work over all requested
+samples, including failures. Increase the total `max_steps` budget and rerun
+when necessary; `steps_between_refill` is a scheduling interval, not a reason to
+accept unfinished walks. Completed state is frozen until reduction or phase
+transition. This change does not add resumable checkpoints for interrupted walks.
+
 ## Validation
 
 Six tests in two files cover the public contracts and integration paths:

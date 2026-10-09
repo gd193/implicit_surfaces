@@ -9,7 +9,8 @@ from functools import partial
 import abc
 
 from surfaces.queries import EmptySphereQuery
-from sphereWalker.types import WalkerState, WalkerOutput, DifferentialWalkerState
+from sphereWalker.types import (WalkerState, WalkerOutput, DifferentialWalkerState,
+                                WalkerTermination as WT, WalkerDiagnostics)
 from utils.jnp_array_compaction import (
     uniform_size_generator,
     should_compact,
@@ -58,6 +59,26 @@ def _compact_step(states, parents, is_active, new_size):
     new_parents = jnp.where(valid_mask, new_parents,
                              jnp.array(-1, dtype=new_parents.dtype))
     return new_states, new_parents
+
+
+def walker_status(state, residual, radius, next_tr, eps, max_steps):
+    """A terminal condition is not automatically a boundary hit."""
+    hit = jnp.abs(residual) <= eps
+    exhausted = state.nSteps >= max_steps
+    valid = (jnp.isfinite(residual) & jnp.isfinite(radius) & (radius >= 0)
+             & jnp.all(jnp.isfinite(state.position)) & jnp.all(jnp.isfinite(state.w)))
+    valid &= hit | exhausted | (jnp.isfinite(next_tr) & (next_tr > 0))
+    return jnp.asarray(jnp.where(~valid, WT.INVALID,
+                       jnp.where(hit, WT.BOUNDARY_HIT,
+                       jnp.where(exhausted, WT.MAX_STEPS, WT.ACTIVE))), dtype=jnp.int32)
+
+
+def finish_step(state, updated):
+    """Preserve terminal states until they are reduced or change phase."""
+    finite = jnp.all(jnp.isfinite(updated.position)) & jnp.all(jnp.isfinite(updated.w))
+    updated = updated._replace(status=jnp.where(finite, updated.status, WT.INVALID),
+                               done_flag=updated.done_flag | ~finite)
+    return jax.tree.map(lambda old, new: jnp.where(state.done_flag, old, new), state, updated)
 
 
 class BaseIntegrator(Generic[StateT], abc.ABC):
@@ -142,7 +163,14 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         current_states = self._transition_state_phases(params, current_states)
         is_done = self._check_if_done(current_states, current_parents)
 
+        sums, counts = current_accumulated_w
         to_accumulate = jax.vmap(self._compute_accumulator_update, in_axes=(None, 0))(params, current_states)
+        successful = is_done & (current_states.status == WT.BOUNDARY_HIT)
+        finite = jnp.ones_like(successful)
+        for leaf in jax.tree.leaves(to_accumulate):
+            finite &= jnp.all(jnp.isfinite(leaf).reshape((leaf.shape[0], -1)), axis=1)
+        terminal_status = jnp.where(successful & ~finite, WT.INVALID, current_states.status)
+        successful &= finite
         
         # Accumulate results
         # Use N_total_samples + 1 as safe drop index for logic, 
@@ -152,14 +180,18 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         
         done_parents = jnp.where(is_done, current_parents, drop_idx)
         done_nSteps = jnp.where(is_done, current_states.nSteps, 0)
-        done_w = jax.tree.map(lambda leaf: mask_leaf(leaf, is_done), to_accumulate)
+        done_w = jax.tree.map(lambda leaf: mask_leaf(leaf, successful), to_accumulate)
 
         updated_accumulated_w = jax.tree.map(
             lambda acc_leaf, to_add_leaf: acc_leaf.at[done_parents].add(to_add_leaf, mode='drop'),
-            current_accumulated_w,
+            sums,
             done_w
         )
         updated_accumulated_nSteps = current_accumulated_nSteps.at[done_parents].add(done_nSteps, mode='drop')
+
+        updated_counts = counts.at[done_parents, terminal_status].add(
+            is_done.astype(counts.dtype), mode='drop')
+        updated_accumulated_w = (updated_accumulated_w, updated_counts)
 
         # Refill active states
         free_indices_mask = jnp.nonzero(is_done, size=active_buffer_size, fill_value=active_buffer_size)[0]
@@ -226,7 +258,8 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         active_buffer_size = min(N_total_samples, max_active_states)
         compaction_sizes = uniform_size_generator(active_buffer_size, n_compactions)
 
-        accumulated_w = self._get_accumulator_initial(params, positions_padded)
+        accumulated_w = (self._get_accumulator_initial(params, positions_padded),
+                         jnp.zeros((N_positions, len(WT)), dtype=jnp.int32))
         accumulated_nSteps = jnp.zeros((N_positions,), dtype=jnp.int32)
         next_task_index_dummy = jnp.array(N_total_samples, dtype=jnp.int32)
         # All-valid parents so the kernel takes its main branch (some processing
@@ -295,8 +328,14 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                         max_active_states: int=1000**2,
                         jit_buck_size: int=1000,
                         n_compactions: int=0,
-                        diag_log: Optional[list]=None) -> WalkerOutput:
-        """Run WoS to completion across `initial_position_batch`.
+                        diag_log: Optional[list]=None, *,
+                        return_details: bool=False) -> WalkerOutput | WalkerDiagnostics:
+        """Estimate only from completed walks; raise on any incomplete sample.
+
+        return_details=True returns successful contribution sums and per-position
+        termination counts instead of an estimate. It does not average a biased
+        subset of successful walks. max_steps is a total per-sample budget,
+        shared by both phases of differential WoS.
 
         diag_log: if a list is passed, each outer iteration appends a dict
             with `{outer_idx, buffer_size, n_active, ms_total, ms_compact,
@@ -313,7 +352,8 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         active_buffer_size = min(N_total_samples, max_active_states)
 
         # 3. Init Global Output
-        accumulated_w = self._get_accumulator_initial(params, positions_padded)
+        accumulated_w = (self._get_accumulator_initial(params, positions_padded),
+                         jnp.zeros((N_positions, len(WT)), dtype=jnp.int32))
         accumulated_nSteps = jnp.zeros((N_positions,), dtype=jnp.int32)
 
         init_task_indices = jnp.arange(active_buffer_size)
@@ -414,11 +454,22 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                 print(f"Remaining Active States: {jnp.sum(active_parent_indices != -1)} | Next Task Index: {next_task_index}/{N_total_samples}  (buffer={current_buffer_size})")
                 print(f"Process called so far. {process_calls}")
 
-        # 4. Final Slicing (Remove Padding)
-        final_w = jax.tree.map(lambda leaf: leaf[:N_original] / n_samples, accumulated_w)
+        # Counts include all requested samples; failed samples never enter sums.
+        sums, counts = accumulated_w
+        sums = jax.tree.map(lambda leaf: leaf[:N_original], sums)
+        counts = counts[:N_original]
         final_nSteps = accumulated_nSteps[:N_original] / n_samples
         final_positions = positions_padded[:N_original, :]
-
+        details = WalkerDiagnostics(final_positions, sums, counts[:, WT.BOUNDARY_HIT],
+                                    counts, final_nSteps)
+        if return_details:
+            return details
+        if not bool(jnp.all(details.complete)):
+            exhausted = int(jnp.sum(counts[:, WT.MAX_STEPS]))
+            invalid = int(jnp.sum(counts[:, WT.INVALID]))
+            raise RuntimeError(f'incomplete WoS sampling: {exhausted} exhausted, {invalid} invalid; '
+                               'use return_details=True to inspect partial sums and counts')
+        final_w = jax.tree.map(lambda leaf: leaf / n_samples, sums)
         return WalkerOutput(position=final_positions, nSteps=final_nSteps, w=final_w)
 
 
@@ -441,13 +492,8 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         sample_ball_position = state.position + (sample_ball_radius * sample_ball_direction)
 
         ### update state
-        # surfaces return fn_val = f(x) - level_set already; compare to 0, not to level_set again.
-        # Force-terminate walkers that exhaust max_steps without reaching the surface;
-        # without this, ill-conditioned walkers (very small empty-sphere radius forever)
-        # trap the integrator's Python while-loop in `integrate_batch`.
-        reached_surface = jnp.abs(fn_val) <= self.eps
-        exhausted = state.nSteps >= self.max_steps
-        is_done = jnp.logical_or(state.done_flag, jnp.logical_or(reached_surface, exhausted))
+        status = walker_status(state, fn_val, radius, new_trust_region_size, self.eps, self.max_steps)
+        is_done = status != WT.ACTIVE
         new_nSteps = jnp.where(is_done, state.nSteps, state.nSteps + 1)
         new_position = jnp.where(is_done, state.position,
                                  state.position + sample_sphere)
@@ -462,12 +508,13 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         new_nSteps, new_position, new_w = cast(jnp.ndarray, new_nSteps), cast(jnp.ndarray, new_position), cast(jnp.ndarray, new_w) # type hints b.c. of jnp.where
         
         
-        return WalkerState(position=new_position, 
+        updated = WalkerState(position=new_position,
                            nSteps=new_nSteps, 
                            w=new_w, 
                            trust_region_size=new_trust_region_size, 
                            rng_key=new_key,
-                           done_flag=is_done)
+                           done_flag=is_done, status=status)
+        return finish_step(state, updated)
     
     def _get_initial_state(self, init_position_batch, rng_keys, init_tr, buffer_size) -> WalkerState:
         return WalkerState(
@@ -476,6 +523,7 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
             w=jnp.zeros((buffer_size, 1)),
             trust_region_size=jnp.full((buffer_size,), init_tr, dtype=init_position_batch.dtype),
             rng_key=rng_keys,
+            status=jnp.zeros((buffer_size,), dtype=jnp.int32),
             done_flag=jnp.zeros((buffer_size,), dtype=bool)
         )
     
@@ -538,6 +586,7 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
             w=next_w,
             trust_region_size=next_trust_region_size,
             rng_key=next_rng_keys,
+            status=current_states.status.at[jnp.where(is_valid_mask, free_indices, N_total_samples + 1)].set(WT.ACTIVE, mode='drop'),
             done_flag=next_done
         )
 
@@ -584,11 +633,8 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
         sample_ball_radius *= radius
         sample_ball_position = state.position + (sample_ball_radius * sample_ball_direction)
 
-        ### update state — surfaces return fn_val = f(x) - level_set already; compare to 0.
-        # Same max_steps force-termination as WoSIntegrator (avoid loop deadlock).
-        reached_surface = jnp.abs(fn_val) <= self.eps
-        exhausted = state.nSteps >= self.max_steps
-        is_done = jnp.logical_or(state.done_flag, jnp.logical_or(reached_surface, exhausted))
+        status = walker_status(state, fn_val, radius, new_trust_region_size, self.eps, self.max_steps)
+        is_done = status != WT.ACTIVE
         new_nSteps = jnp.where(is_done, state.nSteps, state.nSteps + 1)
         new_position = jnp.where(is_done, state.position,
                                  state.position + sample_sphere)
@@ -598,16 +644,17 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
         new_w = jnp.where(jnp.logical_or(is_done, state.phase == 0), state.w,
                     state.w + self.source_term(sample_ball_position) * self.weighted_greens_fn(r=sample_ball_radius, R=radius))
         
-        return DifferentialWalkerState(
+        updated = DifferentialWalkerState(
             position=new_position,
             boundary_hit_position=state.boundary_hit_position,
             nSteps=new_nSteps, 
             w=new_w, 
             trust_region_size=new_trust_region_size, 
             rng_key=new_key,
-            done_flag=is_done,
+            done_flag=is_done, status=status,
             phase=state.phase
         )
+        return finish_step(state, updated)
     
     
     def _get_initial_state(self, init_position_batch, rng_keys, init_tr, buffer_size):
@@ -618,6 +665,7 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
             w=jnp.zeros((buffer_size,)),
             trust_region_size=jnp.full((buffer_size,), init_tr, dtype=init_position_batch.dtype),
             rng_key=rng_keys,
+            status=jnp.zeros((buffer_size,), dtype=jnp.int32),
             done_flag=jnp.zeros((buffer_size,), dtype=bool),
             phase=jnp.zeros((buffer_size,), dtype=jnp.int32) # Start in phase 0
         )
@@ -654,6 +702,7 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
             w=state.w,
             trust_region_size=state.trust_region_size,
             rng_key=state.rng_key,
+            status=jnp.asarray(WT.ACTIVE, dtype=state.status.dtype),
             done_flag=not_done,
             phase=new_phase  
         )
@@ -662,14 +711,14 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
         """
         Transition the walker states upon hitting the boundary.
         """        
-        needs_transition = jnp.logical_and(states.done_flag, states.phase == 0)
+        needs_transition = jnp.logical_and(states.status == WT.BOUNDARY_HIT, states.phase == 0)
         any_transition = jnp.any(needs_transition)
         def transition_fn(_params, _states):
             "vmap over states (arg 1) and keep params (arg 0) fixed"
             return jax.vmap(
                 lambda _p, _st: jax.lax.cond(
-                    jnp.logical_and(_st.done_flag, _st.phase==0), # condition
-                    self._transition_walker,                      # true branch
+                    jnp.logical_and(_st.status == WT.BOUNDARY_HIT, _st.phase==0), # condition
+                    self._transition_walker,
                     lambda _, st: st,                             # false branch
                     _p, _st                                       # arguments
                 ),
@@ -677,7 +726,7 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
         return jax.lax.cond(any_transition, transition_fn, lambda _, s: s, *(params, states))
     
     def _check_if_done(self, state, parents):
-        return jnp.logical_and(jnp.logical_and(state.done_flag, state.phase == 1), parents != -1)
+        return state.done_flag & ((state.phase == 1) | (state.status != WT.BOUNDARY_HIT)) & (parents != -1)
     
     def _refill_state(self, current_states, is_valid_mask, free_indices, new_positions, new_keys, init_trust_region_size, N_total_samples):
         
@@ -700,6 +749,7 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
             w=next_w,
             trust_region_size=next_trust_region_size,
             rng_key=next_rng_keys,
+            status=current_states.status.at[jnp.where(is_valid_mask, free_indices, N_total_samples + 1)].set(WT.ACTIVE, mode='drop'),
             done_flag=next_done,
             phase=next_phase
         )
