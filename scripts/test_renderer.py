@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from tempfile import TemporaryDirectory
 from pathlib import Path
 
 os.environ.setdefault('JAX_PLATFORMS', 'cpu')
@@ -91,6 +92,15 @@ class RendererIntegrationTests(unittest.TestCase):
         _, reference = generate_antialiased_ray(camera(), 0, 0, key)
         _, changed = generate_antialiased_ray(camera(focus=3.), 0, 0, key)
         np.testing.assert_allclose(changed, reference, atol=1e-6)
+        # Exercise the orbit API and encoded output within the renderer integration test.
+        from render_orbit import OrbitConfig, render_orbit
+        from PIL import Image
+        with TemporaryDirectory() as directory:
+            path = render_orbit(sphere(), 1., Path(directory)/'orbit.gif',
+                                OrbitConfig(width=8, height=8, frames=2, fps=10., max_active_states=3), progress=False)
+            with Image.open(path) as animation:
+                self.assertEqual((animation.size, animation.n_frames), ((8, 8), 2))
+                self.assertEqual(animation.info['duration'], 100)
 
     def test_sphere_walking_constant_boundary(self):
         surface = sdfImplicit(fn=lambda p, x: jnp.linalg.norm(x)-1., dim=2)
