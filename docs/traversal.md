@@ -177,7 +177,9 @@ zero can bias a solution. `details.nSteps` averages work over all requested
 samples, including failures. Increase the total `max_steps` budget and rerun
 when necessary; `steps_between_refill` is a scheduling interval, not a reason to
 accept unfinished walks. Completed state is frozen until reduction or phase
-transition. This change does not add resumable checkpoints for interrupted walks.
+transition. Differential phase one restarts adaptation with the caller's
+`init_trust_region_size` at the offset point. The geometry backend determines
+the safe sphere and next trust region; the walker does not override that policy. This change does not add resumable checkpoints for interrupted walks.
 
 ## Validation
 

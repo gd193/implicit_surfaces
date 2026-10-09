@@ -143,6 +143,34 @@ class RendererIntegrationTests(unittest.TestCase):
         np.testing.assert_allclose(details.contribution_sum['a'], 0.)
         with self.assertRaisesRegex(RuntimeError, 'incomplete WoS'):
             differential.integrate_batch(None, positions, key, **options)
+        # A boundary hit can return a tiny next TR. Completed state must stay
+        # frozen, and phase one must restart with the caller's initial scale.
+        def bounded_plane(p, x, tr):
+            return x[0], jnp.minimum(jnp.abs(x[0]), tr), jnp.asarray(1e-12, x.dtype)
+        differential = DifferentialWoSIntegrator(
+            empty_sphere_fn=bounded_plane, boundary_condition_fn=lambda x: jnp.asarray(7.),
+            source_term_fn=lambda x: jnp.asarray(0.), dim=2, max_steps=1,
+            normal_fn=lambda p,x: jnp.array([1.,0.]),
+            Df=lambda p,x,g: {'a': jnp.asarray(0.)}, V_n=lambda p,x: {'a': jnp.asarray(1.)},
+            offset_l=.25)
+        differential.sphere_sampling_fn = lambda key,dtype: jnp.array([1.,0.], dtype=dtype)
+        state = differential._get_initial_state(jnp.zeros((1,2)), key[None,:], 1., 1)
+        step = jax.vmap(differential.step, in_axes=(None, 0))
+        hit = step(None, state)
+        waited = jax.lax.fori_loop(0, 49, lambda i,s: step(None,s), hit)
+        for a, b in zip(hit, waited):
+            np.testing.assert_array_equal(a, b)
+        restarted = differential._transition_state_phases(None, waited, 1.)
+        np.testing.assert_allclose(restarted.trust_region_size, 1.)
+        # Confirm the backend recommendation is honored, not replaced by the
+        # old unconditional halving rule when its radius is small.
+        tiny = state._replace(position=jnp.array([[-.001,0.]]))
+        np.testing.assert_allclose(step(None, tiny).trust_region_size, 1e-12, atol=0.)
+        for block in (1, 50):
+            opts = {**options, 'steps_between_refill': block}
+            result = differential.integrate_batch(None, jnp.zeros((1,2)), key, **opts)
+            np.testing.assert_allclose(result.w['a'], 0.)
+
 
 
 if __name__ == '__main__':
