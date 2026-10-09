@@ -88,6 +88,61 @@ As with the renderer, exhausted ray budgets are displayed as misses. Choose
 limits and bounds appropriate for the field; the video interface does not
 certify that every intersection was resolved.
 
+## Train and orbit the Softplus twisted torus
+
+The independent trainer saves weights and JSON metadata, including held-out
+errors and the actual GPU used. The default network is 3 hidden layers of width
+32 (2,273 parameters), with `softplus(10*x)/10` activations. This is a regression
+of a twisted implicit field, not a globally exact signed-distance function.
+
+```sh
+python scripts/train_twisted_torus.py --device gpu --steps 16000 \
+  --out assets/models/twisted_torus_softplus.npz
+
+WARP_CACHE_PATH=/tmp/warp-cache XLA_PYTHON_CLIENT_PREALLOCATE=false \
+python scripts/render_orbit.py --device gpu \
+  --surface scripts/train_twisted_torus.py:load_surface \
+  --surface-kwargs '{"checkpoint":"assets/models/twisted_torus_softplus.npz"}' \
+  --width 128 --height 128 --frames 36 --fps 12 --samples 2 \
+  --radius 2.5 --height-offset 0.6 --bounds -1 -1 -1 1 1 1 \
+  --epsilon 0.0003 --termination geometric --max-steps 256 --trust-region 0.25 \
+  --out assets/renders/twisted_torus_softplus_orbit.gif
+```
+
+The loader uses degree-2 Warp-fused Taylor bounds. It absorbs the activation
+scale into the affine weights, preserving the function while avoiding scalar
+interval broadcasts between layers. For the JAX bounds backend, pass
+`"use_warp":false` in the factory arguments.
+
+On the tested RTX 5060 / JAX and jaxlib 0.11.0 installation, XLA incorrectly
+rewrites `beta * (x @ W + b)` into a cuBLASLt call with `alpha=beta` and an
+**unscaled** bias epilogue. This is an affine rewrite error, before Softplus;
+the failing kernel is cuBLASLt, not Triton. With `x=ones((16,3))`,
+`W=ones((3,32))`, `b=full((32,),2)` and beta 10, compiled GPU inference
+returns 32 instead of 50. The optimized HLO passes the original bias to
+`__cublas$lt$matmul` with `alpha_real=10` and `epilogue="BIAS"`.
+
+The trainer expresses the equivalent affine operation as
+`x @ (beta * W) + beta * b`, which produces 50 for that reproduction and
+preserves differentiation. No compiler backend is disabled. The trainer and
+loader check compiled inference with both dynamic and frozen weights, and
+individual points, against NumPy. GPU training and the orbit were verified
+with `XLA_FLAGS=--xla_gpu_enable_triton_gemm=true`.
+
+Minimal reproduction (run on GPU with Triton enabled):
+
+```python
+import jax
+import jax.numpy as jnp
+
+jax.config.update("jax_default_matmul_precision", "highest")
+x, w, b = jnp.ones((16, 3)), jnp.ones((3, 32)), jnp.full((32,), 2.)
+broken = jax.jit(lambda x, w, b: 10 * (x @ w + b))
+fixed = jax.jit(lambda x, w, b: x @ (10 * w) + 10 * b)
+print(broken(x, w, b)[0, 0], fixed(x, w, b)[0, 0])  # 32, 50 on affected stack
+print(broken.lower(x, w, b).compile().as_text())  # inspect GEMM bias and alpha
+```
+
 Large images use the renderer's shared bounded active buffer
 (`--max-active-states 4096` by default). Finished rays are replaced with pending
 rays while other rays continue. Marching, path state, and normal queries obey
