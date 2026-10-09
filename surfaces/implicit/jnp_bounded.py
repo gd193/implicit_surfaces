@@ -74,8 +74,12 @@ class jnpboundedImplicit(implicitSurface):
         # use_warp routes polynomial composition through fused NVIDIA-Warp kernels for the
         # supported activations (softplus / swish / sigmoid). GPU-only fast path; harmless
         # but unused on CPU. Default True since neural-surface workloads are the common case.
+        composition_implementation = "warp_fused" if self.use_warp else "jax"
         self.taylor_bounds = jb.taylor_bounds(
-            self.fn, max_degree=self.autobounds_max_degree, use_warp=self.use_warp,
+            self.fn,
+            max_degree=self.autobounds_max_degree,
+            composition_algorithm="softplus_cheap",
+            composition_implementation=composition_implementation,
         )
 
 
@@ -268,4 +272,3 @@ class jnpboundedImplicit(implicitSurface):
                             trust_region_size * self._shrink)
         next_tr = jnp.clip(next_tr, self._min_tr, self._max_tr)
         return fn_val, safe_radius, next_tr
-
