@@ -83,16 +83,12 @@ def main():
         vup=jnp.array([0.0, 1.0, 0.0]),
     )
 
-    integrator = SimpleIntegrator(
+    integrator = SimpleIntegrator.from_surface(
         camera=camera,
         background_color=jnp.array([0.5, 0.7, 1.0]),
-        ray_march_fn=surface.ray_step,
-        surface_normal_fn=surface.normal_at,
-        image_height=args.height,
-        image_width=args.width,
+        surface=surface,
         max_ray_march_steps=128,
         max_ray_distance=20.0,
-        level_set=0.0,
         epsilon=1e-3,
         n_compactions=4,
     )

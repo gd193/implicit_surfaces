@@ -20,6 +20,13 @@ from .base import implicitSurface
 
 
 class denseImplicit(implicitSurface):
+    certified_ray_steps = False
+
+    @staticmethod
+    def update_ray_trust_region(trust_region, distance, backend_flag):
+        # This backend's ray distance does not depend on a local trust region.
+        return trust_region
+
     def __init__(self, gt_step: float = 1e-3, **kwargs):
         super().__init__(**kwargs)
         self.gt_step = float(gt_step)

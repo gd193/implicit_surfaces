@@ -4,6 +4,11 @@ from .base import implicitSurface
 
 
 class lipschitzImplicit(implicitSurface):
+    @staticmethod
+    def update_ray_trust_region(trust_region, distance, backend_flag):
+        # This backend's ray distance does not depend on a local trust region.
+        return trust_region
+
     def __init__(self, lipschitz_bound: float, **kwargs):
         """
         Initialize the implicit Lipschitz function defined in jax.

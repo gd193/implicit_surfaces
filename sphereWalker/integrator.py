@@ -8,6 +8,7 @@ from typing import Callable, Tuple, TypeVar, Generic, Optional, Any, Union, cast
 from functools import partial
 import abc
 
+from surfaces.queries import EmptySphereQuery
 from sphereWalker.types import WalkerState, WalkerOutput, DifferentialWalkerState
 from utils.jnp_array_compaction import (
     uniform_size_generator,
@@ -72,7 +73,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                  max_steps: int = 1000,
                  eps: float = 1e-3,
                  print_progress: bool = False,):
-        self.empty_sphere = empty_sphere_fn
+        self.empty_sphere = EmptySphereQuery(empty_sphere_fn)
         self.boundary_condition_fn = boundary_condition_fn
         self.source_term = source_term_fn
         self.level_set = level_set
