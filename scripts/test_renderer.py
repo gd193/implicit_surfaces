@@ -17,7 +17,8 @@ from rayMarcher.integrator import MaterialIntegrator
 from rayMarcher.marcher import SimpleIntegrator
 from rayMarcher.materials import Material
 from rayMarcher.sampler import generate_antialiased_ray
-from sphereWalker.integrator import WoSIntegrator
+from sphereWalker.integrator import WoSIntegrator, DifferentialWoSIntegrator
+from sphereWalker.types import WalkerTermination as WT
 from surfaces.implicit.lipschitz import sdfImplicit
 
 
@@ -111,6 +112,37 @@ class RendererIntegrationTests(unittest.TestCase):
                                         steps_between_refill=4, max_active_states=4,
                                         jit_buck_size=1, n_compactions=2)
         np.testing.assert_allclose(result.w, jnp.ones_like(result.w), atol=1e-6)
+
+        # One successful, one stalled, and one invalid starting point. Failed
+        # samples must free slots without entering the estimate or its divisor.
+        def query(p, x, tr):
+            residual = jnp.where(x[0] == 2., jnp.nan, x[0]-1.)
+            return residual, jnp.asarray(0., x.dtype), tr
+        walker = WoSIntegrator(query, lambda x: jnp.asarray(7.), lambda x: jnp.asarray(0.),
+                               dim=2, max_steps=2)
+        positions = jnp.array([[1., 0.], [0., 0.], [2., 0.]])
+        options = dict(init_trust_region_size=1., n_samples=3, steps_between_refill=4,
+                       max_active_states=2, jit_buck_size=1, n_compactions=2)
+        details = walker.integrate_batch(None, positions, key := jax.random.PRNGKey(7),
+                                         return_details=True, **options)
+        np.testing.assert_array_equal(details.termination_counts, [[0,3,0,0], [0,0,3,0], [0,0,0,3]])
+        np.testing.assert_array_equal(details.successful_samples, [3,0,0])
+        np.testing.assert_allclose(details.contribution_sum[:, 0], [21.,0.,0.])
+        with self.assertRaisesRegex(RuntimeError, 'incomplete WoS'):
+            walker.integrate_batch(None, positions, key, **options)
+
+        differential = DifferentialWoSIntegrator(
+            empty_sphere_fn=query, boundary_condition_fn=lambda x: jnp.asarray(7.),
+            source_term_fn=lambda x: jnp.asarray(0.), dim=2, max_steps=2,
+            normal_fn=lambda p,x: jnp.array([1.,0.]),
+            Df=lambda p,x,g: {'a': jnp.asarray(0.)}, V_n=lambda p,x: {'a': jnp.asarray(1.)},
+            offset_l=.25)
+        # x=0 fails in phase zero; x=1 reaches it then fails in phase one.
+        details = differential.integrate_batch(None, positions, key, return_details=True, **options)
+        np.testing.assert_array_equal(details.termination_counts, [[0,0,3,0], [0,0,3,0], [0,0,0,3]])
+        np.testing.assert_allclose(details.contribution_sum['a'], 0.)
+        with self.assertRaisesRegex(RuntimeError, 'incomplete WoS'):
+            differential.integrate_batch(None, positions, key, **options)
 
 
 if __name__ == '__main__':
