@@ -4,6 +4,7 @@ import jax.random as jr
 
 import time
 import timeit
+from numbers import Integral
 from typing import Callable, Tuple, TypeVar, Generic, Optional, Any, Union, cast
 from functools import partial
 import abc
@@ -75,6 +76,8 @@ def walker_status(state, residual, radius, next_tr, eps, max_steps):
 
 def finish_step(state, updated):
     """Preserve terminal states until they are reduced or change phase."""
+    # Loop-carried state keeps the input geometry precision even under x64.
+    updated = jax.tree.map(lambda old, new: jnp.asarray(new, dtype=old.dtype), state, updated)
     finite = jnp.all(jnp.isfinite(updated.position)) & jnp.all(jnp.isfinite(updated.w))
     updated = updated._replace(status=jnp.where(finite, updated.status, WT.INVALID),
                                done_flag=updated.done_flag | ~finite)
@@ -114,9 +117,27 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
     def _get_initial_state(self, init_position_batch: jnp.ndarray, rng_keys: jnp.ndarray, init_tr: float, buffer_size: int) -> StateT:
         pass
 
-    @abc.abstractmethod
     def _get_accumulator_initial(self, params: Any, positions: jnp.ndarray) -> Any:
-        pass
+        # Infer array/PyTree output structure without indexing an actual point
+        # or evaluating a boundary callback at an invented location.
+        dummy_state = self._get_initial_state(
+            jnp.zeros((1, self.dim), dtype=positions.dtype), jr.PRNGKey(0)[None, :], 1., 1)
+        shape = jax.eval_shape(
+            jax.vmap(self._compute_accumulator_update, in_axes=(None, 0)), params, dummy_state)
+        return jax.tree.map(lambda leaf: create_zero_buffer(leaf, positions.shape[0]), shape)
+
+    def _prepare_positions(self, positions, n_samples, steps_between_refill,
+                           max_active_states, jit_buck_size, n_compactions):
+        for name, value in (('n_samples', n_samples), ('steps_between_refill', steps_between_refill),
+                            ('max_active_states', max_active_states), ('jit_buck_size', jit_buck_size)):
+            if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+                raise ValueError(f'{name} must be a positive integer')
+        if isinstance(n_compactions, bool) or not isinstance(n_compactions, Integral) or n_compactions < 0:
+            raise ValueError('n_compactions must be a nonnegative integer')
+        positions = jnp.asarray(positions, dtype=jnp.result_type(positions, jnp.float32))
+        if positions.ndim != 2 or positions.shape[1] != self.dim:
+            raise ValueError('positions must have shape (N, dim)')
+        return positions
 
     @abc.abstractmethod
     def _transition_state_phases(self, params: Any, states: StateT, init_trust_region_size: float) -> StateT:
@@ -195,9 +216,9 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
 
         # Refill active states
         free_indices_mask = jnp.nonzero(is_done, size=active_buffer_size, fill_value=active_buffer_size)[0]
-        n_free = jnp.sum(is_done) 
+        n_free = jnp.sum(is_done, dtype=next_task_index.dtype)
 
-        offsets = jnp.arange(active_buffer_size)
+        offsets = jnp.arange(active_buffer_size, dtype=next_task_index.dtype)
         candidate_indices = next_task_index + offsets
         valid_candidates_mask = jnp.logical_and(candidate_indices < N_total_samples, offsets < n_free)
 
@@ -252,9 +273,15 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         synthetic state, guaranteeing the JIT cache covers all of them
         before timed runs.
         """
-        positions_padded, _ = _pad_to_bucket(initial_position_batch, bucket_size=jit_buck_size)
+        initial_position_batch = self._prepare_positions(
+            initial_position_batch, n_samples, steps_between_refill,
+            max_active_states, jit_buck_size, n_compactions)
+        if initial_position_batch.shape[0] == 0:
+            return
+        positions_padded, N_original = _pad_to_bucket(initial_position_batch, bucket_size=jit_buck_size)
         N_positions = positions_padded.shape[0]
-        N_total_samples = N_positions * n_samples
+        # Padding only stabilizes storage shapes; it is not extra work.
+        N_total_samples = N_original * n_samples
         active_buffer_size = min(N_total_samples, max_active_states)
         compaction_sizes = uniform_size_generator(active_buffer_size, n_compactions)
 
@@ -344,11 +371,23 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
             bucket-size cost. Pass None to skip instrumentation entirely.
         """
 
+        initial_position_batch = self._prepare_positions(
+            initial_position_batch, n_samples, steps_between_refill,
+            max_active_states, jit_buck_size, n_compactions)
+        if initial_position_batch.shape[0] == 0:
+            sums = self._get_accumulator_initial(params, initial_position_batch)
+            steps = jnp.zeros(0, dtype=initial_position_batch.dtype)
+            if return_details:
+                return WalkerDiagnostics(initial_position_batch, sums, jnp.zeros(0, jnp.int32),
+                                         jnp.zeros((0, len(WT)), jnp.int32), steps)
+            return WalkerOutput(initial_position_batch, steps, sums)
+
         # 1. Pad Positions
         positions_padded, N_original = _pad_to_bucket(initial_position_batch, bucket_size=jit_buck_size)
 
         N_positions = positions_padded.shape[0]
-        N_total_samples = N_positions * n_samples
+        # Padding only stabilizes storage shapes; it is not extra work.
+        N_total_samples = N_original * n_samples
         active_buffer_size = min(N_total_samples, max_active_states)
 
         # 3. Init Global Output
@@ -356,7 +395,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                          jnp.zeros((N_positions, len(WT)), dtype=jnp.int32))
         accumulated_nSteps = jnp.zeros((N_positions,), dtype=jnp.int32)
 
-        init_task_indices = jnp.arange(active_buffer_size)
+        init_task_indices = jnp.arange(active_buffer_size, dtype=jnp.int32)
         active_parent_indices = init_task_indices // n_samples
         
         # Force strong type for loop variable
@@ -520,27 +559,13 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         return WalkerState(
             position=init_position_batch,
             nSteps=jnp.zeros((buffer_size,), dtype=jnp.int32),
-            w=jnp.zeros((buffer_size, 1)),
+            w=jnp.zeros((buffer_size, 1), dtype=init_position_batch.dtype),
             trust_region_size=jnp.full((buffer_size,), init_tr, dtype=init_position_batch.dtype),
             rng_key=rng_keys,
             status=jnp.zeros((buffer_size,), dtype=jnp.int32),
             done_flag=jnp.zeros((buffer_size,), dtype=bool)
         )
     
-    def _get_accumulator_initial(self, params, positions) -> Any:
-        N_positions = positions.shape[0]
-        dummy_pos = positions[0]
-        dummy_state = self._get_initial_state(
-            dummy_pos[None, :],
-            jr.PRNGKey(0)[None, :],
-            1.0,
-            1
-        )
-        sample_accumulator_output = jax.vmap(self._compute_accumulator_update, in_axes=(None, 0))(params, dummy_state)
-        accumulator = jax.tree.map(lambda acuum_leaf: create_zero_buffer(acuum_leaf, N_positions), sample_accumulator_output)
-        return accumulator
-    
-
     def _transition_state_phases(self, params: Any, states: WalkerState, init_trust_region_size: float) -> WalkerState:
         """
         No transition in standard WoS
@@ -573,9 +598,9 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         """
         scatter = get_scatter_fn(free_indices, is_valid_mask, N_total_samples)
         
-        next_positions = scatter(current_states.position, new_positions, jnp.zeros((self.dim,)))
+        next_positions = scatter(current_states.position, new_positions, jnp.zeros((self.dim,), dtype=current_states.position.dtype))
         next_nSteps = scatter(current_states.nSteps, 0, reset_value=0)
-        next_w = scatter(current_states.w, 0.0, reset_value=jnp.zeros(current_states.w.shape[1:]))
+        next_w = scatter(current_states.w, 0.0, reset_value=jnp.zeros(current_states.w.shape[1:], dtype=current_states.w.dtype))
         next_trust_region_size = scatter(current_states.trust_region_size, init_trust_region_size, reset_value=init_trust_region_size)
         next_rng_keys = scatter(current_states.rng_key, new_keys, reset_value=jr.PRNGKey(0))
         next_done = current_states.done_flag.at[jnp.where(is_valid_mask, free_indices, N_total_samples + 1)].set(False, mode='drop')
@@ -654,9 +679,9 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
     def _get_initial_state(self, init_position_batch, rng_keys, init_tr, buffer_size):
         return DifferentialWalkerState(
             position=init_position_batch,
-            boundary_hit_position=jnp.zeros((buffer_size, self.dim)),
+            boundary_hit_position=jnp.zeros((buffer_size, self.dim), dtype=init_position_batch.dtype),
             nSteps=jnp.zeros((buffer_size,), dtype=jnp.int32),
-            w=jnp.zeros((buffer_size,)),
+            w=jnp.zeros((buffer_size,), dtype=init_position_batch.dtype),
             trust_region_size=jnp.full((buffer_size,), init_tr, dtype=init_position_batch.dtype),
             rng_key=rng_keys,
             status=jnp.zeros((buffer_size,), dtype=jnp.int32),
@@ -665,25 +690,11 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
         )
 
 
-    def _get_accumulator_initial(self, params, positions):
-        N_positions = positions.shape[0]
-        dummy_pos = positions[0]
-        dummy_state = self._get_initial_state(
-            dummy_pos[None, :],
-            jr.PRNGKey(0)[None, :],
-            1.0,
-            1
-        )
-        sample_accumulator_output = jax.vmap(self._compute_accumulator_update, in_axes=(None, 0))(params, dummy_state)
-        accumulator = jax.tree.map(lambda acuum_leaf: create_zero_buffer(acuum_leaf, N_positions), sample_accumulator_output)
-        return accumulator
-    
-    
     def _transition_walker(self, params, state: DifferentialWalkerState, init_trust_region_size) -> DifferentialWalkerState:
         """
         Offset the position and switch to phase 1.
         """
-        normal = self.normal_fn(params, state.position) # Compute normal at boundary
+        normal = jnp.asarray(self.normal_fn(params, state.position), dtype=state.position.dtype)
         offset_position = state.position - self.offset_l * normal # Offset inward along normal
         new_phase = jnp.array(1, dtype=state.phase.dtype) # Switch to phase 1
         not_done = jnp.array(False, dtype=state.done_flag.dtype) # Reset done flag for phase 1

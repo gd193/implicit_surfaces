@@ -181,6 +181,16 @@ transition. Differential phase one restarts adaptation with the caller's
 `init_trust_region_size` at the offset point. The geometry backend determines
 the safe sphere and next trust region; the walker does not override that policy. This change does not add resumable checkpoints for interrupted walks.
 
+WoS position buckets pad storage only: the queued task count is always
+`number_of_input_positions * n_samples`. Padding does not launch extra walks.
+Empty `(0, dim)` batches return empty arrays or PyTrees with the usual output
+structure; compaction warm-up is a no-op for an empty batch. Output structure
+is inferred by abstract tracing, without executing geometry queries or evaluating
+boundary values at a fabricated point. Floating walker state uses the input
+position dtype, including explicit float32 geometry when x64 is enabled.
+The sample count, active-buffer cap, refill interval, and bucket size must be
+positive integers; compaction count must be nonnegative.
+
 ## Validation
 
 Six tests in two files cover the public contracts and integration paths:

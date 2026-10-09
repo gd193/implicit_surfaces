@@ -171,6 +171,38 @@ class RendererIntegrationTests(unittest.TestCase):
             result = differential.integrate_batch(None, jnp.zeros((1,2)), key, **opts)
             np.testing.assert_allclose(result.w['a'], 0.)
 
+        # Padding must not dispatch duplicate samples. Check both output and
+        # actual task counts, including the compile warm-up entry point.
+        disk = WoSIntegrator(surface.empty_sphere, lambda x: jnp.asarray(1.),
+                             lambda x: jnp.asarray(0.), dim=2, max_steps=64)
+        logs = []
+        for bucket in (1, 1000):
+            log = []
+            out = disk.integrate_batch(None, jnp.zeros((1,2)), key,
+                **{**options, 'n_samples': 2, 'jit_buck_size': bucket}, diag_log=log)
+            np.testing.assert_allclose(out.w, 1.)
+            logs.append(log)
+        self.assertEqual(len(logs[0]), len(logs[1]))
+        self.assertEqual(logs[1][-1]['next_task_index'], 2)
+        disk.pre_warm_compaction_buckets(None, jnp.zeros((1,2)), key, 1., 2,
+                                        max_active_states=2, jit_buck_size=1000, n_compactions=2)
+        # Explicit f32 geometry remains f32 even when this suite enables x64.
+        f32_positions = jnp.zeros((1,2), dtype=jnp.float32)
+        for solver in (disk, differential):
+            initial = solver._get_initial_state(f32_positions, key[None,:], 1., 1)
+            for leaf in jax.tree.leaves(initial):
+                if jnp.issubdtype(leaf.dtype, jnp.floating):
+                    self.assertEqual(leaf.dtype, jnp.float32)
+            out = solver.integrate_batch(None, f32_positions, key, **options)
+            self.assertTrue(all(np.isfinite(a).all() for a in jax.tree.leaves(out)))
+            for detailed in (False, True):
+                empty = solver.integrate_batch(None, f32_positions[:0], key,
+                                                return_details=detailed, **options)
+                self.assertTrue(all(a.shape[0] == 0 for a in jax.tree.leaves(empty)))
+            solver.pre_warm_compaction_buckets(None, f32_positions[:0], key, 1., 2)
+        for name in ('n_samples', 'max_active_states', 'steps_between_refill', 'jit_buck_size'):
+            with self.assertRaisesRegex(ValueError, name):
+                disk.integrate_batch(None, f32_positions, key, **{**options, name: 0})
 
 
 if __name__ == '__main__':
