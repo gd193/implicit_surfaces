@@ -1,44 +1,72 @@
-import jax.numpy as jnp
+"""Ray algorithm state and results. All ray distances are world-space."""
+from enum import IntEnum
 from typing import NamedTuple
+import jax.numpy as jnp
+
+
+class Termination(IntEnum):
+    ACTIVE = 0
+    HIT = 1
+    EXIT = 2             # reached the configured ray interval's end
+    MAX_STEPS = 3       # incomplete query, not a proven miss
+    HIT_CAPACITY = 4    # sampler stopped because storage filled
+    INVALID = 5
+    INACTIVE = 6
+
 
 class RayMarchState(NamedTuple):
-    ### Ray marching loop state
-    niter: jnp.ndarray          # (N_rays,) Number of iterations taken so far
-    t: jnp.ndarray    # (N_rays,) Current distance traveled along the ray
-    ray_origin: jnp.ndarray   # (N_rays, 3) ray origins
-    ray_direction: jnp.ndarray # (N_rays, 3) Ray directions
-    trust_region_size: jnp.ndarray # (N_rays,) Current trust region sizes
-    done_flag: jnp.ndarray     # (N_rays,) Boolean flags indicating if the ray marching is done for each ray
-    hit_flag: jnp.ndarray      # (N_rays,) Boolean flags indicating if the ray has hit the surface
+    niter: jnp.ndarray
+    t: jnp.ndarray
+    ray_origin: jnp.ndarray
+    ray_direction: jnp.ndarray
+    trust_region_size: jnp.ndarray
+    done_flag: jnp.ndarray
+    hit_flag: jnp.ndarray
+    t_max: jnp.ndarray
+    status: jnp.ndarray
 
 
 class RayMarchOutput(NamedTuple):
-    niter: jnp.ndarray          # (N_rays,) Number of iterations taken
-    ray_position: jnp.ndarray    # (N_rays, 3) Final ray positions
-    hit_flag: jnp.ndarray      # (N_rays,) Boolean flags indicating if the ray has hit the surface
+    niter: jnp.ndarray
+    ray_position: jnp.ndarray
+    hit_flag: jnp.ndarray
+    status: jnp.ndarray
 
 
 class RayBuffer(NamedTuple):
-    """Container for the successfully sampled rays in bbox."""
+    """Unit rays starting on/in the sampling box, with its exit distances."""
     ray_origin: jnp.ndarray
     ray_direction: jnp.ndarray
-    max_ts: jnp.ndarray           # (N,) max distance before outside bbox
+    max_ts: jnp.ndarray
+
 
 class MultiHitRayState(NamedTuple):
-    niter: jnp.ndarray          # (N_rays,) Number of iterations taken so far
-    t: jnp.ndarray    # (N_rays,) Current distance traveled along the ray
-    t_hits: jnp.ndarray # (N_rays, max_hits) Distances to each hit along the ray
-    t_max: jnp.ndarray # (N_rays, ) the max dist the ray can travel before done
-    hit_counts: jnp.ndarray # (N_rays,) Number of hits recorded so far for each ray
-    inside_surface: jnp.ndarray # (N_rays,) Boolean flags indicating if the ray is currently inside the surface
-    ray_origin: jnp.ndarray   # (N_rays, 3) ray origins
-    ray_direction: jnp.ndarray # (N_rays, 3) Ray directions
-    trust_region_size: jnp.ndarray # (N_rays,) Current trust region sizes
-    done_flag: jnp.ndarray     # (N_rays,) Boolean flags indicating if this ray has finished marching
+    niter: jnp.ndarray
+    t: jnp.ndarray
+    t_hits: jnp.ndarray
+    t_max: jnp.ndarray
+    hit_counts: jnp.ndarray
+    in_hit_band: jnp.ndarray  # epsilon-band membership, NOT object interior
+    ray_origin: jnp.ndarray
+    ray_direction: jnp.ndarray
+    trust_region_size: jnp.ndarray
+    done_flag: jnp.ndarray
+    status: jnp.ndarray
+
 
 class MultiHitRayOutput(NamedTuple):
-    niter: jnp.ndarray         # (N_rays,) Number of iterations taken
-    ray_origin: jnp.ndarray  # (N_rays, 3) ray origins
-    ray_direction: jnp.ndarray # (N_rays, 3) Ray directions
-    t_hits: jnp.ndarray # (N_rays, max_hits) Distances to each hit along the ray
-    hit_counts: jnp.ndarray # (N_rays,) Number of hits recorded for each ray
+    niter: jnp.ndarray
+    ray_origin: jnp.ndarray
+    ray_direction: jnp.ndarray
+    t_hits: jnp.ndarray
+    hit_counts: jnp.ndarray
+    status: jnp.ndarray
+
+    @property
+    def complete(self):
+        return self.status == Termination.EXIT
+
+
+class SurfaceSamples(NamedTuple):
+    points: jnp.ndarray
+    rays: MultiHitRayOutput

@@ -71,18 +71,14 @@ surface = denseImplicit(fn=fn_2arg, level_set=LEVEL_SET, dim=3, gt_step=GT_STEP)
 
 # n_compactions=1: with N_MAX_STEP=10001 most rays do hundreds-to-thousands of
 # steps; a single mid-march compaction is fine. Trust-region update is irrelevant
-# for fixed-step dense — pass the conservative default that doesn't shrink/grow.
-from utils.helpers import update_trust_region_size
-integrator = SimpleIntegrator(
+# for fixed-step dense; its query adapter preserves the trust-region size.
+integrator = SimpleIntegrator.from_surface(
     camera=Camera.setup_Camera(**CAM),
     background_color=jnp.array([0.5, 0.7, 1.0]),
-    ray_march_fn=surface.ray_step,
-    surface_normal_fn=surface.normal_at,
-    update_tr_fn=update_trust_region_size,
-    image_height=HEIGHT, image_width=WIDTH,
+    surface=surface,
     max_ray_march_steps=N_MAX_STEP,
     max_ray_distance=MAX_DIST,
-    level_set=LEVEL_SET, epsilon=EPSILON,
+    epsilon=EPSILON,
     n_compactions=20,
 )
 

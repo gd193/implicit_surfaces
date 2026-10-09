@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 import numpy as np
 
-SceneBounds = tuple[tuple[float, float, float], tuple[float, float, float]]
+SceneBounds = tuple[tuple[float, ...], tuple[float, ...]]
 DEFAULT_SCENE_BOUNDS: SceneBounds = ((-2.0, -2.0, -2.0), (2.0, 2.0, 2.0))
 
 
@@ -10,9 +10,9 @@ def validate_scene_bounds(bounds: SceneBounds | None) -> SceneBounds | None:
     if bounds is None:
         return None
     values = np.asarray(bounds, dtype=float)
-    if (values.shape != (2, 3) or not np.all(np.isfinite(values))
+    if (values.ndim != 2 or values.shape[0] != 2 or values.shape[1] not in (2, 3) or not np.all(np.isfinite(values))
             or not np.all(values[0] < values[1])):
-        raise ValueError("scene_bounds must contain finite lower < upper corners of shape (2, 3)")
+        raise ValueError("scene_bounds must contain finite lower < upper corners of shape (2, dim), with dim 2 or 3")
     return tuple(map(tuple, values))
 
 
