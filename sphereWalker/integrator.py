@@ -119,7 +119,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         pass
 
     @abc.abstractmethod
-    def _transition_state_phases(self, params: Any, states: StateT) -> StateT:
+    def _transition_state_phases(self, params: Any, states: StateT, init_trust_region_size: float) -> StateT:
         pass
 
     @abc.abstractmethod
@@ -160,7 +160,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
             # Use jax.debug.print to see this during execution, or print() to see during trace
             print(f"🔄 [JIT TRACING] _process_active_states called with N_total_samples={N_total_samples}")
             
-        current_states = self._transition_state_phases(params, current_states)
+        current_states = self._transition_state_phases(params, current_states, init_trust_region_size)
         is_done = self._check_if_done(current_states, current_parents)
 
         sums, counts = current_accumulated_w
@@ -541,7 +541,7 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         return accumulator
     
 
-    def _transition_state_phases(self, params: Any, states: WalkerState) -> WalkerState:
+    def _transition_state_phases(self, params: Any, states: WalkerState, init_trust_region_size: float) -> WalkerState:
         """
         No transition in standard WoS
         """
@@ -616,15 +616,9 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
         Phase 0: Walk -> Hit Boundary -> Offset Position -> Switch Walker to Phase 1
         Phase 1: Walk -> Hit Boundary -> Done
         """
-        # `empty_sphere` now returns the surface's recommended next trust-region
-        # size (matching NIQ + WoSIntegrator). Adopt it directly, and keep the
-        # safety net: if the empty-sphere radius collapsed to a tiny fraction of
-        # tr the polynomial got stuck → shrink further regardless of the
-        # surface's recommendation.
-        fn_val, radius, next_tr_from_es = self.empty_sphere(params, state.position, state.trust_region_size)
-        new_trust_region_size = jnp.where(radius < state.trust_region_size * 0.05,
-                                          state.trust_region_size * 0.5,
-                                          next_tr_from_es)
+        # The geometry backend owns trust-region adaptation and its limits.
+        fn_val, radius, new_trust_region_size = self.empty_sphere(
+            params, state.position, state.trust_region_size)
 
         ### sample new position on sphere and inside ball
         sphere_key, ball_key, new_key = jr.split(state.rng_key, 3)
@@ -685,7 +679,7 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
         return accumulator
     
     
-    def _transition_walker(self, params, state: DifferentialWalkerState) -> DifferentialWalkerState:
+    def _transition_walker(self, params, state: DifferentialWalkerState, init_trust_region_size) -> DifferentialWalkerState:
         """
         Offset the position and switch to phase 1.
         """
@@ -700,14 +694,16 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
             boundary_hit_position=state.position,
             nSteps=state.nSteps,
             w=state.w,
-            trust_region_size=state.trust_region_size,
+            # Restart adaptation at the offset point, not with the collapsed
+            # boundary trust region. This is a query scale, not a step radius.
+            trust_region_size=jnp.asarray(init_trust_region_size, dtype=state.trust_region_size.dtype),
             rng_key=state.rng_key,
             status=jnp.asarray(WT.ACTIVE, dtype=state.status.dtype),
             done_flag=not_done,
             phase=new_phase  
         )
 
-    def _transition_state_phases(self, params, states):
+    def _transition_state_phases(self, params, states, init_trust_region_size):
         """
         Transition the walker states upon hitting the boundary.
         """        
@@ -718,7 +714,7 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
             return jax.vmap(
                 lambda _p, _st: jax.lax.cond(
                     jnp.logical_and(_st.status == WT.BOUNDARY_HIT, _st.phase==0), # condition
-                    self._transition_walker,
+                    lambda p, st: self._transition_walker(p, st, init_trust_region_size),
                     lambda _, st: st,                             # false branch
                     _p, _st                                       # arguments
                 ),
