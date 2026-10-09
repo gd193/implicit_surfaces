@@ -89,8 +89,7 @@ class SimpleIntegrator:
         self.image_height = image_height
         self.image_width = image_width
         self.n_rays = image_height * image_width
-        self._compaction_sizes = uniform_size_generator(self.n_rays, n_compactions=n_compactions)
-        self._INVALID_IND = self.n_rays + 1
+        self.n_compactions = n_compactions
 
         # Built once: per-ray step kernel. JIT cache hits across render() calls
         # because nothing in this closure changes per call (ray_march_fn is the
@@ -147,7 +146,6 @@ class SimpleIntegrator:
             current_t = jnp.where(intersects & ~state.done_flag,
                                   jnp.maximum(state.t, entry), state.t)
             current_position = state.ray_origin + current_t * state.ray_direction
-            # Surface steps return f - level_set; compare the residual to zero.
             if needs_grad:
                 fn_val, t_step, in_tr, grad = ray_march_step(params, current_position, state.ray_direction, state.trust_region_size)
                 grad_norm = jnp.linalg.norm(grad)
@@ -198,37 +196,52 @@ class SimpleIntegrator:
         image = colors.reshape((image_height, image_width, 3))  # type: ignore
         return image, output_states.niter.reshape((image_height, image_width))
 
-    def render(self,
-               params: Any,
-               key: jax.Array,
-               init_trust_region_size: float = 0.5):
-        ### Initialization of ray marching state
-        ray_origins, ray_directions = self.sample_camera_rays(key, self.image_height, self.image_width)
+    def trace_rays(self,
+                   params: Any,
+                   ray_origins: jnp.ndarray,
+                   ray_directions: jnp.ndarray,
+                   init_trust_region_size: float = 0.5,
+                   active_mask: Optional[jnp.ndarray] = None) -> RayMarchOutput:
+        """Intersect a batch of rays using the same adaptive, compacted marcher.
+
+        Directions are normalized so steps and distance limits are world-space.
+        Inactive or zero-direction rays return misses at their original positions.
+        The Python compaction loop is intentionally outside JIT, as in render().
+        """
+        n_rays = ray_origins.shape[0]
+        lengths = jnp.linalg.norm(ray_directions, axis=-1)
+        valid = jnp.isfinite(lengths) & (lengths > 0)
+        ray_directions = jnp.where(
+            valid[:, None], ray_directions / jnp.where(valid, lengths, 1)[:, None], 0)
+        active_mask = valid if active_mask is None else active_mask & valid
+        compaction_sizes = uniform_size_generator(n_rays, self.n_compactions)
+        invalid_index = n_rays + 1
         active_states = RayMarchState(
-            niter=jnp.zeros(self.n_rays, dtype=jnp.int32),
-            t=jnp.zeros(self.n_rays, dtype=ray_origins.dtype),
+            niter=jnp.zeros(n_rays, dtype=jnp.int32),
+            t=jnp.zeros(n_rays, dtype=ray_origins.dtype),
             ray_origin=ray_origins,
             ray_direction=ray_directions,
-            trust_region_size=init_trust_region_size * jnp.ones(self.n_rays),
-            done_flag=jnp.zeros(self.n_rays, dtype=jnp.bool),
-            hit_flag=jnp.zeros(self.n_rays, dtype=jnp.bool),
+            trust_region_size=init_trust_region_size * jnp.ones(n_rays, dtype=ray_origins.dtype),
+            done_flag=~active_mask,
+            hit_flag=jnp.zeros(n_rays, dtype=jnp.bool),
         )
         output_states = RayMarchOutput(
-            niter=jnp.zeros(self.n_rays, dtype=jnp.int32),
-            ray_position=jnp.zeros_like(ray_origins),
-            hit_flag=jnp.zeros(self.n_rays, dtype=jnp.bool),
+            niter=jnp.zeros(n_rays, dtype=jnp.int32),
+            ray_position=ray_origins,
+            hit_flag=jnp.zeros(n_rays, dtype=jnp.bool),
         )
-        active_indices = jnp.arange(self.n_rays)
+        active_indices = jnp.arange(n_rays)
 
         ### Python control loop. Cannot be jitted because of dynamic compaction sizes
         ### (XLA needs to know static shapes and step numbers).
         current_compaction_index = 0
-        while True:
+        N_valid = int(jnp.sum(active_mask))
+        while N_valid > 0:
             active_states = self._step_states_fn(params, active_states)
             N_valid = int(jnp.sum(~active_states.done_flag))
 
             should_compact_flag, new_compaction_index, new_compaction_size = should_compact(
-                N_valid, current_compaction_index, self._compaction_sizes,
+                N_valid, current_compaction_index, compaction_sizes,
             )
             if should_compact_flag:
                 current_compaction_index = new_compaction_index
@@ -237,7 +250,7 @@ class SimpleIntegrator:
                     output_states,
                     active_indices,
                     active_states.done_flag,
-                    fill_index_value=self._INVALID_IND,
+                    fill_index_value=invalid_index,
                     new_compacted_size=new_compaction_size,
                     write_to_output_fn=write_done_to_output_arrays,
                     update_state_fn=update_ray_march_state,
@@ -253,6 +266,15 @@ class SimpleIntegrator:
         output_states = write_done_to_output_arrays(
             active_states, output_states, active_indices,
         )
+
+        return output_states
+
+    def render(self,
+               params: Any,
+               key: jax.Array,
+               init_trust_region_size: float = 0.5):
+        ray_origins, ray_directions = self.sample_camera_rays(key, self.image_height, self.image_width)
+        output_states = self.trace_rays(params, ray_origins, ray_directions, init_trust_region_size)
 
         ### Postprocessing to get the actual image
         image, niter = self._post_process_jit(

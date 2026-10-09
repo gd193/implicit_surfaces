@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import jax.random as jr
 
 from typing import Callable, Tuple, Any
+import math
 
 from utils.sampling_primitives import sample_uniform_ray_bbox_2d, sample_uniform_ray_bbox_3d
 from utils.types import RayBuffer, MultiHitRayState, MultiHitRayOutput
@@ -56,6 +57,11 @@ class SurfaceSampler:
     """
     samples uniformly distributed points on the level set of an implicit surface via random ray casting.
     https://arxiv.org/pdf/2506.05268
+
+    epsilon is a function-value tolerance. After a hit, the minimum world-space
+    advance is epsilon / lipschitz_bound. If omitted, the bound is read from
+    the bound ray_step method's surface, or defaults to 1 for normalized fields.
+    Pass it explicitly for unnormalized callbacks without surface metadata.
     """
     def __init__(self, 
                  # ray_march_fn: (params, positions, directions, trust_region_size) -> (fn_val, t_step, inside_tr)
@@ -63,13 +69,20 @@ class SurfaceSampler:
                  level_set: float, dim: int, max_step: int, epsilon: float, max_hits: int, init_trust_region_size: float, 
                  n_compactions: int = 10,
                  ray_sample_batch_size: int=1000000, ray_sample_max_iter: int=1000, 
-                 print_progress: bool = False, debug: bool = False):
+                 print_progress: bool = False, debug: bool = False,
+                 *, lipschitz_bound: float | None = None):
         self.ray_march_fn = ray_march_fn
         self.level_set = level_set
         self.dim = dim
         self.max_step = max_step
         self.max_hits = max_hits
         self.epsilon = epsilon
+        if lipschitz_bound is None:
+            surface = getattr(ray_march_fn, '__self__', None)
+            lipschitz_bound = getattr(surface, 'lipschitz_bound', 1.0)
+        self.lipschitz_bound = float(lipschitz_bound)
+        if not math.isfinite(self.lipschitz_bound) or self.lipschitz_bound <= 0:
+            raise ValueError("lipschitz_bound must be finite and positive")
         self.init_trust_region_size = init_trust_region_size
         self.ray_sample_batch_size = ray_sample_batch_size
         self.ray_sample_max_iter = ray_sample_max_iter
@@ -123,10 +136,10 @@ class SurfaceSampler:
             sorted_max_ts = max_t_in_box[sort_indices]
 
             # Arithmetic for bounds checking
-            num_valid = jnp.sum(is_hit)
+            num_valid = jnp.sum(is_hit, dtype=count.dtype)
             space_left = num_rays - count
             n_to_write = jnp.minimum(num_valid, space_left)
-            target_indices = count + jnp.arange(0, batch_size)
+            target_indices = count + jnp.arange(0, batch_size, dtype=count.dtype)
             write_mask = target_indices < (count + n_to_write)
             to_write_indices = jnp.where(write_mask, target_indices, num_rays) # use num_rays as an invalid index for out-of-bounds writes
 
@@ -157,12 +170,17 @@ class SurfaceSampler:
         fn_val, t_step, inside_tr = fn_val.squeeze(), t_step.squeeze(), inside_tr.squeeze() # ensure shapes are correct
 
 
-        is_hitting_surface = jnp.abs(fn_val - self.level_set) < self.epsilon
+        # ray_step returns the residual f - level_set, already shifted.
+        is_hitting_surface = jnp.abs(fn_val) < self.epsilon
         is_new_hit = jnp.logical_and(is_hitting_surface, state.inside_surface == False)
         can_record_hit = state.hit_counts < self.max_hits
-        ray_still_valid = jnp.logical_not(state.done_flag)
+        ray_still_valid = ~state.done_flag & (state.t <= state.t_max)
         should_record_hit = jnp.logical_and(is_new_hit, jnp.logical_and(can_record_hit, ray_still_valid))
-        step_size = jnp.maximum(t_step, jnp.array(self.epsilon, dtype=state.t.dtype)) # ensure we always make some progress
+        # Algorithm 2 advances by max(|f|, epsilon) / L only in the hit band.
+        # ray_step already returns world-space distances. Outside the band,
+        # preserve its safe step, including zero when the bound is undecided.
+        escape_step = jnp.asarray(self.epsilon / self.lipschitz_bound, dtype=state.t.dtype)
+        step_size = jnp.where(is_hitting_surface, jnp.maximum(t_step, escape_step), t_step)
 
         # Update hit records
         safe_hit_idx = jnp.minimum(state.hit_counts, self.max_hits - 1) # ensure we don't write out of bounds
@@ -172,9 +190,11 @@ class SurfaceSampler:
         # Update ray marching state
         new_iter = jnp.where(ray_still_valid, state.niter + 1, state.niter)
         new_inside_surface = jnp.where(ray_still_valid, is_hitting_surface, state.inside_surface)
-        new_t = jnp.where(ray_still_valid, state.t + step_size, state.t)
+        new_t = jnp.where(ray_still_valid, jnp.minimum(state.t + step_size, state.t_max), state.t)
         new_trust_region_size = jnp.where(ray_still_valid, update_trust_region_size(state.trust_region_size, t_step, inside_tr), state.trust_region_size)
-        new_done_flag = jnp.logical_or(state.done_flag, jnp.logical_or(new_t >= state.t_max, new_iter >= self.max_step))
+        # Evaluate the exit endpoint before terminating, rather than stopping
+        # as soon as an advance reaches it. The iteration budget still applies.
+        new_done_flag = jnp.logical_or(state.done_flag, jnp.logical_or(state.t >= state.t_max, new_iter >= self.max_step))
 
         return MultiHitRayState(
             niter=new_iter,
@@ -239,7 +259,7 @@ class SurfaceSampler:
 
 
             should_compact_flag, new_compaction_index, new_compaction_size = should_compact(N_valid, current_compaction_index, compaction_sizes)
-            if should_compact_flag or is_done:
+            if should_compact_flag:
 
                 current_compaction_index = new_compaction_index
 
@@ -255,6 +275,11 @@ class SurfaceSampler:
                 )
             if is_done:
                 break
+
+        # Compaction is optional; flush rays still in the active buffers even
+        # when no compaction bucket was selected (notably n_compactions=0).
+        output_states = write_multi_hit_done_to_output(
+            active_states, output_states, active_indices)
 
         if self.debug:
             return active_states, output_states, active_indices # type: ignore
@@ -279,5 +304,3 @@ def gather_hit_points(output_states: MultiHitRayOutput) -> jnp.ndarray:
 
     hit_coordinates = valid_origins + valid_directions * valid_t[:, None]
     return hit_coordinates
-
-
