@@ -4,6 +4,7 @@ import jax.random as jr
 
 import time
 import timeit
+import math
 from numbers import Integral
 from typing import Callable, Tuple, TypeVar, Generic, Optional, Any, Union, cast
 from functools import partial
@@ -64,6 +65,18 @@ def _compact_step(states, parents, is_active, new_size):
 
 def walker_status(state, residual, radius, next_tr, eps, max_steps):
     """A terminal condition is not automatically a boundary hit."""
+    # TODO: Replace residual-based termination with a bounded closest-point
+    # query: minimize ||y - x||^2 subject to F(y) = 0 using interval bounds
+    # and branch-and-bound. See Huang, "Geometric Queries on Closed Implicit
+    # Surfaces for Walk on Stars", Sec. 3.1, Eq. (1):
+    # algo_paper/3757376.3771378.pdf (doi:10.1145/3757376.3771378).
+    # Retain cheap empty-sphere queries for walking; return a boundary point,
+    # outward normal, distance lower/upper bounds, and convergence status.
+    # A lower bound supports safe steps; an upper bound <= eps proves proximity.
+    # Use the located boundary point for g, D, V_n, and the differential offset,
+    # checking that the offset stays inside the domain. Projection failure must
+    # remain explicit. Only tighten the pruning upper bound with a feasible
+    # point or certified root-containing box; an UNKNOWN box is insufficient.
     hit = jnp.abs(residual) <= eps
     exhausted = state.nSteps >= max_steps
     valid = (jnp.isfinite(residual) & jnp.isfinite(radius) & (radius >= 0)
@@ -628,12 +641,25 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
                  ### V_n: (params, position) -> params_derivative_at_position in normal direction
                  V_n: Callable[[Any, jnp.ndarray], Any],
                  offset_l: float,
+                 offset_segment_fn: Callable[[Any, jnp.ndarray, jnp.ndarray], jax.Array] | None = None,
+                 transition_bucket_size: int = 256,
                  **kwargs):
         super().__init__(**kwargs)
         self.normal_fn = normal_fn
         self.Df = Df
         self.V_n = V_n
         self.offset_l = offset_l
+        if not math.isfinite(self.eps) or self.eps <= 0:
+            raise ValueError("eps must be finite and positive for offset selection")
+        if not math.isfinite(self.offset_l) or self.offset_l <= self.eps:
+            raise ValueError("offset_l must be finite and greater than eps")
+        self.offset_segment_fn = offset_segment_fn
+        if (isinstance(transition_bucket_size, bool) or not isinstance(transition_bucket_size, Integral)
+                or transition_bucket_size < 1):
+            raise ValueError("transition_bucket_size must be a positive integer")
+        # Walkers switching phase are offset in chunks of this size, so the
+        # cost scales with the number of switches, not the buffer size.
+        self.transition_bucket_size = int(transition_bucket_size)
 
     def step(self, params, state: DifferentialWalkerState) -> DifferentialWalkerState:
         """
@@ -671,6 +697,7 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
             trust_region_size=new_trust_region_size, 
             rng_key=new_key,
             done_flag=is_done, status=status,
+            offset_length=state.offset_length,
             phase=state.phase
         )
         return finish_step(state, updated)
@@ -686,51 +713,91 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
             rng_key=rng_keys,
             status=jnp.zeros((buffer_size,), dtype=jnp.int32),
             done_flag=jnp.zeros((buffer_size,), dtype=bool),
+            offset_length=jnp.zeros((buffer_size,), dtype=init_position_batch.dtype),
             phase=jnp.zeros((buffer_size,), dtype=jnp.int32) # Start in phase 0
         )
 
 
-    def _transition_walker(self, params, state: DifferentialWalkerState, init_trust_region_size) -> DifferentialWalkerState:
+    def _transition_walker(self, params, state: DifferentialWalkerState, init_trust_region_size,
+                           active=True) -> DifferentialWalkerState:
         """
         Offset the position and switch to phase 1.
         """
-        normal = jnp.asarray(self.normal_fn(params, state.position), dtype=state.position.dtype)
-        offset_position = state.position - self.offset_l * normal # Offset inward along normal
-        new_phase = jnp.array(1, dtype=state.phase.dtype) # Switch to phase 1
-        not_done = jnp.array(False, dtype=state.done_flag.dtype) # Reset done flag for phase 1
+        dtype = state.position.dtype
+        normal = jnp.asarray(self.normal_fn(params, state.position), dtype=dtype)
+        norm = jnp.linalg.norm(normal)
+        normal_valid = jnp.isfinite(norm) & (norm > 0)
+        normal = normal / jnp.where(normal_valid, norm, 1.)
+        initial_tr = jnp.asarray(init_trust_region_size, dtype=dtype)
+        active = jnp.asarray(active)
 
+        def candidate_valid(trial_length):
+            candidate = state.position - trial_length * normal
+            residual, radius, next_tr = self.empty_sphere(params, candidate, initial_tr)
+            # F < 0 is the interior convention. Radius is a geometric lower
+            # distance bound: radius > eps proves clearance, a small radius
+            # is only inconclusive. Also exclude immediate raw-residual hits
+            # until the geometric termination TODO above is implemented.
+            valid = (normal_valid & (trial_length > self.eps)
+                     & jnp.all(jnp.isfinite(candidate)) & jnp.isfinite(residual)
+                     & (residual < -self.eps) & jnp.isfinite(radius)
+                     & (radius > self.eps) & jnp.isfinite(next_tr) & (next_tr > 0))
+            if self.offset_segment_fn is not None:
+                valid &= self.offset_segment_fn(params, state.position, candidate)
+            return valid, candidate
 
-        return DifferentialWalkerState(
-            position=offset_position,
+        def cond(carry):
+            attempt, accepted, _, _ = carry
+            return active & ~accepted & (attempt < 4)
+
+        def body(carry):
+            attempt, _, point, length = carry
+            trial_length = jnp.asarray(self.offset_l, dtype=dtype) * (
+                jnp.asarray(0.5, dtype=dtype) ** attempt.astype(dtype))
+            valid, candidate = candidate_valid(trial_length)
+            return (attempt + jnp.int32(1), valid, jnp.where(valid, candidate, point),
+                    jnp.where(valid, trial_length, length))
+
+        _, accepted, point, length = jax.lax.while_loop(
+            cond, body, (jnp.int32(0), jnp.asarray(False), state.position, jnp.asarray(0., dtype=dtype)))
+        return state._replace(
+            position=point,
             boundary_hit_position=state.position,
-            nSteps=state.nSteps,
-            w=state.w,
-            # Restart adaptation at the offset point, not with the collapsed
-            # boundary trust region. This is a query scale, not a step radius.
-            trust_region_size=jnp.asarray(init_trust_region_size, dtype=state.trust_region_size.dtype),
-            rng_key=state.rng_key,
-            status=jnp.asarray(WT.ACTIVE, dtype=state.status.dtype),
-            done_flag=not_done,
-            phase=new_phase  
-        )
+            offset_length=length,
+            # Recompute the safe radius at the offset in the next walk step.
+            trust_region_size=initial_tr,
+            status=jnp.asarray(jnp.where(accepted, WT.ACTIVE, WT.INVALID), dtype=state.status.dtype),
+            done_flag=~accepted,
+            phase=jnp.asarray(jnp.where(accepted, 1, state.phase), dtype=state.phase.dtype))
 
     def _transition_state_phases(self, params, states, init_trust_region_size):
         """
-        Transition the walker states upon hitting the boundary.
-        """        
-        needs_transition = jnp.logical_and(states.status == WT.BOUNDARY_HIT, states.phase == 0)
-        any_transition = jnp.any(needs_transition)
-        def transition_fn(_params, _states):
-            "vmap over states (arg 1) and keep params (arg 0) fixed"
-            return jax.vmap(
-                lambda _p, _st: jax.lax.cond(
-                    jnp.logical_and(_st.status == WT.BOUNDARY_HIT, _st.phase==0), # condition
-                    lambda p, st: self._transition_walker(p, st, init_trust_region_size),
-                    lambda _, st: st,                             # false branch
-                    _p, _st                                       # arguments
-                ),
-                in_axes=(None, 0))(_params, _states)
-        return jax.lax.cond(any_transition, transition_fn, lambda _, s: s, *(params, states))
+        Offset walkers that just hit the boundary in phase 0.        """
+        needs = (states.status == WT.BOUNDARY_HIT) & (states.phase == 0)
+        n_states = needs.shape[0]
+        bucket = min(self.transition_bucket_size, n_states)
+        count = jnp.sum(needs, dtype=jnp.int32)
+        # Pad so every chunk slice stays in bounds; padding points past the
+        # buffer, which gathers fill and scatters drop.
+        indices = jnp.nonzero(needs, size=n_states, fill_value=n_states)[0].astype(jnp.int32)
+        indices = jnp.concatenate([indices, jnp.full((bucket,), n_states, jnp.int32)])
+        transition = jax.vmap(self._transition_walker, in_axes=(None, 0, None, 0))
+
+        def cond(carry):
+            chunk, _ = carry
+            return chunk * bucket < count
+
+        def body(carry):
+            chunk, current = carry
+            idx = jax.lax.dynamic_slice(indices, (chunk * bucket,), (bucket,))
+            active = idx < n_states
+            picked = jax.tree.map(lambda a: a.at[idx].get(mode='fill', fill_value=0), current)
+            moved = transition(params, picked, init_trust_region_size, active)
+            current = jax.tree.map(lambda a, b: a.at[idx].set(b, mode='drop'), current, moved)
+            return chunk + jnp.int32(1), current
+
+        _, states = jax.lax.while_loop(cond, body, (jnp.int32(0), states))
+        return states
     
     def _check_if_done(self, state, parents):
         return state.done_flag & ((state.phase == 1) | (state.status != WT.BOUNDARY_HIT)) & (parents != -1)
@@ -758,31 +825,36 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
             rng_key=next_rng_keys,
             status=current_states.status.at[jnp.where(is_valid_mask, free_indices, N_total_samples + 1)].set(WT.ACTIVE, mode='drop'),
             done_flag=next_done,
+            offset_length=scatter(current_states.offset_length, 0.0, reset_value=0.0),
             phase=next_phase
         )
     
 
-    def compute_boundary_derivative(self, params: jnp.ndarray, boundary_hit_position: jnp.ndarray, solution_estimate: jnp.ndarray) -> jnp.ndarray:
+    def compute_boundary_derivative(self, params: jnp.ndarray, boundary_hit_position: jnp.ndarray, solution_estimate: jnp.ndarray,
+                                    offset_length: jnp.ndarray) -> jnp.ndarray:
         """
         Compute the boundary derivative contributions D(x) and Vn(x) at the given position.
         Differential WoS Algorithm 2 line 11
         Args:
             boundary_hit_position: jnp.ndarray of shape (dim, ) position on the boundary
             solution_estimate: jnp.ndarray of shape (, ) estimated solution at offset position
+            offset_length: accepted per-walker inward offset length
         Returns:
             del_u_del_theta: jnp.ndarray of shape (N_params, ) boundary derivative contribution
         """
         D_vec = self.Df(params, boundary_hit_position, self.boundary_condition_fn)
         Vn_vec = self.V_n(params, boundary_hit_position)
         g_val = self.boundary_condition_fn(boundary_hit_position)
-        return jax.tree.map(lambda D, Vn: D - Vn * (g_val - solution_estimate) / self.offset_l, D_vec, Vn_vec)
+        return jax.tree.map(lambda D, Vn: D - Vn * (g_val - solution_estimate) / offset_length, D_vec, Vn_vec)
     
 
     def _compute_accumulator_update(self, params: jnp.ndarray, state: DifferentialWalkerState) -> jnp.ndarray:
         return self.compute_boundary_derivative(
             params,
             state.boundary_hit_position,
-            state.w + self.boundary_condition_fn(state.position)
+            state.w + self.boundary_condition_fn(state.position),
+            # Inactive/failed slots are evaluated too, but never accumulated.
+            jnp.where(state.offset_length > 0, state.offset_length, 1.)
         )
     
 
