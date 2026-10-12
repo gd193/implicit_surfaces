@@ -1,10 +1,11 @@
 """Shared storage and traversal for tree-backed partitions.
 
-A subclass supplies only its split rule through four hooks; the descent loops,
+A subclass supplies its split rule and box query through hooks; descent,
 outside-root handling, pytree registration, and array conversion live here.
-Trees are built once on the host and are fixed during a solve.
+Trees are fixed during a solve. Queries use fixed-trip-count loops with no
+per-lane stacks, so vmapped batches run in lockstep without divergence.
 
-Storage invariants (checked by `_make_arrays`):
+Storage invariants:
   * children[n] is all -1 for a leaf, otherwise all valid node ids.
   * uniform[n] is the leaf's region id; internal nodes hold MIXED because
     homogeneous subtrees are collapsed into leaves at build time.
@@ -19,12 +20,6 @@ import jax.numpy as jnp
 import numpy as np
 
 from boundaryConditions.base import MIXED, BoundaryPartition, float_dtype, storage_float_dtype
-
-
-def _positive(value, name):
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError(f"{name} must be a positive integer")
-    return value
 
 
 class TreeArrays(NamedTuple):
@@ -44,11 +39,10 @@ class TreePartition(BoundaryPartition):
     """
 
     # Static metadata; subclasses with extra hashable fields extend this.
-    _aux_fields: Tuple[str, ...] = ("dim", "n_regions", "default_region", "max_depth",
-                                    "max_box_visits")
+    _aux_fields: Tuple[str, ...] = ("dim", "n_regions", "default_region", "max_depth")
 
     def __init__(self, arrays: TreeArrays, dim: int, n_regions: int,
-                 default_region: int, max_depth: int, max_box_visits: int = 1024):
+                 default_region: int, max_depth: int):
         super().__init__(dim, n_regions)
         if not 0 <= default_region < n_regions:
             raise ValueError("default_region must be in [0, n_regions)")
@@ -57,8 +51,6 @@ class TreePartition(BoundaryPartition):
         self.arrays = arrays
         self.default_region = int(default_region)
         self.max_depth = max_depth
-        # Box queries give up (MIXED) after this many nodes; keeps cost bounded.
-        self.max_box_visits = _positive(max_box_visits, "max_box_visits")
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -81,27 +73,21 @@ class TreePartition(BoundaryPartition):
         """(inside_root: bool, key) for x already cast to its ftype."""
 
     @abc.abstractmethod
-    def _encode_box(self, lower: jax.Array, upper: jax.Array) -> Tuple[jax.Array, jax.Array, Any]:
-        """(inside_root, outside_root, key) for the box widened by rounding error.
+    def _point_child(self, node: jax.Array, key: Any, depth: jax.Array) -> jax.Array:
+        """int32 child slot of the internal node containing the point.
 
-        inside_root: the widened box lies in the root. outside_root: it misses
-        the root entirely. Both False means it straddles the root boundary; the
-        key must then describe the box clipped to the root.
+        Called with depth < max_depth on internal nodes; results for other
+        lanes are computed but discarded.
         """
 
     @abc.abstractmethod
-    def _point_child(self, node: jax.Array, key: Any, depth: jax.Array) -> jax.Array:
-        """int32 child slot of the internal node containing the point."""
+    def _box_label(self, lower: jax.Array, upper: jax.Array) -> Tuple[jax.Array, jax.Array, jax.Array]:
+        """(inside_root, outside_root, label) for the box widened by rounding error.
 
-    @abc.abstractmethod
-    def _root_context(self) -> Any:
-        """Pytree describing the root's extent for box queries (e.g. its origin)."""
-
-    @abc.abstractmethod
-    def _box_children(self, node: jax.Array, context: Any, key: Any,
-                      depth: jax.Array) -> Tuple[jax.Array, Any]:
-        """(overlap, child_contexts): (max_children,) bool mask of children that
-        meet the widened box, and each child's context stacked on axis 0."""
+        inside_root: the widened box lies in the root. outside_root: it misses
+        the root entirely. label certifies the box clipped to the root (an id
+        or MIXED); it is ignored when outside_root.
+        """
 
     @classmethod
     @abc.abstractmethod
@@ -117,88 +103,50 @@ class TreePartition(BoundaryPartition):
     def _is_leaf(self, node):
         return self.arrays.children[node, 0] < 0
 
+    def _descend(self, key, limit):
+        """Follow _point_child from the root, stopping at a leaf or at depth
+        `limit`. Fixed max_depth trips; returns int32 (node, depth)."""
+        def body(_, carry):
+            node, depth = carry
+            go = ~self._is_leaf(node) & (depth < limit)
+            slot = jnp.where(go, self._point_child(node, key, depth), jnp.int32(0))
+            child = self.arrays.children[node, slot]
+            return jnp.where(go, child, node), jnp.where(go, depth + jnp.int32(1), depth)
+        return jax.lax.fori_loop(jnp.int32(0), jnp.int32(self.max_depth), body,
+                                 (jnp.int32(0), jnp.int32(0)))
+
     def classify_point(self, params, x):
         ftype = float_dtype(x)
         inside, key = self._encode_point(jnp.asarray(x, ftype))
-
-        def cond(carry):
-            node, depth = carry
-            return ~self._is_leaf(node) & (depth < self.max_depth)
-
-        def body(carry):
-            node, depth = carry
-            slot = self._point_child(node, key, depth)
-            return self.arrays.children[node, slot], depth + jnp.int32(1)
-
-        node, _ = jax.lax.while_loop(cond, body, (jnp.int32(0), jnp.int32(0)))
+        node, _ = self._descend(key, jnp.int32(self.max_depth))
         return jnp.where(inside, self.arrays.uniform[node], jnp.int32(self.default_region))
 
     def classify_box(self, params, lower, upper):
         ftype = float_dtype(lower, upper)
         lower, upper = jnp.asarray(lower, ftype), jnp.asarray(upper, ftype)
         valid = jnp.all(jnp.isfinite(lower) & jnp.isfinite(upper) & (lower <= upper))
-        inside, outside, key = self._encode_box(lower, upper)
-
-        # Depth-first over every node meeting the box, stopping at the first
-        # leaf whose label differs. A full stack never exceeds this capacity.
-        n_children = self.arrays.children.shape[1]
-        capacity = self.max_depth * (n_children - 1) + 1
-        unset = jnp.int32(-2)
-        stack = (jnp.zeros(capacity, jnp.int32), jnp.zeros(capacity, jnp.int32),
-                 jax.tree.map(lambda a: jnp.broadcast_to(a, (capacity,) + jnp.shape(a)),
-                              self._root_context()))
-
-        def cond(carry):
-            _, top, _, uniform, visits = carry
-            return (top > 0) & uniform & (visits < self.max_box_visits)
-
-        def body(carry):
-            (nodes, depths, contexts), top, label, uniform, visits = carry
-            top = top - jnp.int32(1)
-            node, depth = nodes[top], depths[top]
-            context = jax.tree.map(lambda a: a[top], contexts)
-            leaf = self._is_leaf(node)
-            leaf_label = self.arrays.uniform[node]
-            uniform = uniform & (~leaf | (label == unset) | (label == leaf_label))
-            label = jnp.where(leaf, leaf_label, label)
-            overlap, child_contexts = self._box_children(node, context, key, depth)
-            overlap = overlap & ~leaf
-            pos = jnp.where(overlap, top + jnp.cumsum(overlap, dtype=jnp.int32) - 1,
-                            jnp.int32(capacity))
-            push = lambda buf, values: buf.at[pos].set(values, mode='drop')
-            nodes = push(nodes, self.arrays.children[node])
-            depths = push(depths, jnp.broadcast_to(depth + jnp.int32(1), pos.shape))
-            contexts = jax.tree.map(push, contexts, child_contexts)
-            top = top + jnp.sum(overlap, dtype=jnp.int32)
-            return (nodes, depths, contexts), top, label, uniform, visits + jnp.int32(1)
-
-        # A box straddling the root is traversed over its in-root part, which
-        # must then carry the default label of the outside part.
-        start = (stack, jnp.where(outside, jnp.int32(0), jnp.int32(1)), unset,
-                 jnp.asarray(True), jnp.int32(0))
-        _, top, label, uniform, _ = jax.lax.while_loop(cond, body, start)
+        inside, outside, label = self._box_label(lower, upper)
+        # A box straddling the root is certified only if its in-root part
+        # carries the default label of the outside part.
         default = jnp.int32(self.default_region)
-        certified = uniform & (top == 0) & (label >= 0) & (inside | (label == default))
+        certified = (label >= 0) & (inside | (label == default))
         result = jnp.where(outside, default, jnp.where(certified, label, jnp.int32(MIXED)))
         return jnp.where(valid, result, jnp.int32(MIXED))
 
     # ---------------------------------------------------------- build helpers
     @staticmethod
-    def _validate_labels(labels, default_region: int, n_regions: int | None) -> Tuple[np.ndarray, int]:
-        labels = np.asarray(labels)
-        if not np.issubdtype(labels.dtype, np.integer):
-            raise ValueError("labels must be integers")
-        if labels.size == 0:
-            raise ValueError("labels must be nonempty")
+    def _check_regions(lo: int, hi: int, default_region: int,
+                       n_regions: int | None) -> int:
+        """Validate the label range [lo, hi] and return n_regions."""
         if n_regions is None:
-            n_regions = int(max(labels.max(), default_region)) + 1
-        if labels.min() < 0 or labels.max() >= n_regions:
+            n_regions = max(hi, default_region) + 1
+        if lo < 0 or hi >= n_regions:
             raise ValueError("labels must lie in [0, n_regions)")
         if not 0 <= default_region < n_regions:
             raise ValueError("default_region must be in [0, n_regions)")
         if n_regions > np.iinfo(np.int32).max:
             raise ValueError("too many regions for int32 ids")
-        return labels.astype(np.int32), n_regions
+        return n_regions
 
     @staticmethod
     def _validate_box(lower, upper, dim: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -210,8 +158,18 @@ class TreePartition(BoundaryPartition):
         return lower, upper
 
     @staticmethod
-    def _make_arrays(children: np.ndarray, uniform: np.ndarray, lower: np.ndarray,
-                     upper: np.ndarray, split: Any = ()) -> TreeArrays:
+    def _tree_arrays(children, uniform, lower, upper, split: Any = ()) -> TreeArrays:
+        """Assemble storage without host checks; arrays may stay on device."""
+        fdtype = storage_float_dtype()
+        return TreeArrays(children=jnp.asarray(children, jnp.int32),
+                          uniform=jnp.asarray(uniform, jnp.int32),
+                          lower=jnp.asarray(lower, fdtype), upper=jnp.asarray(upper, fdtype),
+                          split=split)
+
+    @classmethod
+    def _make_arrays(cls, children, uniform, lower, upper, split: Any = ()) -> TreeArrays:
+        """Host-validated storage for hand-built trees."""
+        children, uniform = np.asarray(children), np.asarray(uniform)
         n_nodes = len(uniform)
         if n_nodes > np.iinfo(np.int32).max:
             raise ValueError("too many nodes for int32 indices")
@@ -221,8 +179,4 @@ class TreePartition(BoundaryPartition):
             raise ValueError("children must be all -1 (leaf) or all valid node ids")
         if np.any(uniform[leaf] < 0) or np.any(uniform[~leaf] != MIXED):
             raise ValueError("leaves need a region id and internal nodes MIXED")
-        fdtype = storage_float_dtype()
-        return TreeArrays(children=jnp.asarray(children, jnp.int32),
-                          uniform=jnp.asarray(uniform, jnp.int32),
-                          lower=jnp.asarray(lower, fdtype), upper=jnp.asarray(upper, fdtype),
-                          split=split)
+        return cls._tree_arrays(children, uniform, lower, upper, split)

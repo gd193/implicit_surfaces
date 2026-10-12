@@ -71,39 +71,59 @@ f64.
 ## Trees
 
 `TreePartition` holds shared storage (`TreeArrays`: int32 `children` and
-`uniform`, root bounds, subclass `split` data) and the traversal loops. Points
+`uniform`, root bounds, subclass `split` data) and the descent loop. Points
 outside the half-open root `[lower, upper)` get `default_region`. Homogeneous
 subtrees are collapsed, so internal nodes are `MIXED` and leaves carry labels.
 Partitions are pytrees and can be passed as jit arguments.
 
-A new tree implements four hooks and a builder:
+Queries are written for vmapped batches on the GPU: loops have a fixed trip
+count (`max_depth`), there are no per-lane stacks or scatters, and lanes do not
+diverge. A stack-based search that certifies more boxes belongs in a dedicated
+kernel (Pallas or Warp) later.
 
-- `_encode_point(x) -> (inside, key)` and `_point_child(node, key, depth)` for
-  point descent;
-- `_encode_box(lower, upper) -> (inside, outside, key)`, with the key describing
-  the box clipped to the root, and `_root_context()`;
-- `_box_children(node, context, key, depth) -> (overlap_mask, child_contexts)`;
-- `from_grid(labels, lower, upper, default_region)`.
+A new tree implements three hooks and a builder:
 
-Box queries visit every node meeting the box depth-first and stop at the first
-differing leaf. A straddling box is certified only if its in-root part has the
-default label. After `max_box_visits` nodes (default 1024) the answer is
-`MIXED`.
+- `_encode_point(x) -> (inside, key)` and `_point_child(node, key, depth)`,
+  used by the shared `_descend(key, limit)`;
+- `_box_label(lower, upper) -> (inside, outside, label)`, where `label`
+  certifies the box clipped to the root. The shared `classify_box` handles
+  invalid boxes, boxes outside the root (default region), and straddling boxes
+  (certified only if the in-root part has the default label);
+- `from_grid(labels, lower, upper, default_region, n_regions)`. Extra builder
+  options must be keyword arguments with defaults.
 
 `VoxelTreePartition` splits at midpoints into `2**dim` children. Traversal uses
 int32 cell coordinates on the finest grid, so a point on a split plane belongs
-to the upper child. `from_grid` takes an `(n,)*dim` grid with `n` a power of
-two; depth is limited to 30, and to about 22 without x64.
+to the upper child. Depth is limited to 30, and to about 22 without x64.
+
+- **Box query (fixed cost).** Choose the deepest level where the box covers at
+  most two cells per axis, descend to those `<= 2**dim` cells, and certify only
+  if all descents end at leaves with one label: at most `2**dim * max_depth`
+  lookups. A region boundary inside a covered cell gives `MIXED` even when the
+  box misses it.
+- **Construction (JAX only).** `from_grid` takes an `(n,)*dim` grid with `n` a
+  power of two and runs where the labels live. It builds a label pyramid by
+  block min/max, numbers nodes level by level with prefix sums (children of a
+  node are contiguous, in slot order), and scatters rows into exact-size
+  arrays. Host transfers: the label range and the node count. Peak memory is
+  roughly 2-3 times the dense int32 grid (pyramid plus id grids; not measured).
+
+On an RTX 5060 laptop GPU (3D ball, f32, after compilation): a `256^3` grid
+builds in about 4 ms into 166k nodes; 1M point queries take about 1 ms and
+1M box queries about 13 ms, 92% of them certified.
 
 ## Validation
 
 `scripts/test_boundary.py` checks point lookup against `HalfSpacePartition`,
 split-plane and outside-root ownership, conservative boxes against sampled
-points, collapsing, a custom tree subclass, pytree passing, data kinds and
+points, construction on random grids (valid storage, minimal node count,
+exact lookup), GPU build and query when available, a custom tree subclass,
+pytree passing, data kinds and
 dtypes, scalar and vector values, and the WoS adapter on a split disk
 (`u(0) = 1/2`, and `u(p) = p` for vector data `g(x) = x`).
 
 ```
 JAX_PLATFORMS=cpu python -m unittest scripts/test_boundary.py
 JAX_ENABLE_X64=true JAX_PLATFORMS=cpu python -m unittest scripts/test_boundary.py
+JAX_PLATFORMS=cuda,cpu python -m unittest scripts/test_boundary.py   # GPU test
 ```
