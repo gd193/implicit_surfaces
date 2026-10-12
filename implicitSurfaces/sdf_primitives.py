@@ -9,6 +9,8 @@ from surfaces.implicit.primitives import (  # noqa: F401
     rounded_box_sdf,
     capsule_sdf,
     star2d_sdf,
+    circle_wave2d_udf,
+    circle_wave2d_sdf,
     union,
     intersection,
     subtraction,
