@@ -22,3 +22,6 @@ dist/
 *.egg-info/
 # Mesh archive duplicates of unzipped content
 assets/meshes/*.zip
+
+algo_paper/
+assets/
