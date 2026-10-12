@@ -27,6 +27,7 @@ class DifferentialWalkerState(NamedTuple):
     rng_key: jnp.ndarray # PRNG key
     done_flag: jnp.ndarray # phase completion, not necessarily a valid sample
     status: jnp.ndarray
+    offset_length: jnp.ndarray # accepted inward offset; zero before transition
     phase: jnp.ndarray # shape ()
 
 class WalkerOutput(NamedTuple):
