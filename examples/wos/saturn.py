@@ -3,7 +3,9 @@
   python saturn.py [--solve | --render]
 
 Outputs in assets/renders/wos/saturn/: volume.npz, slices.png (x = 0, y = 0
-with exact error), bc.png, and a still plus 12 s orbit for: bc, cut, streamlines.
+with exact error), bc.png, and a still plus 20 s orbit for: bc, cut, streamlines, arrows,
+cut_arrows,
+all with a cut sweeping along the cut normal.
 """
 from shapes import saturn
 from vector_volume import run

@@ -1,6 +1,7 @@
 """Shared pipeline for 3D vector examples with harmonic data g (so u = g):
 solve the volume, check the exact error everywhere, plot slices with error
-panels, and render the boundary overview, a cut, and streamlines."""
+panels, and render the boundary overview plus cut, streamlines, arrows and
+cut_arrows orbits, all with the shared sweeping cut along `cut_normal`."""
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -38,11 +39,7 @@ def run(name, surface, params, g, lo, hi, *, title, info, slices, cut_normal, cu
          f"solve {float(data['seconds']):.1f}s, volume max error {max_err:.3f}", name_suffix="slices")
 
     import render_volume as rv
-    rv.bc_overview(name, surface, params, g, lo, hi, cmap="plasma", info=info)
+    rv.bc_overview(name, surface, params, g, lo, hi, cmap="plasma", info=info, normal=cut_normal)
     grid, _ = rv.load(name)
     smooth, _ = rv.load(name, sigma=1.)
-    axis_name = "xyz"[int(np.argmax(np.abs(cut_normal)))]
-    rv.view(name, "cut", f"{title}, norm(u): cut open at {axis_name} = 0",
-            lambda p: rv.add_cutaway(p, grid, "mag", "plasma", normal=cut_normal), camera=cut_camera)
-    rv.view(name, "streamlines", f"{title}, field lines of u (smoothed, sigma = 1 voxel)",
-            lambda p: rv.add_streamlines(p, smooth))
+    rv.vector_views(name, grid, smooth, title, normal=cut_normal, cut_camera=cut_camera)
