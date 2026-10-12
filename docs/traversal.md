@@ -191,6 +191,32 @@ position dtype, including explicit float32 geometry when x64 is enabled.
 The sample count, active-buffer cap, refill interval, and bucket size must be
 positive integers; compaction count must be nonnegative.
 
+Differential WoS backtracks the inward normal offset. `offset_l` is required
+and must exceed `eps`; candidates are `offset_l`, `offset_l/2`, `offset_l/4`,
+and `offset_l/8`, skipping any not greater than `eps`. The field
+must be negative inside and the supplied normal must point outward (it is
+normalized before use). A candidate needs a finite negative residual, a
+certified empty-sphere radius greater than `eps`, and must not immediately
+satisfy the current residual-based walk termination test. A small conservative
+radius is inconclusive and rejected. The accepted length is stored per walker
+and used in the derivative denominator. If all candidates fail, the sample is
+`INVALID`, contributes nothing to partial sums, and makes the default API raise.
+
+Only walkers that hit the boundary in phase 0 are offset. Their indices are
+packed and processed in chunks of `transition_bucket_size` (default 256)
+inside the jitted step, so the cost scales with the number of switches, not
+the buffer size. Within a chunk the four attempts run in a `while_loop` that
+ends once every walker has accepted or exhausted them; most accept the first.
+
+This default checks endpoint interior and geometric clearance, not the entire
+offset segment. To exclude crossing a gap into another component, supply
+`offset_segment_fn(params, start, end) -> scalar JAX bool`, certifying the
+interior segment while allowing its starting boundary point. Both checks must
+pass. Boundary projection and fully geometric walk termination remain TODOs;
+the additional residual check conservatively prevents immediate termination
+until those are implemented. This backtracking rule is a safeguard, not a
+guarantee of low finite-difference bias for offsets close to `eps`.
+
 ## Validation
 
 Six tests in two files cover the public contracts and integration paths:
