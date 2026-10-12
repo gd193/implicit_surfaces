@@ -89,3 +89,102 @@ def arc2d(params, x):
     dist_body = jnp.abs(len_p - ra)
         
     return jnp.where(cond, dist_endpoint, dist_body) - rb
+
+### Exact SDFs (the *_sdf suffix means exact signed distance, negative inside).
+
+
+def torus_sdf(params, x):
+    """
+    Signed distance to a torus around the z axis.
+    params: a dictionary containing:
+        - 'center' (jnp.ndarray) of shape (3,)
+        - 'major' (float): distance from the center to the tube's center line
+        - 'minor' (float): tube radius
+    x: (3,) point
+    """
+    p = x - params['center']
+    q = jnp.stack([safe_norm(p[:2]) - params['major'], p[2]])
+    return safe_norm(q) - params['minor']
+
+
+def rounded_box_sdf(params, x):
+    """
+    Signed distance to an axis-aligned box with rounded edges, any dimension.
+    params: a dictionary containing:
+        - 'center' (jnp.ndarray)
+        - 'half_extents' (jnp.ndarray): half size including the rounding
+        - 'radius' (float): edge rounding radius, at most min(half_extents)
+    x: the point at which to evaluate the SDF
+    """
+    q = jnp.abs(x - params['center']) - params['half_extents'] + params['radius']
+    return safe_norm(jnp.maximum(q, 0)) + jnp.minimum(jnp.max(q), 0) - params['radius']
+
+
+def capsule_sdf(params, x):
+    """
+    Signed distance to a capsule (segment a-b swept by a ball), any dimension.
+    params: a dictionary containing:
+        - 'a', 'b' (jnp.ndarray): segment end points
+        - 'radius' (float)
+    x: the point at which to evaluate the SDF
+    """
+    pa, ba = x - params['a'], params['b'] - params['a']
+    h = jnp.clip(jnp.dot(pa, ba) / jnp.dot(ba, ba), 0., 1.)
+    return safe_norm(pa - ba * h) - params['radius']
+
+
+def star2d_sdf(params, x, n: int = 5):
+    """
+    Signed distance to a regular 2D star with n points (n is static).
+    source: https://iquilezles.org/articles/distfunctions2d/ (sdStar)
+    params: a dictionary containing:
+        - 'center' (jnp.ndarray) of shape (2,)
+        - 'radius' (float): tip radius
+        - 'm' (float): sharpness in [2, n]; 2 is spikiest, n gives a regular polygon
+    x: (2,) point
+    """
+    if x.shape != (2,):
+        raise ValueError(f"Point x must be 2-dimensional (got shape {x.shape})")
+    r, m = params['radius'], params['m']
+    an, en = jnp.pi / n, jnp.pi / m
+    acs = jnp.array([jnp.cos(an), jnp.sin(an)])
+    ecs = jnp.stack([jnp.cos(en), jnp.sin(en)])
+    p = x - params['center']
+    p = jnp.stack([jnp.abs(p[0]), p[1]])
+    # Reduce to the first sector, then distance to one edge segment.
+    bn = jnp.mod(jnp.arctan2(p[0], p[1]), 2. * an) - an
+    p = safe_norm(p) * jnp.stack([jnp.cos(bn), jnp.abs(jnp.sin(bn))])
+    p = p - r * acs
+    p = p + ecs * jnp.clip(-jnp.dot(p, ecs), 0., r * acs[1] / ecs[1])
+    return safe_norm(p) * jnp.sign(p[0])
+
+
+### Combinators. They act on SDF values and return 1-Lipschitz fields, not
+### exact SDFs: |f(x)| <= distance to {f = 0} still holds, so empty-sphere
+### radii stay safe (use lipschitz_bound=1), but steps can be shorter.
+
+
+def union(a, b):
+    """min(a, b). Exact outside, underestimates distance inside."""
+    return jnp.minimum(a, b)
+
+
+def intersection(a, b):
+    """max(a, b). Exact inside, underestimates distance outside."""
+    return jnp.maximum(a, b)
+
+
+def subtraction(a, b):
+    """a with b removed: max(a, -b). Underestimates distance."""
+    return jnp.maximum(a, -b)
+
+
+def smooth_union(a, b, k):
+    """
+    Polynomial smooth minimum with blend radius k > 0 (adds material in the
+    blend). Its gradient is a convex combination of the inputs' gradients,
+    so it stays 1-Lipschitz.
+    source: https://iquilezles.org/articles/smin/
+    """
+    h = jnp.maximum(k - jnp.abs(a - b), 0.) / k
+    return jnp.minimum(a, b) - h * h * k * 0.25
