@@ -3,7 +3,8 @@
   python torus.py [--solve | --render]
 
 Outputs in assets/renders/wos/torus/: volume.npz, slices.png (z = 0, y = 0),
-and a still plus 12 s orbit for each 3D view: cut, iso.
+bc.png, and a still plus 20 s orbit (shared sweeping cut along z) for: bc,
+cut, iso.
 """
 from common import load_volume, plot, solve_volume, volume_slice, volume_stages
 from shapes import torus
@@ -30,13 +31,10 @@ if render_now:
     import render_volume as rv
     rv.bc_overview(NAME, surface, params, g, LO, HI, cmap="coolwarm", clim=(-1., 1.),
                    info=["Laplace: -Lap u = 0 in a torus (R = 0.6, r = 0.3)",
-                         "Dirichlet: u = g on the surface", "g = cos(3 phi), phi = atan2(y, x)"])
+                         "Dirichlet: u = g on the surface", "g = cos(3 phi), phi = atan2(y, x)"],
+                   normal=(0., 0., 1.))
     grid, _ = rv.load(NAME)
     smooth, _ = rv.load(NAME, sigma=1.)
-    # Keep the bottom half; the cut face at z = 0 looks up at the camera.
-    rv.view(NAME, "cut", "Torus, g = cos(3 phi): cut open at z = 0",
-            lambda p: rv.add_cutaway(p, grid, "u", "coolwarm", normal=(0., 0., 1.), clim=(-1., 1.)),
-            camera=(2.3, -2.7, 1.3))
-    rv.view(NAME, "iso", "Torus, isosurfaces u = +-0.25, +-0.5, +-0.75 (smoothed, sigma = 1 voxel)",
-            lambda p: rv.add_isosurfaces(p, smooth, [-.75, -.5, -.25, .25, .5, .75], "coolwarm"),
-            camera=(1.8, -2.2, 2.4))
+    rv.scalar_views(NAME, grid, smooth, "Torus, g = cos(3 phi)", normal=(0., 0., 1.),
+                    levels=[-.75, -.5, -.25, .25, .5, .75], clim=(-1., 1.),
+                    cut_camera=(2.3, -2.7, 1.3), iso_camera=(1.8, -2.2, 2.4))
