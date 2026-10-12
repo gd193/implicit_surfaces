@@ -11,7 +11,7 @@ from functools import partial
 import abc
 
 from surfaces.queries import EmptySphereQuery
-from sphereWalker.types import (WalkerState, WalkerOutput, DifferentialWalkerState,
+from sphereWalker.types import (WalkerState, WalkerOutput, DifferentialWalkerState, GradientWalkerState,
                                 WalkerTermination as WT, WalkerDiagnostics)
 from utils.jnp_array_compaction import (
     uniform_size_generator,
@@ -43,7 +43,7 @@ weight_greens_fn_select = {
     3: weighted_greens_fn_2ball,
 }
 
-StateT = TypeVar('StateT', bound=Union[WalkerState, DifferentialWalkerState])
+StateT = TypeVar('StateT', bound=Union[WalkerState, GradientWalkerState, DifferentialWalkerState])
 
 
 @partial(jax.jit, static_argnames=('new_size',))
@@ -109,7 +109,11 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                  level_set: float = 0.0,
                  max_steps: int = 1000,
                  eps: float = 1e-3,
-                 print_progress: bool = False,):
+                 print_progress: bool = False,
+                 source_takes_params: bool = False,):
+        """source_takes_params: call source_term_fn(params, x) instead of
+        source_term_fn(x), so a source that changes between solves (e.g. a
+        vorticity grid in params) does not retrace the jitted walk."""
         self.empty_sphere = EmptySphereQuery(empty_sphere_fn)
         self.boundary_condition_fn = boundary_condition_fn
         self.source_term = source_term_fn
@@ -121,6 +125,10 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         self.ball_sampling_fn = ball_sampling_fn_select[dim]
         self.weighted_greens_fn = weight_greens_fn_select[dim]
         self.print_progress = print_progress
+        self.source_takes_params = source_takes_params
+
+    def _source(self, params: Any, x: jnp.ndarray) -> jnp.ndarray:
+        return self.source_term(params, x) if self.source_takes_params else self.source_term(x)
 
     @abc.abstractmethod
     def step(self, params: Any, state: StateT) -> StateT:
@@ -553,7 +561,7 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         # failed → no ball to integrate over → contribution is 0, not NaN). Without this,
         # weighted_greens(0, 0) → NaN poisons state.w forever.
         source_contrib = jnp.where(radius > 0,
-                                   self.source_term(sample_ball_position) *
+                                   self._source(params, sample_ball_position) *
                                        self.weighted_greens_fn(r=sample_ball_radius, R=radius),
                                    jnp.asarray(0.0, dtype=state.w.dtype))
         new_w = jnp.where(is_done, state.w, state.w + source_contrib)
@@ -629,6 +637,146 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         )
 
 
+class WoSGradientIntegrator(BaseIntegrator[GradientWalkerState]):
+    """
+    Walk on Spheres estimate of the spatial gradient of u (-Lap u = f, u = g).
+
+    Differentiates the ball mean-value formula at the first sphere only:
+        grad u(x) = E[(d/R) (u(y) - c(x)) n] + E[f(z) grad_x G(x, z) / p(z)],
+    with y uniform on the first sphere, n = (y - x)/R, and u(y) the standard
+    WoS estimate continued from y. In the first ball the radius of z is
+    uniform in [0, R], so the source weight R (1 - (r/R)^d) f(z) stays bounded
+    (uniform ball sampling has infinite variance here). The ball formula holds
+    for any ball inside the domain, so conservative empty spheres stay unbiased.
+
+    control_fn: optional c(x), e.g. a pilot estimate of u. Since E[n] = 0 any c
+    keeps the estimate unbiased; c close to u(x) removes most of the variance.
+    The output adds a trailing (dim,) axis to the WoS value shape.
+    """
+    def __init__(self, *args,
+                 control_fn: Optional[Callable[[jnp.ndarray], jnp.ndarray]] = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.control_fn = control_fn
+
+    def _value_shape(self, dtype) -> Tuple[int, ...]:
+        point = jax.ShapeDtypeStruct((self.dim,), dtype)
+        shapes = [(1,), jax.eval_shape(self.boundary_condition_fn, point).shape]
+        if self.control_fn is not None:
+            shapes.append(jax.eval_shape(self.control_fn, point).shape)
+        return jnp.broadcast_shapes(*shapes)
+
+    def step(self, params, state: GradientWalkerState) -> GradientWalkerState:
+        """
+        One WoS step; the first step fills the gradient weights instead of w.
+        """
+        ### compute empty sphere
+        fn_val, radius, new_trust_region_size = self.empty_sphere(params, state.position, state.trust_region_size)
+        first = state.nSteps == 0
+
+        ### sample new position on sphere and inside ball
+        sphere_key, ball_key, direction_key, new_key = jr.split(state.rng_key, 4)
+        dtype = state.position.dtype
+        sphere_direction = self.sphere_sampling_fn(sphere_key, dtype=dtype)
+        # radius uniform in the first ball, volume uniform afterwards
+        unit = jr.uniform(ball_key, minval=jnp.finfo(dtype).tiny, maxval=1.0, dtype=dtype)
+        unit_radius = jnp.where(first, unit, unit ** (1.0 / self.dim))
+        ball_direction = self.sphere_sampling_fn(direction_key, dtype=dtype)
+        sample_ball_radius = unit_radius * radius
+        f = self._source(params, state.position + sample_ball_radius * ball_direction)
+
+        ### update state
+        status = walker_status(state, fn_val, radius, new_trust_region_size, self.eps, self.max_steps)
+        # The gradient needs one sphere around the start point.
+        status = jnp.where(first & (status == WT.BOUNDARY_HIT), WT.INVALID, status)
+        is_done = status != WT.ACTIVE
+        new_nSteps = jnp.where(is_done, state.nSteps, state.nSteps + 1)
+        new_position = jnp.where(is_done, state.position, state.position + sphere_direction * radius)
+
+        # Same radius=0 guard as WoSIntegrator.step.
+        has_ball = radius > 0
+        source_contrib = jnp.where(has_ball & ~first,
+                                   f * self.weighted_greens_fn(r=sample_ball_radius, R=radius),
+                                   jnp.asarray(0.0, dtype=state.w.dtype))
+        control = jnp.asarray(0.0, dtype) if self.control_fn is None else self.control_fn(state.position)
+        new_w = jnp.where(first, state.w - control, state.w + source_contrib)
+        safe_radius = jnp.where(has_ball, radius, 1.0)
+        new_grad_weight = jnp.where(first & has_ball, (self.dim / safe_radius) * sphere_direction,
+                                    state.grad_weight)
+        first_source = (jnp.asarray(f)[..., None] * (radius * (1.0 - unit_radius ** self.dim))
+                        * ball_direction)
+        new_grad_source = jnp.where(first & has_ball, first_source, state.grad_source)
+        new_w = jnp.where(is_done, state.w, new_w)
+
+        updated = GradientWalkerState(position=new_position,
+                                      nSteps=new_nSteps,
+                                      w=new_w,
+                                      trust_region_size=new_trust_region_size,
+                                      rng_key=new_key,
+                                      done_flag=is_done, status=status,
+                                      grad_weight=new_grad_weight,
+                                      grad_source=new_grad_source)
+        return finish_step(state, updated)
+
+    def _get_initial_state(self, init_position_batch, rng_keys, init_tr, buffer_size) -> GradientWalkerState:
+        dtype = init_position_batch.dtype
+        value_shape = self._value_shape(dtype)
+        return GradientWalkerState(
+            position=init_position_batch,
+            nSteps=jnp.zeros((buffer_size,), dtype=jnp.int32),
+            w=jnp.zeros((buffer_size,) + value_shape, dtype=dtype),
+            trust_region_size=jnp.full((buffer_size,), init_tr, dtype=dtype),
+            rng_key=rng_keys,
+            status=jnp.zeros((buffer_size,), dtype=jnp.int32),
+            done_flag=jnp.zeros((buffer_size,), dtype=bool),
+            grad_weight=jnp.zeros((buffer_size, self.dim), dtype=dtype),
+            grad_source=jnp.zeros((buffer_size,) + value_shape + (self.dim,), dtype=dtype),
+        )
+
+    def _transition_state_phases(self, params: Any, states: GradientWalkerState, init_trust_region_size: float) -> GradientWalkerState:
+        """
+        No transition in gradient WoS
+        """
+        return states
+
+    def _compute_accumulator_update(self, params: Any, state: GradientWalkerState) -> jnp.ndarray:
+        """
+        Gradient sample: first-ball source term plus (d/R) n (u(y) - c).
+        """
+        u_y = state.w + self.boundary_condition_fn(state.position)
+        return state.grad_source + u_y[..., None] * state.grad_weight
+
+    def _check_if_done(self, state: GradientWalkerState, parents: jnp.ndarray) -> jnp.ndarray:
+        return jnp.logical_and(state.done_flag, parents != -1)
+
+    def _refill_state(self,
+                      current_states: GradientWalkerState,
+                      is_valid_mask: jnp.ndarray,
+                      free_indices: jnp.ndarray,
+                      new_positions: jnp.ndarray,
+                      new_keys: jnp.ndarray,
+                      init_trust_region_size: float,
+                      N_total_samples: int) -> GradientWalkerState:
+        """
+        Refill the walker state buffer with new tasks.
+        """
+        scatter = get_scatter_fn(free_indices, is_valid_mask, N_total_samples)
+        drop = jnp.where(is_valid_mask, free_indices, N_total_samples + 1)
+        zeros = lambda leaf: jnp.zeros(leaf.shape[1:], dtype=leaf.dtype)
+
+        return GradientWalkerState(
+            position=scatter(current_states.position, new_positions, zeros(current_states.position)),
+            nSteps=scatter(current_states.nSteps, 0, reset_value=0),
+            w=scatter(current_states.w, 0.0, reset_value=zeros(current_states.w)),
+            trust_region_size=scatter(current_states.trust_region_size, init_trust_region_size,
+                                      reset_value=init_trust_region_size),
+            rng_key=scatter(current_states.rng_key, new_keys, reset_value=jr.PRNGKey(0)),
+            status=current_states.status.at[drop].set(WT.ACTIVE, mode='drop'),
+            done_flag=current_states.done_flag.at[drop].set(False, mode='drop'),
+            grad_weight=scatter(current_states.grad_weight, 0.0, reset_value=zeros(current_states.grad_weight)),
+            grad_source=scatter(current_states.grad_source, 0.0, reset_value=zeros(current_states.grad_source)),
+        )
+
+
 class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
     """
     Differential Walk on Spheres integrator for solving boundary value problems with differential Wos.
@@ -687,7 +835,7 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
         
         ### only update weight in phase 1 and if not done
         new_w = jnp.where(jnp.logical_or(is_done, state.phase == 0), state.w,
-                    state.w + self.source_term(sample_ball_position) * self.weighted_greens_fn(r=sample_ball_radius, R=radius))
+                    state.w + self._source(params, sample_ball_position) * self.weighted_greens_fn(r=sample_ball_radius, R=radius))
         
         updated = DifferentialWalkerState(
             position=new_position,

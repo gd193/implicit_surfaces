@@ -18,6 +18,17 @@ class WalkerState(NamedTuple):
     done_flag: jnp.ndarray # phase completion, not necessarily a valid sample
     status: jnp.ndarray
 
+class GradientWalkerState(NamedTuple):
+    position: jnp.ndarray # shape (dim, )
+    nSteps: jnp.ndarray  # shape ()
+    w: jnp.ndarray       # shape value_shape, u(y) estimate minus control
+    trust_region_size: jnp.ndarray # shape ()
+    rng_key: jnp.ndarray # PRNG key
+    done_flag: jnp.ndarray # phase completion, not necessarily a valid sample
+    status: jnp.ndarray
+    grad_weight: jnp.ndarray # shape (dim, ), (d/R) n of the first sphere
+    grad_source: jnp.ndarray # shape value_shape + (dim, ), first-ball source term
+
 class DifferentialWalkerState(NamedTuple):
     position: jnp.ndarray # shape (dim, )
     boundary_hit_position: jnp.ndarray # shape (dim, ) # position where boundary was hit in phase 0
