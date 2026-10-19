@@ -139,6 +139,17 @@ def sample_uniform_2sphere(key: jax.Array, dtype: jnp.dtype) -> jnp.ndarray:
     return jnp.array([r * jnp.cos(phi), r * jnp.sin(phi), z])
 
 
+def unit_interval(key: jax.Array, dtype: jnp.dtype) -> jnp.ndarray:
+    """
+    Uniform sample in (0, 1]: 1 - U[0, 1). Its smallest value is the grid step
+    (2^-24 in float32), not 0. uniform(minval=tiny) instead maps the 0 draw
+    (probability 2^-23 in float32) to tiny = 1e-38, a ball radius of ~1e-13 R
+    and a Green's weight ~R^2 / r near 1e12 in 3D: a few such outliers per
+    50M source samples.
+    """
+    return 1.0 - jr.uniform(key, dtype=dtype)
+
+
 def sample_uniform_1ball(key: jax.Array, dtype: jnp.dtype) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Sample a point uniformly inside a unit 1-ball (disk in 2D).
@@ -150,7 +161,7 @@ def sample_uniform_1ball(key: jax.Array, dtype: jnp.dtype) -> Tuple[jnp.ndarray,
     """
     key_r, key_theta = jr.split(key)
     direction = sample_uniform_1sphere(key_theta, dtype=dtype)
-    radius = jnp.sqrt(jr.uniform(key_r, minval=jnp.finfo(dtype).tiny, maxval=1.0, dtype=dtype))
+    radius = jnp.sqrt(unit_interval(key_r, dtype))
     return radius, direction
 
 
@@ -166,7 +177,7 @@ def sample_uniform_2ball(key: jax.Array, dtype: jnp.dtype) -> Tuple[jnp.ndarray,
     """
     key_r, key_direction = jr.split(key)
     direction = sample_uniform_2sphere(key_direction, dtype=dtype)
-    radius = jnp.cbrt(jr.uniform(key_r, minval=jnp.finfo(dtype).tiny, maxval=1.0, dtype=dtype))
+    radius = jnp.cbrt(unit_interval(key_r, dtype))
     return radius, direction
 
 

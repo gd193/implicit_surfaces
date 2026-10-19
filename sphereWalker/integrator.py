@@ -25,6 +25,7 @@ from utils.sampling_primitives import (
     sample_uniform_2ball,
     weighted_greens_fn_1ball,
     weighted_greens_fn_2ball,
+    unit_interval,
 )
 
 
@@ -678,7 +679,7 @@ class WoSGradientIntegrator(BaseIntegrator[GradientWalkerState]):
         dtype = state.position.dtype
         sphere_direction = self.sphere_sampling_fn(sphere_key, dtype=dtype)
         # radius uniform in the first ball, volume uniform afterwards
-        unit = jr.uniform(ball_key, minval=jnp.finfo(dtype).tiny, maxval=1.0, dtype=dtype)
+        unit = unit_interval(ball_key, dtype)
         unit_radius = jnp.where(first, unit, unit ** (1.0 / self.dim))
         ball_direction = self.sphere_sampling_fn(direction_key, dtype=dtype)
         sample_ball_radius = unit_radius * radius

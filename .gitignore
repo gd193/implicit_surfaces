@@ -24,4 +24,5 @@ dist/
 assets/meshes/*.zip
 
 algo_paper/
+scripts/*
 assets/
