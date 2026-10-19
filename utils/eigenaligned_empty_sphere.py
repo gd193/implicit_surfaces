@@ -1,16 +1,15 @@
-import jax
 import jax.numpy as jnp
 from jnp_bounds.types import MixedIntervalPolynomial
-from jnp_bounds.utils.dim_degree_coefficients import dim_degree_to_exponents_cache
+from jnp_bounds.mixed_polynomials_arithmetic import coefficient
+from jnp_bounds import interval_arithmetic
+from jnp_bounds.polynomial_roots import quadratic_distance_root
 from typing import Union
 
 # Import helpers from the original module
 from .jnpbound_empty_sphere import (
-    eigenvalues_of_hermitian_3x3,
-    max_abs
+    eigenvalues_of_hermitian_3x3
 )
 
-multi_index_3d_2nd_order = dim_degree_to_exponents_cache.static[(3, 2)][0]
 
 def bounded_dist_isosurf_2nd_order_3d_eigenaligned(taylor_enclosure: MixedIntervalPolynomial, 
                                                    upper_or_lower: Union[float, jnp.ndarray], 
@@ -21,39 +20,38 @@ def bounded_dist_isosurf_2nd_order_3d_eigenaligned(taylor_enclosure: MixedInterv
     coupled with an isotropic spectral error bound. This avoids pessimistic alignment assumptions
     and yields much larger valid sphere radii for Walk on Spheres.
     """
-    index_map = lambda idxs: multi_index_3d_2nd_order.index(idxs)
 
-    a000 = taylor_enclosure[index_map([0, 0, 0])]
-    a100 = taylor_enclosure[index_map([1, 0, 0])]
-    a010 = taylor_enclosure[index_map([0, 1, 0])]
-    a001 = taylor_enclosure[index_map([0, 0, 1])]
+    a000 = coefficient(taylor_enclosure, (0, 0, 0))
+    a100 = coefficient(taylor_enclosure, (1, 0, 0))
+    a010 = coefficient(taylor_enclosure, (0, 1, 0))
+    a001 = coefficient(taylor_enclosure, (0, 0, 1))
 
-    enc_a200 = taylor_enclosure[index_map([2, 0, 0])]
-    enc_a020 = taylor_enclosure[index_map([0, 2, 0])]
-    enc_a002 = taylor_enclosure[index_map([0, 0, 2])]
-    enc_a110 = taylor_enclosure[index_map([1, 1, 0])]
-    enc_a101 = taylor_enclosure[index_map([1, 0, 1])]
-    enc_a011 = taylor_enclosure[index_map([0, 1, 1])]
+    enc_a200 = coefficient(taylor_enclosure, (2, 0, 0))
+    enc_a020 = coefficient(taylor_enclosure, (0, 2, 0))
+    enc_a002 = coefficient(taylor_enclosure, (0, 0, 2))
+    enc_a110 = coefficient(taylor_enclosure, (1, 1, 0))
+    enc_a101 = coefficient(taylor_enclosure, (1, 0, 1))
+    enc_a011 = coefficient(taylor_enclosure, (0, 1, 1))
 
     c = jnp.abs(a000 - isolevel)
     g = jnp.array([a100, a010, a001])
 
     # 1. Decompose into H_mid and H_rad
     # Midpoint of the interval Hessian reconstructs the precise curvature
-    H_mid_xx = 0.5 * (enc_a200.upper + enc_a200.lower)
-    H_mid_yy = 0.5 * (enc_a020.upper + enc_a020.lower)
-    H_mid_zz = 0.5 * (enc_a002.upper + enc_a002.lower)
-    H_mid_xy = 0.25 * (enc_a110.upper + enc_a110.lower)
-    H_mid_xz = 0.25 * (enc_a101.upper + enc_a101.lower)
-    H_mid_yz = 0.25 * (enc_a011.upper + enc_a011.lower)
+    H_mid_xx = 0.5 * (interval_arithmetic.upper(enc_a200) + interval_arithmetic.lower(enc_a200))
+    H_mid_yy = 0.5 * (interval_arithmetic.upper(enc_a020) + interval_arithmetic.lower(enc_a020))
+    H_mid_zz = 0.5 * (interval_arithmetic.upper(enc_a002) + interval_arithmetic.lower(enc_a002))
+    H_mid_xy = 0.25 * (interval_arithmetic.upper(enc_a110) + interval_arithmetic.lower(enc_a110))
+    H_mid_xz = 0.25 * (interval_arithmetic.upper(enc_a101) + interval_arithmetic.lower(enc_a101))
+    H_mid_yz = 0.25 * (interval_arithmetic.upper(enc_a011) + interval_arithmetic.lower(enc_a011))
 
     # Radius of the interval Hessian captures the local variation/error
-    H_rad_xx = 0.5 * (enc_a200.upper - enc_a200.lower)
-    H_rad_yy = 0.5 * (enc_a020.upper - enc_a020.lower)
-    H_rad_zz = 0.5 * (enc_a002.upper - enc_a002.lower)
-    H_rad_xy = 0.25 * (enc_a110.upper - enc_a110.lower)
-    H_rad_xz = 0.25 * (enc_a101.upper - enc_a101.lower)
-    H_rad_yz = 0.25 * (enc_a011.upper - enc_a011.lower)
+    H_rad_xx = 0.5 * (interval_arithmetic.upper(enc_a200) - interval_arithmetic.lower(enc_a200))
+    H_rad_yy = 0.5 * (interval_arithmetic.upper(enc_a020) - interval_arithmetic.lower(enc_a020))
+    H_rad_zz = 0.5 * (interval_arithmetic.upper(enc_a002) - interval_arithmetic.lower(enc_a002))
+    H_rad_xy = 0.25 * (interval_arithmetic.upper(enc_a110) - interval_arithmetic.lower(enc_a110))
+    H_rad_xz = 0.25 * (interval_arithmetic.upper(enc_a101) - interval_arithmetic.lower(enc_a101))
+    H_rad_yz = 0.25 * (interval_arithmetic.upper(enc_a011) - interval_arithmetic.lower(enc_a011))
 
     # 2. Spectral radius of error
     lrad1, lrad2, lrad3 = eigenvalues_of_hermitian_3x3(
@@ -74,33 +72,5 @@ def bounded_dist_isosurf_2nd_order_3d_eigenaligned(taylor_enclosure: MixedInterv
     # Project gradient into eigen basis
     v = Q.T @ g  
 
-    # 4. Fast JAX 1D Newton solver for Lagrange multiplier mu
-    # We want a root strictly larger than -lam.min()
-    # Initialize from the safe isotropic guess
-    mu = jnp.maximum(-jnp.min(lam) + 1e-6, jnp.linalg.norm(v) / (1e-6 + c))
-
-    def newton_step(mu_curr):
-        denom = lam + mu_curr
-        denom_sq = denom ** 2
-        denom_cb = denom ** 3
-        
-        # Value of secular equation root
-        num = lam + K_E + 2.0 * mu_curr
-        value = c - jnp.sum((num * v**2) / (4.0 * denom_sq))
-        
-        # Derivative 
-        deriv = jnp.sum(((mu_curr + K_E) * v**2) / (2.0 * denom_cb))
-        
-        return mu_curr - value / (deriv + 1e-12)
-
-    # Branchless loop for Newton-Raphson
-    for _ in range(6):
-        mu = newton_step(mu)
-
-    # Convert the converged mu into precise bounding radius
-    R_sq = jnp.sum((v**2) / (4.0 * (lam + mu)**2))
-    bound = jnp.sqrt(R_sq)
-    
-    # Fallback to infinity if gradient is exactly zero to avoid division issues, 
-    # standard isotropic method is needed if g=0, but g=0 is extremely rare in NN distance fields.
-    return jnp.where(jnp.linalg.norm(g) > 1e-12, bound, jnp.inf)
+    # Numerical equation solving belongs to the enclosure library.
+    return quadratic_distance_root(c, v, lam, K_E)
