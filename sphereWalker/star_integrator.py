@@ -149,10 +149,14 @@ class WoStIntegrator(BaseIntegrator[StarWalkerState]):
             jnp.abs(jnp.linalg.norm(normal) - 1) < 1e-4
         )
         cap = jnp.minimum(clearance, self.max_radius)
+        # Zero clearance is an undecided Dirichlet query: like WoS, stay put
+        # and retry with the next trust region.
+        stalled = active & (cap == 0)
+        query_cap = jnp.where(active & ~stalled, cap, 1.0)
         star = self.neumann_surface.star_radius(
             params.neumann,
             state.position,
-            jnp.where(active, cap, 1.0),
+            query_cap,
             on_boundary=on_boundary,
             normal=normal,
         )
@@ -160,13 +164,13 @@ class WoStIntegrator(BaseIntegrator[StarWalkerState]):
             (star.status == T.EXIT)
             & jnp.isfinite(star.radius)
             & (star.radius > 0)
-            & (star.radius <= jnp.where(active, cap, 1.0))
+            & (star.radius <= query_cap)
             & (~on_boundary | normal_valid)
         )
-        # Containment applies even to terminal Dirichlet points.
+        # Containment applies even to terminal Dirichlet and stalled points.
         status = jnp.where(~geometry_valid, WT.INVALID, status)
-        active = status == WT.ACTIVE
-        radius = jnp.where(active, star.radius, 1.0)
+        moving = (status == WT.ACTIVE) & ~stalled
+        radius = jnp.where(moving, star.radius, 1.0)
         direction_key, source_key, next_key = jr.split(state.rng_key, 3)
         direction = self.sphere_sampling_fn(direction_key, dtype=state.position.dtype)
         inward = self.neumann_surface.inward_direction(
@@ -185,8 +189,9 @@ class WoStIntegrator(BaseIntegrator[StarWalkerState]):
             jnp.all(jnp.isfinite(hit.normal))
             & (jnp.abs(jnp.linalg.norm(hit.normal) - 1) < 1e-4)
         )
-        status = jnp.where(active & ~hit_valid, WT.INVALID, status)
-        advance = status == WT.ACTIVE
+        status = jnp.where(moving & ~hit_valid, WT.INVALID, status)
+        active = status == WT.ACTIVE
+        advance = active & ~stalled
         source_distance = radius * sample_green_radius(
             source_key, self.dim, state.position.dtype
         )
@@ -204,9 +209,10 @@ class WoStIntegrator(BaseIntegrator[StarWalkerState]):
         )
         updated = state._replace(
             position=jnp.where(advance, hit.position, state.position),
-            nSteps=state.nSteps + advance.astype(jnp.int32),
+            # Stalls count toward max_steps, as in WoS.
+            nSteps=state.nSteps + active.astype(jnp.int32),
             w=jnp.where(advance, state.w + contribution, state.w),
-            trust_region_size=jnp.where(advance, next_tr, state.trust_region_size),
+            trust_region_size=jnp.where(active, next_tr, state.trust_region_size),
             rng_key=next_key,
             on_neumann=jnp.where(advance, hit.status == T.HIT, state.on_neumann),
             normal=jnp.where(advance, hit.normal, state.normal),

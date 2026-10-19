@@ -53,7 +53,9 @@ two parameter groups. Warmup accepts the same `neumann_params` keyword.
 
 `max_radius` optionally caps each step, defaulting to infinity. The actual
 Dirichlet clearance and the returned star radius must be finite. There is no
-minimum-radius clamp that silently overrides geometric bounds.
+minimum-radius clamp that silently overrides geometric bounds. A zero
+clearance (an undecided bounded query) keeps the walker in place with the
+next trust region, as in WoS; such retries count toward `max_steps`.
 
 ## Optional surface protocol
 
