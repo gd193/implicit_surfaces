@@ -1,4 +1,4 @@
-from typing import NamedTuple, Any
+from typing import NamedTuple, Any, TypeVar, Union
 from enum import IntEnum
 import jax.numpy as jnp
 
@@ -17,6 +17,18 @@ class WalkerState(NamedTuple):
     rng_key: jnp.ndarray # PRNG key
     done_flag: jnp.ndarray # phase completion, not necessarily a valid sample
     status: jnp.ndarray
+
+
+class StarWalkerState(NamedTuple):
+    position: jnp.ndarray
+    nSteps: jnp.ndarray
+    w: jnp.ndarray
+    trust_region_size: jnp.ndarray
+    rng_key: jnp.ndarray
+    done_flag: jnp.ndarray
+    status: jnp.ndarray
+    on_neumann: jnp.ndarray
+    normal: jnp.ndarray
 
 class GradientWalkerState(NamedTuple):
     position: jnp.ndarray # shape (dim, )
@@ -40,6 +52,12 @@ class DifferentialWalkerState(NamedTuple):
     status: jnp.ndarray
     offset_length: jnp.ndarray # accepted inward offset; zero before transition
     phase: jnp.ndarray # shape ()
+
+StateT = TypeVar(
+    'StateT',
+    bound=Union[WalkerState, GradientWalkerState, DifferentialWalkerState, StarWalkerState],
+)
+
 
 class WalkerOutput(NamedTuple):
     position: jnp.ndarray # shape (dim, )
