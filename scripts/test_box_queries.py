@@ -1,140 +1,173 @@
-"""Smoke test for jnpboundedImplicit box queries.
+"""Autobounds migration integration: real builders, runtime params and surface queries."""
 
-Builds a jnpboundedImplicit, monkey-patches its `taylor_bounds` to return a
-hand-constructed polynomial enclosure of a known quadratic
-  f(x) = x0^2 + 2*x1^2 + 3*x2^2 + 4*x0 + 5*x1 + 6*x2 + 7
-and checks that the new box queries (classify_box, box_bounds, box_grad_bounds)
-return enclosures that contain the analytic answer.
-
-This sidesteps autobound's restricted primitive set — the API contract being
-tested is the surface methods + helper, not the autobound tracer.
-"""
 import os
 import sys
+import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
-from jnp_bounds.types import Interval, MixedIntervalPolynomial
-
-from implicitSurfaces.jnpboundedImplicit import jnpboundedImplicit
+from surfaces.implicit.jnp_bounded import jnpboundedImplicit
 
 
-# Quadratic f and its analytics.
-def f_np(x):
-    return x[..., 0]**2 + 2 * x[..., 1]**2 + 3 * x[..., 2]**2 \
-           + 4 * x[..., 0] + 5 * x[..., 1] + 6 * x[..., 2] + 7
-
-
-def grad_f_np(x):
-    return np.stack([
-        2 * x[..., 0] + 4,
-        4 * x[..., 1] + 5,
-        6 * x[..., 2] + 6,
-    ], axis=-1)
-
-
-def make_quadratic_poly(center, half_extent):
-    """Hand-build the deg-2 Taylor polynomial of f around `center` over `±half_extent`.
-
-    For our exact quadratic, the deg-2 Taylor at any point is exact — interval coefs
-    collapse to point values.
-
-    Exponent order for (dim=3, deg=2) per dim_degree_to_exponents_cache:
-        idx 0: [0,0,0]  (const)
-        idx 1: [0,0,1]  (x_2)
-        idx 2: [0,1,0]  (x_1)
-        idx 3: [1,0,0]  (x_0)
-        idx 4: [0,0,2]  (x_2^2)   coef = 3 (interval, no uncertainty)
-        idx 5: [0,1,1]  (x_1*x_2) coef = 0
-        idx 6: [0,2,0]  (x_1^2)   coef = 2
-        idx 7: [1,0,1]  (x_0*x_2) coef = 0
-        idx 8: [1,1,0]  (x_0*x_1) coef = 0
-        idx 9: [2,0,0]  (x_0^2)   coef = 1
-    Real part: const + linear (4 entries).
-    """
-    c = np.asarray(center)
-    f_c = float(f_np(c))
-    g_c = grad_f_np(c)  # shape (3,)
-    real = jnp.array([[f_c], [float(g_c[2])], [float(g_c[1])], [float(g_c[0])]])
-    ilo = jnp.array([[3.0], [0.0], [2.0], [0.0], [0.0], [1.0]])
-    ihi = ilo
-    return MixedIntervalPolynomial(real_coeffs=real, interval_coeffs=Interval(lower=ilo, upper=ihi))
-
-
-class _PatchedTaylor:
-    """Mimics the autobound TaylorBounds object: exposes `.polynomial_enclosure`."""
-    def __init__(self, poly):
-        self.polynomial_enclosure = poly
-
-
-def fake_taylor_bounds(x, x_trust_region=None, trust_region_size=None):
-    half = jnp.asarray(trust_region_size) / 2.0
-    poly = make_quadratic_poly(np.asarray(x), np.asarray(half))
-    return _PatchedTaylor(poly)
-
-
-def main():
-    # Surface that *would* use autobound. We monkey-patch taylor_bounds since the
-    # autobound tracer doesn't support `slice` ops on raw jnp polynomials.
-    def fn_2arg(_p, x):
-        return jnp.array([f_np(x)])  # shape (1,) to match MLP convention
-
-    surface = jnpboundedImplicit(
-        autobounds_max_degree=2,
-        fn=fn_2arg,
-        level_set=0.0,
-        dim=3,
+def quadratic(params, position):
+    quadratic_weights, linear_weights, field_offset = params
+    return (
+        jnp.dot(quadratic_weights, position**2) + jnp.dot(linear_weights, position) + field_offset
     )
-    surface.taylor_bounds = fake_taylor_bounds
 
-    lower = jnp.array([0.4, -0.6, -0.1])
-    upper = jnp.array([0.6, -0.4, 0.1])
 
-    # Analytic reference over the box (dense grid)
-    N = 31
-    g = [np.linspace(float(lower[i]), float(upper[i]), N) for i in range(3)]
-    xx, yy, zz = np.meshgrid(*g, indexing='ij')
-    pts = np.stack([xx, yy, zz], axis=-1)
-    f_grid = f_np(pts)
-    g_grid = grad_f_np(pts)
+class BoxQueryTests(unittest.TestCase):
+    def setUp(self):
+        self.params = (jnp.array([1.0, 2.0, 3.0]), jnp.array([4.0, 5.0, 6.0]), jnp.array(7.0))
+        self.surface = jnpboundedImplicit(
+            fn=quadratic, dim=3, level_set=0.0, autobounds_max_degree=2, use_warp=False
+        )
+        self.lower = jnp.array([0.4, -0.6, -0.1])
+        self.upper = jnp.array([0.6, -0.4, 0.1])
 
-    # Test box_bounds
-    lo, hi = surface.box_bounds(None, lower, upper)
-    print(f"box_bounds:        [{float(lo):.4f}, {float(hi):.4f}]")
-    print(f"  analytic:        [{f_grid.min():.4f}, {f_grid.max():.4f}]")
-    assert float(lo) <= f_grid.min() + 1e-4, "box_bounds lower not provably-valid"
-    assert float(hi) >= f_grid.max() - 1e-4, "box_bounds upper not provably-valid"
+    def test_box_and_parameter_updates(self):
+        box_bounds_query = jax.jit(self.surface.box_bounds)
+        field_lower_bound, field_upper_bound = box_bounds_query(self.params, self.lower, self.upper)
+        points = jnp.stack(
+            jnp.meshgrid(
+                *[
+                    jnp.linspace(axis_lower_bound, axis_upper_bound, 5)
+                    for axis_lower_bound, axis_upper_bound in zip(self.lower, self.upper)
+                ],
+                indexing="ij",
+            ),
+            axis=-1,
+        ).reshape(-1, 3)
+        reference_field_values = jax.vmap(lambda position: quadratic(self.params, position))(points)
+        self.assertLessEqual(float(field_lower_bound), float(reference_field_values.min()))
+        self.assertGreaterEqual(float(field_upper_bound), float(reference_field_values.max()))
+        shifted_parameters = (*self.params[:2], self.params[2] + 2.0)
+        shifted_field_lower_bound, shifted_field_upper_bound = box_bounds_query(
+            shifted_parameters, self.lower, self.upper
+        )
+        np.testing.assert_allclose(
+            [
+                shifted_field_lower_bound - field_lower_bound,
+                shifted_field_upper_bound - field_upper_bound,
+            ],
+            [2.0, 2.0],
+            atol=2e-6,
+        )
+        self.assertEqual(int(self.surface.classify_box(self.params, self.lower, self.upper)), 1)
+        self.assertEqual(
+            int(self.surface.classify_box(self.params, -jnp.ones(3) * 3, jnp.ones(3) * 3)), 0
+        )
+        if hasattr(box_bounds_query, "_cache_size"):
+            self.assertEqual(box_bounds_query._cache_size(), 1)
 
-    # Test classify_box: function is ~13 over this box, well above level_set=0
-    sign = surface.classify_box(None, lower, upper)
-    print(f"classify_box:      {int(sign)}  (analytic +1)")
-    assert int(sign) == 1
+    def test_subboxes_share_one_parent_bound(self):
+        subbox_lower_corners = jnp.stack([self.lower, (self.lower + self.upper) / 2])
+        subbox_upper_corners = jnp.stack([(self.lower + self.upper) / 2, self.upper])
+        enclosure_build_calls = []
+        build_taylor_enclosure = self.surface.taylor_bounds
 
-    # Move to a box straddling the level set
-    lower2 = jnp.array([-3.0, -3.0, -3.0])
-    upper2 = jnp.array([3.0, 3.0, 3.0])
-    f_grid2 = f_np(np.stack(np.meshgrid(*[np.linspace(-3, 3, 21)]*3, indexing='ij'), axis=-1))
-    sign2 = surface.classify_box(None, lower2, upper2)
-    print(f"classify_box big:  {int(sign2)}  (f range [{f_grid2.min():.2f},{f_grid2.max():.2f}], analytic 0)")
-    assert int(sign2) == 0
+        def record_enclosure_build(*args, **kwargs):
+            enclosure_build_calls.append(1)
+            return build_taylor_enclosure(*args, **kwargs)
 
-    # Test box_grad_bounds
-    glo, ghi = surface.box_grad_bounds(None, lower, upper)
-    print(f"box_grad_bounds:")
-    for i in range(3):
-        gmin = g_grid[..., i].min()
-        gmax = g_grid[..., i].max()
-        print(f"  axis {i}: [{float(glo[i]):.4f}, {float(ghi[i]):.4f}]  analytic: [{gmin:.4f}, {gmax:.4f}]")
-        assert float(glo[i]) <= gmin + 1e-4
-        assert float(ghi[i]) >= gmax - 1e-4
+        self.surface.taylor_bounds = record_enclosure_build
+        np.testing.assert_array_equal(
+            self.surface.classify_subcubes(
+                self.params, self.lower, self.upper, subbox_lower_corners, subbox_upper_corners
+            ),
+            [1, 1],
+        )
+        self.assertEqual(len(enclosure_build_calls), 1)
 
-    print("\nALL CHECKS PASSED")
+    def test_actual_function_derivative_enclosures(self):
+        for power in (3, 4):
+            with self.subTest(power=power):
+                surface = jnpboundedImplicit(
+                    fn=lambda field_parameters, position: jnp.sum(
+                        field_parameters * position**power
+                    ),
+                    dim=1,
+                    level_set=0.0,
+                    autobounds_max_degree=2,
+                    use_warp=False,
+                )
+                for derivative_order, derivative_bounds_query in [
+                    (1, surface.box_grad_bounds),
+                    (2, surface.box_hessian_bounds),
+                ]:
+                    derivative_lower_bound, derivative_upper_bound = jax.jit(
+                        derivative_bounds_query
+                    )(jnp.ones(1), -jnp.ones(1), jnp.ones(1))
+                    position = jnp.linspace(-1.0, 1.0, 17)
+                    reference_derivative_values = (
+                        power * position ** (power - 1)
+                        if derivative_order == 1
+                        else power * (power - 1) * position ** (power - 2)
+                    )
+                    self.assertLessEqual(
+                        float(derivative_lower_bound.reshape(())),
+                        float(reference_derivative_values.min()),
+                    )
+                    self.assertGreaterEqual(
+                        float(derivative_upper_bound.reshape(())),
+                        float(reference_derivative_values.max()),
+                    )
+
+    def test_ray_and_empty_sphere_nonzero_level(self):
+        surface = jnpboundedImplicit(
+            fn=lambda radius, position: jnp.sum(position**2) - radius,
+            dim=3,
+            level_set=0.25,
+            autobounds_max_degree=2,
+            use_warp=False,
+        )
+        params, ray_origin, ray_direction, trust_region_size = (
+            jnp.array(0.75),
+            jnp.array([2.0, 0.0, 0.0]),
+            jnp.array([-1.0, 0.0, 0.0]),
+            jnp.array(4.0),
+        )
+        field_residual, ray_step_parameter, uses_trust_region_exit, field_gradient = jax.jit(
+            surface.ray_step_with_grad
+        )(params, ray_origin, ray_direction, trust_region_size)
+        np.testing.assert_allclose(field_residual, 3.0)
+        np.testing.assert_allclose(field_gradient, [4.0, 0.0, 0.0])
+        np.testing.assert_allclose(ray_step_parameter, 0.98, atol=2e-6)
+        self.assertFalse(bool(uses_trust_region_exit))
+        empty_sphere_field_residual, radius, next_trust_region_size = jax.jit(surface.empty_sphere)(
+            params, ray_origin, trust_region_size
+        )
+        np.testing.assert_allclose(empty_sphere_field_residual, field_residual)
+        self.assertTrue(np.isfinite(radius) and 0 <= radius <= trust_region_size / 2)
+        self.assertTrue(np.isfinite(next_trust_region_size) and next_trust_region_size > 0)
+        np.testing.assert_allclose(
+            jax.jit(jax.vmap(surface.ray_step, in_axes=(None, 0, 0, None)))(
+                params,
+                jnp.stack([ray_origin, ray_origin]),
+                jnp.stack([ray_direction, ray_direction]),
+                trust_region_size,
+            )[1],
+            [0.98, 0.98],
+            atol=2e-6,
+        )
+
+    def test_unsupported_derivatives_do_not_use_value_polynomial(self):
+        surface = jnpboundedImplicit(
+            fn=lambda field_parameters, position: jnp.sum(field_parameters * position * position),
+            dim=1,
+            level_set=0.0,
+            autobounds_max_degree=2,
+            use_warp=False,
+        )
+        with self.assertRaisesRegex(NotImplementedError, "not a valid fallback"):
+            surface.box_hessian_bounds(jnp.ones(1), -jnp.ones(1), jnp.ones(1))
 
 
 if __name__ == "__main__":
-    main()
+    unittest.main()
