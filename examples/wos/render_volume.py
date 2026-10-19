@@ -181,7 +181,7 @@ def volume_samples(grid, n=500, seed=0):
 
 # ---------------------------------------------------------------------- orbit
 def orbit(example, name, title, layer, *, normal, extent_points, static=None,
-          camera=(2.2, -2.6, 1.6), frames=600, sweeps=2, still=True):
+          camera=(2.2, -2.6, 1.6), frames=600, sweeps=2, still=True, on_frame=None, still_t=0.):
     """Shared video mechanism for every view.
 
     The camera makes one full turn at its radius and height over `frames`
@@ -189,6 +189,9 @@ def orbit(example, name, title, layer, *, normal, extent_points, static=None,
     the shape (nothing clipped) and sweeps back and forth `sweeps` times down
     to the 10% depth quantile of `extent_points`. Writes <example>/<name>_orbit.mp4 and,
     if still, <example>/<name>.png with the plane through the origin.
+    on_frame(t), t in [0, 1), runs before each frame's layer (still_t for the
+    still): time-dependent views update their data there. sweeps=0 keeps the
+    plane beyond the shape, so nothing is clipped.
     """
     normal = np.asarray(normal, float) / np.linalg.norm(normal)
     depth = np.asarray(extent_points) @ normal
@@ -203,7 +206,9 @@ def orbit(example, name, title, layer, *, normal, extent_points, static=None,
     up = (0., 0., 1.)
     actors = []
     if still:
-        actors = layer(p, normal, np.zeros(3))
+        if on_frame is not None:
+            on_frame(still_t)
+        actors = layer(p, normal, np.zeros(3) if sweeps else hi_s * normal)
         p.camera_position = [tuple(camera), (0., 0., 0.), up]
         p.screenshot(folder / f"{name}.png")
     radius, height = float(np.hypot(camera[0], camera[1])), float(camera[2])
@@ -215,6 +220,8 @@ def orbit(example, name, title, layer, *, normal, extent_points, static=None,
         s = hi_s - (hi_s - lo_s) * 0.5 * (1. - np.cos(2 * np.pi * sweeps * t))  # back and forth
         for actor in actors:
             p.remove_actor(actor)
+        if on_frame is not None:
+            on_frame(t)
         actors = layer(p, normal, s * normal)
         a = start + 2 * np.pi * t
         p.camera_position = [(radius * np.cos(a), radius * np.sin(a), height), (0., 0., 0.), up]
