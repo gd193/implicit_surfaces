@@ -6,12 +6,12 @@ import time
 import timeit
 import math
 from numbers import Integral
-from typing import Callable, Tuple, TypeVar, Generic, Optional, Any, Union, cast
+from typing import Callable, Tuple, Generic, Optional, Any, cast
 from functools import partial
 import abc
 
 from surfaces.queries import EmptySphereQuery
-from sphereWalker.types import (WalkerState, WalkerOutput, DifferentialWalkerState, GradientWalkerState,
+from sphereWalker.types import (WalkerState, WalkerOutput, DifferentialWalkerState, GradientWalkerState, StateT,
                                 WalkerTermination as WT, WalkerDiagnostics)
 from utils.jnp_array_compaction import (
     uniform_size_generator,
@@ -43,9 +43,6 @@ weight_greens_fn_select = {
     2: weighted_greens_fn_1ball,
     3: weighted_greens_fn_2ball,
 }
-
-StateT = TypeVar('StateT', bound=Union[WalkerState, GradientWalkerState, DifferentialWalkerState])
-
 
 @partial(jax.jit, static_argnames=('new_size',))
 def _compact_step(states, parents, is_active, new_size):

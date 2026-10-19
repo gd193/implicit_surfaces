@@ -27,6 +27,18 @@ class EmptySphere(NamedTuple):
     next_trust_region: jax.Array
 
 
+class StarRadius(NamedTuple):
+    radius: jax.Array
+    status: jax.Array  # utils.types.Termination: EXIT means a valid radius
+
+
+class SurfaceHit(NamedTuple):
+    distance: jax.Array
+    position: jax.Array
+    normal: jax.Array  # meaningful only for HIT
+    status: jax.Array  # HIT, EXIT (clear segment), or explicit failure
+
+
 class RayQuery:
     """Adapt a backend's query and chosen TR policy once, outside JIT.
 

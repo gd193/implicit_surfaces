@@ -37,6 +37,36 @@ class ImplicitSurface(Surface):
         return self.fn(params, x).squeeze() - self.level_set
     
     
+    def inward_direction(self, params, position, direction, normal) -> jnp.ndarray:
+        """Fold a uniform unit direction into the local inward angular region.
+
+        Default: smooth-boundary hemisphere. Nonsmooth surfaces must override
+        this operation; the integrator still owns the random sphere sample.
+        """
+        return jnp.where(jnp.dot(direction, normal) > 0, -direction, direction)
+
+    def star_radius(
+        self, params, position, radius_cap, *, on_boundary=False, normal=None
+    ):
+        """Safe star radius for the interior of this Neumann surface.
+
+        Optional capability; implementations must handle boundary-centered queries.
+        Returns StarRadius with EXIT on success, INVALID/MAX_STEPS on failure.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support star radii")
+
+    def intersect_ray(
+        self, params, origin, direction, max_distance, *, on_boundary=False
+    ):
+        """First hit on a bounded unit ray, excluding its starting contact.
+
+        Returns SurfaceHit. EXIT proves the segment is clear; incomplete queries
+        must not return EXIT. Normals point outward from the enclosed domain.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support bounded intersections"
+        )
+
     @abc.abstractmethod
     def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray,
                      upper_lower_flag: Optional[jnp.ndarray]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:

@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 
 from .base import implicitSurface
+from .primitives import sdfnd
 
 
 class lipschitzImplicit(implicitSurface):
@@ -64,3 +65,35 @@ class sdfImplicit(lipschitzImplicit):
     """
     def __init__(self, **kwargs):
         super().__init__(lipschitz_bound=1.0, level_set=0.0, **kwargs)
+
+    def normal_at(self, params, x):
+        if self.fn is sdfnd.bbox_sdf:
+            return sdfnd.box_normal_at(params, x)
+        if self.fn is sdfnd.sphere_sdf:
+            return sdfnd.sphere_normal_at(params, x)
+        return super().normal_at(params, x)
+
+    def inward_direction(self, params, position, direction, normal):
+        if self.fn is sdfnd.bbox_sdf:
+            return sdfnd.box_inward_direction(params, position, direction, normal)
+        return super().inward_direction(params, position, direction, normal)
+
+    def star_radius(self, params, position, radius_cap, *, on_boundary=False, normal=None):
+        if self.fn is sdfnd.bbox_sdf:
+            return sdfnd.box_star_radius(params, position, radius_cap,
+                                         on_boundary=on_boundary, normal=normal)
+        if self.fn is sdfnd.sphere_sdf:
+            return sdfnd.sphere_star_radius(params, position, radius_cap,
+                                            on_boundary=on_boundary, normal=normal)
+        return super().star_radius(params, position, radius_cap,
+                                   on_boundary=on_boundary, normal=normal)
+
+    def intersect_ray(self, params, origin, direction, max_distance, *, on_boundary=False):
+        if self.fn is sdfnd.bbox_sdf:
+            return sdfnd.box_intersect_ray(params, origin, direction, max_distance,
+                                           on_boundary=on_boundary)
+        if self.fn is sdfnd.sphere_sdf:
+            return sdfnd.sphere_intersect_ray(params, origin, direction, max_distance,
+                                              on_boundary=on_boundary)
+        return super().intersect_ray(params, origin, direction, max_distance,
+                                     on_boundary=on_boundary)
