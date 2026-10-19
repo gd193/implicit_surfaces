@@ -137,9 +137,9 @@ class RendererIntegrationTests(unittest.TestCase):
             normal_fn=lambda p,x: jnp.array([1.,0.]),
             Df=lambda p,x,g: {'a': jnp.asarray(0.)}, V_n=lambda p,x: {'a': jnp.asarray(1.)},
             offset_l=.25)
-        # x=0 fails in phase zero; x=1 reaches it then fails in phase one.
+        # x=0 exhausts phase zero; x=1 cannot certify a valid offset.
         details = differential.integrate_batch(None, positions, key, return_details=True, **options)
-        np.testing.assert_array_equal(details.termination_counts, [[0,0,3,0], [0,0,3,0], [0,0,0,3]])
+        np.testing.assert_array_equal(details.termination_counts, [[0,0,0,3], [0,0,3,0], [0,0,0,3]])
         np.testing.assert_allclose(details.contribution_sum['a'], 0.)
         with self.assertRaisesRegex(RuntimeError, 'incomplete WoS'):
             differential.integrate_batch(None, positions, key, **options)
@@ -170,6 +170,58 @@ class RendererIntegrationTests(unittest.TestCase):
             opts = {**options, 'steps_between_refill': block}
             result = differential.integrate_batch(None, jnp.zeros((1,2)), key, **opts)
             np.testing.assert_allclose(result.w['a'], 0.)
+
+        # Thin slabs force each backtracking level and explicit offset failure.
+        # x[1] selects the slab width; queries stay on that horizontal slice.
+        widths = jnp.array([.02, .008, .004, .0025, .001])
+        def slab(p, x, tr):
+            width = widths[jnp.asarray(x[1], jnp.int32)]
+            residual = jnp.maximum(x[0], -width-x[0])
+            return residual, jnp.abs(residual), tr
+        offset_solver = DifferentialWoSIntegrator(
+            empty_sphere_fn=slab, boundary_condition_fn=lambda x: x[0]*0.,
+            source_term_fn=lambda x: x[0]*0., dim=2, eps=.001, max_steps=64,
+            normal_fn=lambda p,x: jnp.array([2.,0.]),
+            Df=lambda p,x,g: {'a': x[0]*0.}, V_n=lambda p,x: {'a': x[0]*0.+1.},
+            offset_l=.01)
+        positions = jnp.stack((jnp.zeros(5), jnp.arange(5)), axis=1)
+        state = offset_solver._get_initial_state(
+            positions, jax.random.split(key, 5), 1., 5)
+        transitioned = jax.vmap(offset_solver._transition_walker, in_axes=(None,0,None))(
+            None, state, 1.)
+        np.testing.assert_allclose(transitioned.offset_length,
+                                   [.01,.005,.0025,.00125,0.], rtol=1e-6)
+        np.testing.assert_allclose(transitioned.position[:4,0],
+                                   -transitioned.offset_length[:4])
+        np.testing.assert_array_equal(transitioned.status, [0,0,0,0,WT.INVALID])
+        # Batched switching packs only boundary hits in phase 0 into chunks.
+        # Bucket 2 forces several chunks plus padding; other walkers stay put.
+        offset_solver.transition_bucket_size = 2
+        hit = jnp.array([True, False, True, True, True])
+        mixed = state._replace(status=jnp.where(hit, WT.BOUNDARY_HIT, WT.ACTIVE).astype(jnp.int32))
+        batched = offset_solver._transition_state_phases(None, mixed, 1.)
+        for leaf_b, leaf_t, leaf_m in zip(batched, transitioned, mixed):
+            expect = jnp.where(hit.reshape((-1,) + (1,) * (leaf_t.ndim - 1)), leaf_t, leaf_m)
+            np.testing.assert_array_equal(leaf_b, expect)
+        offset_solver.transition_bucket_size = 256
+        # Exact nested u=-ell isolates use of the accepted denominator.
+        derivatives = jax.vmap(offset_solver.compute_boundary_derivative,
+                              in_axes=(None,0,0,0))(
+            None, positions[:4], -transitioned.offset_length[:4],
+            transitioned.offset_length[:4])
+        np.testing.assert_allclose(derivatives['a'], -1.)
+        offset_solver.sphere_sampling_fn = lambda key,dtype: jnp.array([1.,0.], dtype=dtype)
+        details = offset_solver.integrate_batch(None, positions, key, return_details=True, **options)
+        np.testing.assert_array_equal(details.successful_samples, [3,3,3,3,0])
+        np.testing.assert_array_equal(details.termination_counts[:,WT.INVALID], [0,0,0,0,3])
+        np.testing.assert_allclose(details.contribution_sum['a'], 0.)
+        with self.assertRaisesRegex(RuntimeError, 'invalid'):
+            offset_solver.integrate_batch(None, positions, key, **options)
+        # A segment validator can reject an interior endpoint across a gap.
+        offset_solver.offset_segment_fn = lambda p,b,q: jnp.asarray(False)
+        rejected = offset_solver._transition_walker(None, jax.tree.map(lambda x:x[0], state), 1.)
+        self.assertEqual(int(rejected.status), WT.INVALID)
+        self.assertEqual(float(rejected.offset_length), 0.)
 
         # Padding must not dispatch duplicate samples. Check both output and
         # actual task counts, including the compile warm-up entry point.
