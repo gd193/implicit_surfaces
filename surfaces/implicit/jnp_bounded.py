@@ -25,7 +25,7 @@ from utils.jnpbound_box_bounds import (
     box_grad_bounds as _poly_box_grad_bounds,
     box_hessian_bounds as _poly_box_hessian_bounds,
     box_value_bounds as _poly_box_value_bounds,
-    polynomial_subbox_bounds as _poly_subbox_bounds,
+    polynomial_subboxes_bounds as _poly_subboxes_bounds,
 )
 from rayMarcher.utils import ray_aabb_intersection_inside
 
@@ -75,6 +75,11 @@ class jnpboundedImplicit(implicitSurface):
         # supported activations (softplus / swish / sigmoid). GPU-only fast path; harmless
         # but unused on CPU. Default True since neural-surface workloads are the common case.
         composition_implementation = "warp_fused" if self.use_warp else "jax"
+        # Box ranges of the Taylor polynomial (step guard, box/subcube classification)
+        # use the Warp range kernel on GPU; elsewhere, and for unsupported layouts, JAX eval.
+        self.range_implementation = (
+            "warp" if self.use_warp and jax.default_backend() == "gpu" else "jax"
+        )
         self.taylor_bounds = jb.taylor_bounds(
             self.fn,
             max_degree=self.autobounds_max_degree,
@@ -116,7 +121,7 @@ class jnpboundedImplicit(implicitSurface):
         # (hi < level OR lo > level), the surface cannot lie inside → take the full
         # forward exit step without root-finding, no shrink.
         half_extent_vec = half_tr * jnp.ones_like(ray_origin)
-        lo_box, hi_box = _poly_box_value_bounds(poly, half_extent_vec)
+        lo_box, hi_box = _poly_box_value_bounds(poly, half_extent_vec, self.range_implementation)
         decided = jnp.logical_or(hi_box - self.level_set < 0,
                                  lo_box - self.level_set > 0)
 
@@ -183,7 +188,7 @@ class jnpboundedImplicit(implicitSurface):
         matching the box exactly, instead of the circumscribed sphere.
         """
         poly, half_extent = self._box_polynomial(lower, upper)
-        lo, hi = _poly_box_value_bounds(poly, half_extent)
+        lo, hi = _poly_box_value_bounds(poly, half_extent, self.range_implementation)
         lo = lo - self.level_set
         hi = hi - self.level_set
         return jnp.where(hi < 0, jnp.int8(-1),
@@ -192,7 +197,7 @@ class jnpboundedImplicit(implicitSurface):
 
     def box_bounds(self, params, lower, upper):
         poly, half_extent = self._box_polynomial(lower, upper)
-        return _poly_box_value_bounds(poly, half_extent)
+        return _poly_box_value_bounds(poly, half_extent, self.range_implementation)
 
 
     def box_grad_bounds(self, params, lower, upper):
@@ -203,7 +208,8 @@ class jnpboundedImplicit(implicitSurface):
                 f"(got {self.autobounds_max_degree})"
             )
         poly, half_extent = self._box_polynomial(lower, upper)
-        return _poly_box_grad_bounds(poly, dim=self.dim, half_extent=half_extent)
+        return _poly_box_grad_bounds(poly, dim=self.dim, half_extent=half_extent,
+                                     implementation=self.range_implementation)
 
 
     def box_hessian_bounds(self, params, lower, upper):
@@ -214,7 +220,8 @@ class jnpboundedImplicit(implicitSurface):
                 f"(got {self.autobounds_max_degree})"
             )
         poly, half_extent = self._box_polynomial(lower, upper)
-        return _poly_box_hessian_bounds(poly, dim=self.dim, half_extent=half_extent)
+        return _poly_box_hessian_bounds(poly, dim=self.dim, half_extent=half_extent,
+                                        implementation=self.range_implementation)
 
 
     def classify_subcubes(self, params, parent_lower, parent_upper, sub_lowers, sub_uppers):
@@ -229,14 +236,12 @@ class jnpboundedImplicit(implicitSurface):
         delta_lowers = sub_lowers - parent_center[None, :]
         delta_uppers = sub_uppers - parent_center[None, :]
 
-        def classify_one(delta_lo, delta_hi):
-            lo, hi = _poly_subbox_bounds(poly, delta_lo, delta_hi)
-            lo = lo - self.level_set
-            hi = hi - self.level_set
-            return jnp.where(hi < 0, jnp.int8(-1),
-                    jnp.where(lo > 0, jnp.int8(1), jnp.int8(0)))
-
-        return jax.vmap(classify_one)(delta_lowers, delta_uppers)
+        lo, hi = _poly_subboxes_bounds(poly, delta_lowers, delta_uppers,
+                                       self.range_implementation)
+        lo = lo - self.level_set
+        hi = hi - self.level_set
+        return jnp.where(hi < 0, jnp.int8(-1),
+                jnp.where(lo > 0, jnp.int8(1), jnp.int8(0)))
 
 
     def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray, upper_lower_flag: Optional[jnp.ndarray]=None) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:

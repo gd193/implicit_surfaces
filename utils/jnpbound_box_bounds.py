@@ -4,8 +4,9 @@ A degree-k Taylor enclosure produced by `jb.taylor_bounds` over a trust region
 encodes provably-valid bounds on the function value and on its first (k - 1)
 derivatives across the entire trust region. These helpers extract those bounds.
 
-The canonical primitive is `mp_eval(poly, Interval(...))` which returns a
-provably-valid (lo, hi) of `poly` over the input interval. For derivative
+The canonical primitive is `range_over_box(poly, lower, upper)` which returns a
+provably-valid (lo, hi) of `poly` over the input box. `implementation="warp"`
+uses the Warp range kernel where supported, else `eval` (also the "jax" path). For derivative
 bounds we differentiate the polynomial symbolically (coefficient reshuffle)
 and evaluate the resulting derivative polynomial over the same interval.
 
@@ -19,7 +20,7 @@ from typing import Tuple
 
 import jax.numpy as jnp
 
-from jnp_bounds.mixed_polynomials_arithmetic import eval as mp_eval
+from jnp_bounds.mixed_polynomials_arithmetic import range_over_box
 from jnp_bounds.types import Interval, MixedIntervalPolynomial
 from jnp_bounds.utils.dim_degree_coefficients import (
     dim_coeff_len_to_degree_cache,
@@ -40,18 +41,20 @@ def _interval_eval_to_pair(res) -> Tuple[jnp.ndarray, jnp.ndarray]:
 
 
 def box_value_bounds(poly: MixedIntervalPolynomial,
-                     half_extent: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+                     half_extent: jnp.ndarray,
+                     implementation: str = "jax") -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Provably-valid (lo, hi) of f over the box [center - half_extent, center + half_extent].
 
     Polynomial must be in local coords centred at the box centre.
     """
-    res = mp_eval(poly, Interval(lower=-half_extent, upper=half_extent))
+    res = range_over_box(poly, -half_extent, half_extent, implementation=implementation)
     return _interval_eval_to_pair(res)
 
 
 def polynomial_subbox_bounds(poly: MixedIntervalPolynomial,
                              delta_lower: jnp.ndarray,
-                             delta_upper: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+                             delta_upper: jnp.ndarray,
+                             implementation: str = "jax") -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Provably-valid (lo, hi) of `poly(δ)` for δ ∈ [delta_lower, delta_upper].
 
     Generalises `box_value_bounds` to off-centre sub-boxes inside the trust region.
@@ -59,8 +62,25 @@ def polynomial_subbox_bounds(poly: MixedIntervalPolynomial,
     accepts any sub-box [delta_lower, delta_upper] inside that domain. Used to classify all
     N sub-boxes of a parent cell from one Taylor pass.
     """
-    res = mp_eval(poly, Interval(lower=delta_lower, upper=delta_upper))
+    res = range_over_box(poly, delta_lower, delta_upper, implementation=implementation)
     return _interval_eval_to_pair(res)
+
+
+def polynomial_subboxes_bounds(poly: MixedIntervalPolynomial,
+                               delta_lowers: jnp.ndarray,
+                               delta_uppers: jnp.ndarray,
+                               implementation: str = "jax") -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """`polynomial_subbox_bounds` for N sub-boxes [N, dim] at once, as (lo[N], hi[N]).
+
+    One range launch over all boxes; the polynomial is shared, not broadcast per box.
+    """
+    res = range_over_box(poly, delta_lowers, delta_uppers,
+                         implementation=implementation, batched=True)
+    n = delta_lowers.shape[0]
+    if isinstance(res, Interval):
+        return res.lower.reshape(n), res.upper.reshape(n)
+    out = jnp.reshape(res, (n,))
+    return out, out
 
 
 def differentiate_poly(poly: MixedIntervalPolynomial,
@@ -148,7 +168,8 @@ def differentiate_poly(poly: MixedIntervalPolynomial,
 
 def box_grad_bounds(poly: MixedIntervalPolynomial,
                     dim: int,
-                    half_extent: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+                    half_extent: jnp.ndarray,
+                    implementation: str = "jax") -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Per-axis (lo[d], hi[d]) bound on ∇f over the box.
 
     Requires input polynomial degree >= 2 (otherwise gradient is constant or
@@ -164,7 +185,7 @@ def box_grad_bounds(poly: MixedIntervalPolynomial,
     his = []
     for axis in range(dim):
         d_poly = differentiate_poly(poly, dim, axis)
-        lo, hi = box_value_bounds(d_poly, half_extent)
+        lo, hi = box_value_bounds(d_poly, half_extent, implementation)
         los.append(lo)
         his.append(hi)
     return jnp.stack(los), jnp.stack(his)
@@ -172,7 +193,8 @@ def box_grad_bounds(poly: MixedIntervalPolynomial,
 
 def box_hessian_bounds(poly: MixedIntervalPolynomial,
                        dim: int,
-                       half_extent: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+                       half_extent: jnp.ndarray,
+                       implementation: str = "jax") -> Tuple[jnp.ndarray, jnp.ndarray]:
     """(lo[d, d], hi[d, d]) bound on Hessian over the box. Requires degree >= 3."""
     in_degree = _poly_input_degree(poly, dim)
     if in_degree < 3:
@@ -187,7 +209,7 @@ def box_hessian_bounds(poly: MixedIntervalPolynomial,
         his = []
         for axis_b in range(dim):
             d2 = differentiate_poly(d1, dim, axis_b)
-            lo, hi = box_value_bounds(d2, half_extent)
+            lo, hi = box_value_bounds(d2, half_extent, implementation)
             los.append(lo)
             his.append(hi)
         lo_rows.append(jnp.stack(los))
