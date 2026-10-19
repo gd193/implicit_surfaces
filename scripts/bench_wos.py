@@ -156,7 +156,6 @@ def sample_interior_points(n, bbox_half, isolevel, mlp, seed):
         key=jr.PRNGKey(seed),
         aa=aa, bb=bb,
         num_points=n,
-        # batch_size must be ≤ num_points (sample_points_batched dynamic_update_slice).
         batch_size=min(max(4096, n), n),
     )
     if not bool(ok):
