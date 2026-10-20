@@ -26,3 +26,6 @@ assets/meshes/*.zip
 algo_paper/
 scripts/*
 assets/
+
+# WoSt geometry, gradient, and mixed-boundary regressions
+!scripts/test_star_walker.py

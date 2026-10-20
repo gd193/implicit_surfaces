@@ -59,10 +59,11 @@ next trust region, as in WoS; such retries count toward `max_steps`.
 
 ## Optional surface protocol
 
-The existing `Surface` base defines two optional operations, both defaulting
-to `NotImplementedError`. `WoStIntegrator` checks for their implementation at
-construction. Generic `sdfImplicit(fn=...)`, Lipschitz, bounded, and neural
-implicit surfaces remain unsupported as Neumann geometry. They can still
+The existing `ImplicitSurface` base defines two optional operations, both
+defaulting to `NotImplementedError`. `sdfImplicit` implements them for
+`bbox_sdf` and `sphere_sdf`. Other primitive functions raise when queried;
+Lipschitz, bounded, and neural implicit surfaces remain unsupported as
+Neumann geometry unless they override these operations. They can still
 supply the Dirichlet empty-sphere query.
 
 ```python
@@ -99,8 +100,12 @@ starts fail explicitly. `on_boundary=True` asserts an actual boundary contact;
 it is not a request to project an arbitrary point onto the surface.
 
 The surface also supplies its existing `signed_value` and `normal_at` operations
-for recognizing exact initial boundary starts. Subsequent contacts retain the
-returned normal. `ray_step` is unchanged: it is a local marching increment,
+for recognizing exact wall points, checked at every step: boundary starts,
+tangent gradient first-ball samples, and clear rays whose endpoint rounds onto
+the wall. Checking only starts and reported hits left about 1 in 10^8 steps
+invalid, which failed a 181M-walk solve. Reported hits retain their returned
+normal. The box normal uses an unrolled comparison rather than `jnp.argmin`,
+which lowered to a separate GPU reduction kernel. `ray_step` is unchanged: it is a local marching increment,
 whereas `intersect_ray` is a complete bounded query.
 
 For convex box/sphere interiors, the radius query returns the cap after checking
@@ -143,6 +148,28 @@ successful samples. `return_details=True` exposes these counts; ordinary solves
 raise if any walks are incomplete. Internal direct `step` calls take
 `WoStParameters(problem_params, neumann_params)`.
 
+### Batch driver
+
+- **Refill interval:** walkers run in blocks of `steps_between_refill` steps
+  between refills. A walker that finishes inside a block still costs a full
+  step per remaining block step. Use about half the mean walk length,
+  `return_details=True` reports it as `nSteps`. Measured fastest (GPU, 65,536
+  lanes):
+  - 8 for the 2D fluid examples (12–14 steps per walk);
+  - 16–32 for the 3D box/sphere case (44 steps per walk).
+- **Dead lanes:** once no tasks remain, lanes without a sample are marked done
+  and `INVALID`. Phase transitions (differential WoS) cannot revive these
+  lanes. There is no device-side skip for a block of only dead lanes. On GPU
+  a `lax.cond` copies its predicate to the host each round, and skipping one
+  flush block per solve did not measurably help.
+- **Gradient WoSt blocks:** a block runs one masked step. After it, if no live
+  walker still lacks its first ball, the rest of the block runs
+  continuation-only steps. This skips the first-ball work, and the results
+  equal the masked steps exactly.
+- **Host syncs:** the host reads the refill count and the live count once per
+  round, as one two-element array (one device-to-host copy). The gradient
+  block's `lax.cond` adds one more predicate copy per round.
+
 ## Numerical limits and verification
 
 ### Plotted analytical example
@@ -156,7 +183,7 @@ u(r) = (a² - r²)/4 + (b²/2) log(r/a),   a=0.3, b=1
 ```
 
 ```sh
-JAX_PLATFORMS=cpu python examples/wos/wost_annulus.py --output assets/renders/wost/annulus
+python examples/wos/wost_annulus.py --output assets/renders/wost/annulus
 ```
 
 The example saves a PNG/PDF comparison, raw arrays in `annulus_data.npz`, and
@@ -166,6 +193,142 @@ field uses 512 walks per grid point by default. A separate radial profile uses
 95% Student-t intervals over batch means. These show sampling uncertainty, not
 the finite-epsilon or floating-point bias. All walks must complete before a
 plot is produced.
+
+## Gradients and the mixed-boundary channel
+
+`WoStGradientIntegrator` lives beside `WoStIntegrator` in `star_integrator.py`
+and accepts the same arguments plus optional `control_fn(x)`. It returns
+`(N, value_components, dim)` spatial gradients. It shares the first-ball
+mean-value gradient weights with `WoSGradientIntegrator`, then uses the
+ordinary WoSt step for the value continuation. The first ball is capped by
+both Dirichlet and Neumann empty-sphere distances, not silhouette distance.
+Initial points on either boundary are invalid for this estimator. An undecided
+zero-radius query updates the trust region and counts toward `max_steps`, but
+does not consume the first-ball estimate or subtract its control value.
+`control_fn(x)` optionally subtracts a local value from the continued value
+estimate. With `control_takes_params=True`, the callback receives `(params, x)`
+and its output must broadcast to the boundary value shape. This allows a
+dynamic pilot without capturing a mutable field in a compiled closure. The
+pilot must be fixed independently of the current gradient samples. It reduces
+solution-offset variance; random source/path variance can still grow strongly
+as the first radius shrinks.
+
+```sh
+python examples/wos/fluid_neumann.py
+```
+
+This solves inviscid 2D vorticity transport in `[0, 4] x [-1, 1]` using the
+existing `make_transport` and `open_boundaries` functions from `fluid.py`.
+The streamfunction is Dirichlet on the inlet and horizontal walls, and has
+homogeneous Neumann data on the outlet. The box is constructed with
+`sdfImplicit(fn=bbox_sdf, dim=2)`; a three-side clearance callback supplies
+the Dirichlet query. Dirichlet termination takes precedence on shared faces.
+
+The exact steady solution is `psi = y + 0.08 sin(pi y)`,
+`u = (1 + 0.08 pi cos(pi y), 0)`, and `omega = 0.08 pi^2 sin(pi y)`.
+The example first solves this full Poisson problem at 39 interior points,
+including points near the outlet, using independent batches for sampling
+intervals. In the time-dependent run it solves for the departure from this
+known background, with zero Dirichlet data and source `omega - omega_base`,
+and adds back the analytical velocity. An eight-step stationary check tests
+this decomposition and transport. A Gaussian vortex perturbation is then
+advected down the channel.
+
+A sparse finite-difference mixed-boundary Poisson solve provides a comparison,
+with a separate manufactured-solution grid-refinement check. Both simulations
+use the same semi-Lagrangian transport, grid, and boundary reconstruction.
+At walls the normal velocity is zero and residual tangential velocity is
+copied from the adjacent row; the outlet has zero transverse velocity and
+horizontal velocity copied from the adjacent column. These are grid boundary
+approximations, separate from the interior WoSt gradient estimator. No-slip
+vorticity generation and viscosity are not enabled. This Neumann outlet is an
+approximation; the example does not establish independence from outlet location.
+
+Outputs in `assets/renders/wos/fluid_neumann/` include analytical validation,
+side-by-side vortex snapshots, MP4/GIF animation, raw arrays, termination
+counts, steady drift, and errors against the finite-difference reference.
+Use `--output`, `--nx`, `--ny`, `--walks`, `--steps`, and `--dt` to vary the run;
+`--render-only` redraws saved data. The example rejects incomplete walks.
+Sampling intervals do not include epsilon, transport, or grid bias. Independent
+Monte Carlo gradient estimates are not exactly divergence-free on the grid;
+the metrics include the initial interior discrete-divergence RMS for both solvers.
+
+## Circle-wave walls with open Neumann ends
+
+The existing `examples/wos/fluid_circle_wave.py` now uses constant Dirichlet
+streamfunction `+Q/2` on the top wave and `-Q/2` on the bottom wave. Only the
+wave field supplies Dirichlet clearance; `bbox_sdf` supplies the Neumann
+geometry. In this channel the horizontal box edges are outside the fluid,
+so the active Neumann boundary consists of the left/right openings. These
+impose zero transverse velocity, with horizontal velocity determined by the
+solution rather than a prescribed inlet profile.
+
+```sh
+JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false python examples/wos/fluid_circle_wave.py --solve
+python examples/wos/fluid_circle_wave.py --render
+```
+
+A cached harmonic WoSt gradient solve establishes the baseline flow. A
+pointwise wall-distance control variate reduces its sampling noise. Dynamic
+WoSt solves use zero Dirichlet values and the current grid vorticity, and their
+velocity is added to the baseline. Before each gradient solve, a separate
+64-walk scalar WoSt solve of the same vorticity supplies a streamfunction pilot
+at the solved nodes in the `--pilot-columns` (default 3) columns next to each
+Neumann end, where first balls are capped by the end distance and variance is
+largest. Its random stream is separate from all gradient solves; the pilot is
+zero elsewhere, and grid sampling supplies `control_fn(params, x)`. Set
+`--pilot-walks 0` to disable it.
+The pilot does not change the PDE or remove all source/path variance.
+Localized, time-dependent body forcing
+drives vortices at the upper and lower cavity mouths. Its curl enters the
+vorticity equation as `d omega/dt + u.dot(grad omega) = forcing`; it does not
+replace the WoSt velocity or change boundary data. Gaussian forcing patches
+reverse with a 3.6-unit period and staggered phases along the channel.
+Slower throughflow (`Q=0.35`) allows exchange between the channel and cavities.
+Cyan/coral dyes enter only through two inlet streaks, placed at quantiles of
+the computed incoming flux. Initially the cavities contain no dye and the
+vorticity is zero. Incoming vorticity is zero. Left-end dye/vorticity data are
+applied only where horizontal velocity is positive; outflow and stagnation
+retain the transported values. Right-end backflow receives clean fluid.
+The ends still intersect partial cavities and allow recirculation through
+those openings. There is no no-slip wall-vorticity
+source or viscosity in this example. Use `--forcing-strength 0` for an
+otherwise matched steady-throughflow control; its zero vorticity perturbation
+is evaluated exactly without dynamic walks.
+
+The shared `make_transport` helper accepts optional `fluid_fn(x)` to clip
+each RK2 half-segment to its last fluid point using 12 bisections when its
+endpoint is solid. It no longer returns the whole trace to its starting point.
+This permits travel up to wall contact but is not tangential sliding or an
+exact characteristic boundary treatment. Thin solids between fluid endpoints
+can still be missed. `inflow_only=True` enables the left-end condition above;
+other examples retain the prescribed-inlet default. Within one unresolved grid cell of the wave walls,
+velocity is extrapolated from solved points and its normal component is
+attenuated toward the wall. The box-end horizontal velocity is extrapolated
+from the adjacent column and transverse velocity is zero. These operations
+are grid boundary approximations, not certified surface tracing. Independent
+Monte Carlo velocity samples retain divergence noise; no projection or
+velocity smoothing is applied. Bilinear transport also diffuses dye/vorticity.
+
+The default run uses 173x67 nodes, 512 walks per solved point per dynamic step,
+32768 baseline walks, 64 scalar pilot walks in three end columns, and 900 steps at dt=0.012. The
+cached baseline remains noisy: quadrupling its former 8192-walk budget halves
+Monte Carlo standard deviation in the usual independent-sampling scaling,
+but does not remove fixed realization error or grid divergence. All query
+points still use independent random samples; shared-random-number coupling
+is not implemented and would need a measured spatial-difference comparison.
+Full defaults are intended for a GPU; the backend and walk budget are printed
+before the solve. Options `--nx`, `--ny`, `--walks`,
+`--baseline-walks`, `--pilot-walks`, `--pilot-columns`, `--steps`, `--dt`, `--flux`, `--forcing-strength`,
+`--forcing-period`, `--output`
+control the example. `--solve` solves and renders; `--render` uses saved arrays.
+Artifacts include `fluid.mp4`, `fluid.gif`, dye snapshots, baseline speed/flux
+plots, raw `volume.npz`, and `metrics.json`. Incomplete walks cause an error;
+solid-cell dye/vorticity and cross-sectional flow-rate error are reported.
+Deep-cavity dye diagnostics use fluid nodes with `abs(y)>0.4`, excluding
+the partial cavities at the open ends. They report mean total dye and the
+fraction above concentration 0.05; these measure penetration, not a claim
+of physically resolved molecular mixing.
 
 ### Solver checks
 

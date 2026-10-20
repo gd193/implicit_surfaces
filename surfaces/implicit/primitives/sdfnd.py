@@ -124,8 +124,15 @@ def _result(origin, direction, cap, t, normal, valid):
 
 def box_normal_at(params, x):
     lo, hi = _box(params, x)
-    distances = jnp.concatenate((jnp.abs(x - lo), jnp.abs(x - hi)))
-    nearest = jnp.argmin(distances)
+    # Unrolled first-index argmin (NaN wins, as in jnp.argmin). jnp.argmin
+    # lowers to its own GPU reduction kernel, a hotspot in per-step use.
+    distances = [jnp.abs(x[i] - lo[i]) for i in range(x.shape[0])]
+    distances += [jnp.abs(x[i] - hi[i]) for i in range(x.shape[0])]
+    best, nearest = distances[0], jnp.asarray(0, jnp.int32)
+    for i, value in enumerate(distances[1:], 1):
+        take = (value < best) | (jnp.isnan(value) & ~jnp.isnan(best))
+        best = jnp.where(take, value, best)
+        nearest = jnp.where(take, i, nearest)
     # At an edge/corner this is a deterministic representative face normal,
     # not a unique geometric normal. inward_direction uses all active faces.
     n = jax.nn.one_hot(nearest % x.shape[0], x.shape[0], dtype=x.dtype)

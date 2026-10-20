@@ -15,10 +15,11 @@ import jax.random as jr
 from sphereWalker.integrator import (
     BaseIntegrator,
     finish_step,
+    first_ball_gradient_weights,
     get_scatter_fn,
     walker_status,
 )
-from sphereWalker.types import StarWalkerState
+from sphereWalker.types import GradientStarWalkerState, StarWalkerState
 from sphereWalker.types import WalkerTermination as WT
 from surfaces.implicit.base import ImplicitSurface
 from utils.sampling_primitives import unit_interval
@@ -44,7 +45,10 @@ def sample_green_radius(key, dim, dtype):
     if dim == 2:
         return jnp.sqrt(u[0] * u[1])
     if dim == 3:
-        return jnp.sort(u)[1]
+        # Min/max median, not jnp.sort: on GPU, batched sorts of >= 8192 lanes
+        # lower to CUB segmented sorts (~46 ms per step at 65536 lanes).
+        a, b, c = u
+        return jnp.maximum(jnp.minimum(a, b), jnp.minimum(jnp.maximum(a, b), c))
     raise ValueError("WoSt supports dimensions 2 and 3")
 
 
@@ -133,14 +137,18 @@ class WoStIntegrator(BaseIntegrator[StarWalkerState]):
         )
 
     def step(self, params: WoStParameters, state: StarWalkerState) -> StarWalkerState:
-        residual, clearance, next_tr = self.empty_sphere(
-            params.problem, state.position, state.trust_region_size
-        )
+        query = self.empty_sphere(params.problem, state.position, state.trust_region_size)
+        return self._star_step(params, state, query)
+
+    def _star_step(self, params, state, query):
+        residual, clearance, next_tr = query
         status = walker_status(
             state, residual, clearance, next_tr, self.eps, self.max_steps
         )
         active = status == WT.ACTIVE
-        # Recognize exact initial boundary points; later contacts carry their normal.
+        # Recognize exact wall points every step, not only reported hits: starts,
+        # tangent first-ball samples, and clear rays whose endpoint rounds onto
+        # the wall (~1e-8 per step, enough to fail long solves).
         value = self.neumann_surface.signed_value(params.neumann, state.position)
         on_boundary = state.on_neumann | (value == 0)
         initial_normal = self.neumann_surface.normal_at(params.neumann, state.position)
@@ -263,3 +271,125 @@ class WoStIntegrator(BaseIntegrator[StarWalkerState]):
             current_states,
             fresh,
         )
+
+
+class WoStGradientIntegrator(WoStIntegrator):
+    """Spatial gradient from an interior first ball, then ordinary WoSt paths.
+
+    The first radius is bounded by BOTH Dirichlet and Neumann clearance.
+    Starts on either boundary are invalid. Zero-clearance retries count toward
+    max_steps without consuming the first-ball estimator. Output shape follows
+    WoSGradientIntegrator: (points, value components, dim).
+
+    control_fn(x) subtracts a fixed local value from the continuation estimate.
+    With control_takes_params=True, call control_fn(problem_params, x); its
+    output must broadcast to the boundary value shape. A stochastic pilot must
+    be independent of the current gradient directions. This removes offset
+    variance, not all continuation/source variance at small first radii.
+    """
+
+    def __init__(self, *args, control_fn=None, control_takes_params=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.control_fn = control_fn
+        # A dynamic pilot travels with problem parameters, never a mutable JIT closure.
+        # Parameterized controls must broadcast to the boundary value shape.
+        self.control_takes_params = control_takes_params
+
+    def _get_initial_state(self, positions, keys, init_tr, buffer_size):
+        base = super()._get_initial_state(positions, keys, init_tr, buffer_size)
+        dtype = positions.dtype
+        point = jax.ShapeDtypeStruct((self.dim,), dtype)
+        shape = jnp.broadcast_shapes((1,), jax.eval_shape(self.boundary_condition_fn, point).shape)
+        if self.control_fn is not None and not self.control_takes_params:
+            shape = jnp.broadcast_shapes(shape, jax.eval_shape(self.control_fn, point).shape)
+        base = base._replace(w=jnp.zeros((buffer_size,) + shape, dtype))
+        return GradientStarWalkerState(
+            *base,
+            grad_weight=jnp.zeros((buffer_size, self.dim), dtype),
+            grad_source=jnp.zeros((buffer_size,) + shape + (self.dim,), dtype),
+        )
+
+    def step(self, params, state):
+        # A sampled unit direction always gives a nonzero gradient weight.
+        # nSteps cannot identify initialization: zero-clearance retries count too.
+        first = ~jnp.any(state.grad_weight != 0)
+        # Masks, not lax.cond: under vmap cond runs both branches, which would
+        # repeat the (possibly expensive) Dirichlet query.
+        query = self.empty_sphere(params.problem, state.position, state.trust_region_size)
+        initial = self._first_step(params, state, query)
+        walked = self._star_step(params, state, query)
+        return jax.tree.map(lambda a, b: jnp.where(first, a, b), initial, walked)
+
+    def _step_block(self, params, states, steps, unroll):
+        # The masked step computes the first-ball branch for every lane. After
+        # one step, only stalled first balls still need it, and no lane can
+        # newly need it before the next refill, so a block with none left runs
+        # continuation-only steps (same states as the masked step).
+        step = jax.vmap(self.step, in_axes=(None, 0))
+        states = step(params, states)
+        if steps == 1:
+            return states
+        pending = jnp.any(~jnp.any(states.grad_weight != 0, axis=-1) & ~states.done_flag)
+
+        def continuation(state):
+            query = self.empty_sphere(params.problem, state.position, state.trust_region_size)
+            return self._star_step(params, state, query)
+
+        def run(advance):
+            return lambda s: jax.lax.fori_loop(1, steps, lambda i, t: advance(t), s, unroll=unroll)
+
+        return jax.lax.cond(
+            pending,
+            run(lambda s: step(params, s)),
+            run(jax.vmap(continuation)),
+            states,
+        )
+
+    def _first_step(self, params, state, query):
+        residual, clearance, next_tr = query
+        nvalue, nclearance, _ = self.neumann_surface.empty_sphere(
+            params.neumann, state.position, state.trust_region_size
+        )
+        radius = jnp.minimum(jnp.minimum(clearance, nclearance), self.max_radius)
+        status = walker_status(state, residual, radius, next_tr, self.eps, self.max_steps)
+        valid = jnp.isfinite(nvalue) & (nvalue < 0) & jnp.isfinite(nclearance) & (nclearance >= 0)
+        status = jnp.where(~valid | (status == WT.BOUNDARY_HIT), WT.INVALID, status)
+        active = status == WT.ACTIVE
+        advance = active & (radius > 0)
+        radius = jnp.where(advance, radius, 0.0)
+        sphere_key, source_key, direction_key, next_key = jr.split(state.rng_key, 4)
+        direction = self.sphere_sampling_fn(sphere_key, dtype=state.position.dtype)
+        source_direction = self.sphere_sampling_fn(direction_key, dtype=state.position.dtype)
+        unit_radius = unit_interval(source_key, state.position.dtype)
+        source = self._source(
+            params.problem, state.position + radius * unit_radius * source_direction
+        )
+        if jnp.asarray(source).shape != ():
+            raise ValueError("WoSt currently requires a scalar source term")
+        weight, source_weight = first_ball_gradient_weights(
+            self.dim, radius, unit_radius, direction, source_direction, source
+        )
+        if self.control_fn is None:
+            control = 0.0
+        elif self.control_takes_params:
+            control = self.control_fn(params.problem, state.position)
+            if jnp.broadcast_shapes(jnp.shape(control), state.w.shape) != state.w.shape:
+                raise ValueError("Parameterized control must broadcast to the boundary value shape")
+        else:
+            control = self.control_fn(state.position)
+        updated = state._replace(
+            position=state.position + radius * direction,
+            nSteps=state.nSteps + active.astype(jnp.int32),
+            w=jnp.where(advance, state.w - control, state.w),
+            trust_region_size=jnp.where(active, next_tr, state.trust_region_size),
+            rng_key=next_key,
+            grad_weight=jnp.where(advance, weight, state.grad_weight),
+            grad_source=jnp.where(advance, source_weight, state.grad_source),
+            status=jnp.asarray(status, jnp.int32),
+            done_flag=status != WT.ACTIVE,
+        )
+        return finish_step(state, updated)
+
+    def _compute_accumulator_update(self, params, state):
+        value = state.w + self.boundary_condition_fn(state.position)
+        return state.grad_source + value[..., None] * state.grad_weight

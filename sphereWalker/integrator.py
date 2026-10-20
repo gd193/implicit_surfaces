@@ -1,5 +1,6 @@
 import jax 
 import jax.numpy as jnp
+import numpy as np
 import jax.random as jr
 
 import time
@@ -176,6 +177,11 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                       init_trust_region_size: float, N_total_samples: int) -> StateT:
         pass
 
+    def _step_block(self, params: Any, states: StateT, steps: int, unroll: bool) -> StateT:
+        """Advance the whole buffer `steps` times."""
+        step = jax.vmap(self.step, in_axes=(None, 0))
+        return jax.lax.fori_loop(0, steps, lambda i, s: step(params, s), states, unroll=unroll)
+
     @partial(jax.jit, static_argnames=['self','active_buffer_size', 'N_total_samples', 'n_samples', 'steps_between_refill', 'unroll_loop'])
     def _process_active_states(self,
                                # dynamic state
@@ -263,13 +269,21 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
             N_total_samples
         )
 
-        # Step loop
-        def loop_body(i, states):
-           return jax.vmap(self.step, in_axes=(None, 0))(params, states)
-        
-        final_states = jax.lax.fori_loop(0, steps_between_refill, loop_body, refilled_states, unroll=unroll_loop)
+        # Lanes without a sample are dead: frozen and terminal. A phase
+        # transition selects on status, so it cannot revive them either.
+        dead = next_parents == -1
+        refilled_states = refilled_states._replace(
+            done_flag=refilled_states.done_flag | dead,
+            status=jnp.where(dead, WT.INVALID, refilled_states.status).astype(refilled_states.status.dtype))
 
-        return final_states, next_parents, updated_accumulated_w, updated_accumulated_nSteps, n_free
+        # No lax.cond to skip a dead block: on GPU its predicate is copied to
+        # the host every round, and the skipped work (one block per solve) is
+        # not measurable.
+        final_states = self._step_block(params, refilled_states, steps_between_refill, unroll_loop)
+
+        # One array, so the host reads both counters with a single copy.
+        counters = jnp.stack([n_free, jnp.sum(next_parents != -1, dtype=n_free.dtype)])
+        return final_states, next_parents, updated_accumulated_w, updated_accumulated_nSteps, counters
 
     def pre_warm_compaction_buckets(self,
                                     params: Any,
@@ -307,7 +321,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         accumulated_w = (self._get_accumulator_initial(params, positions_padded),
                          jnp.zeros((N_positions, len(WT)), dtype=jnp.int32))
         accumulated_nSteps = jnp.zeros((N_positions,), dtype=jnp.int32)
-        next_task_index_dummy = jnp.array(N_total_samples, dtype=jnp.int32)
+        next_task_index_dummy = np.int32(N_total_samples)  # same arg type as integrate_batch
         # All-valid parents so the kernel takes its main branch (some processing
         # happens, no refills since next_task_index ≥ N_total).
         for buf in compaction_sizes:
@@ -417,8 +431,9 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         init_task_indices = jnp.arange(active_buffer_size, dtype=jnp.int32)
         active_parent_indices = init_task_indices // n_samples
         
-        # Force strong type for loop variable
-        next_task_index = jnp.array(active_buffer_size, dtype=jnp.int32)
+        # Host-side task cursor and live count: one device read per round.
+        next_task_index = active_buffer_size
+        active_count_int = active_buffer_size
 
         rng_keys_init = jax.vmap(lambda i: jr.fold_in(rng_key, i))(init_task_indices)
         active_states = self._get_initial_state(
@@ -440,13 +455,9 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         process_calls = 0
         while True:
             t_iter = time.perf_counter() if diag_log is not None else None
-            # Reading active_parent_indices != -1 forces a host sync; we
-            # measure that cost as part of `ms_sync` for diagnostics.
-            t_sync_start = time.perf_counter() if diag_log is not None else None
-            active_count_int = int(jnp.sum(active_parent_indices != -1))
-            ms_sync = (time.perf_counter() - t_sync_start) * 1000 if diag_log is not None else 0.0
             if active_count_int == 0 and next_task_index >= N_total_samples:
                 break
+            n_active_before = active_count_int
 
             # Drain-phase compaction: only kick in once dispatch is done (pending
             # tasks exhausted). Until then, completed slots are refilled with
@@ -475,12 +486,13 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                 ms_compact = (time.perf_counter() - t_compact_start) * 1000
 
             t_process_start = time.perf_counter() if diag_log is not None else None
-            active_states, active_parent_indices, accumulated_w, accumulated_nSteps, n_filled = self._process_active_states(
+            (active_states, active_parent_indices, accumulated_w, accumulated_nSteps,
+             counters) = self._process_active_states(
                 active_states,
                 active_parent_indices,
                 accumulated_w,
                 accumulated_nSteps,
-                next_task_index,
+                np.int32(next_task_index),
                 params,
                 positions_padded,
                 rng_key,
@@ -494,11 +506,16 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
             if diag_log is not None:
                 jax.block_until_ready(active_states.position)
                 ms_process = (time.perf_counter() - t_process_start) * 1000
+            # The round's only host sync: the next loop test needs both values.
+            t_sync_start = time.perf_counter() if diag_log is not None else None
+            n_filled, active_count_int = (int(v) for v in jax.device_get(counters))
+            if diag_log is not None:
+                ms_sync = (time.perf_counter() - t_sync_start) * 1000
                 ms_total = (time.perf_counter() - t_iter) * 1000
                 diag_log.append(dict(
                     outer_idx=process_calls,
                     buffer_size=int(current_buffer_size),
-                    n_active=int(active_count_int),
+                    n_active=int(n_active_before),
                     next_task_index=int(next_task_index),
                     ms_total=ms_total,
                     ms_compact=ms_compact,
@@ -635,6 +652,16 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         )
 
 
+def first_ball_gradient_weights(dim, radius, unit_radius, sphere_direction,
+                                ball_direction, source):
+    """Mean-value gradient weights; source radius is uniform in the first ball."""
+    safe_radius = jnp.where(radius > 0, radius, 1.0)
+    weight = (dim / safe_radius) * sphere_direction
+    source_weight = (jnp.asarray(source)[..., None]
+                     * (radius * (1.0 - unit_radius ** dim)) * ball_direction)
+    return weight, source_weight
+
+
 class WoSGradientIntegrator(BaseIntegrator[GradientWalkerState]):
     """
     Walk on Spheres estimate of the spatial gradient of u (-Lap u = f, u = g).
@@ -669,7 +696,9 @@ class WoSGradientIntegrator(BaseIntegrator[GradientWalkerState]):
         """
         ### compute empty sphere
         fn_val, radius, new_trust_region_size = self.empty_sphere(params, state.position, state.trust_region_size)
-        first = state.nSteps == 0
+        # A sampled unit direction always gives a nonzero gradient weight.
+        # nSteps cannot identify initialization: zero-radius retries count too.
+        first = ~jnp.any(state.grad_weight != 0)
 
         ### sample new position on sphere and inside ball
         sphere_key, ball_key, direction_key, new_key = jr.split(state.rng_key, 4)
@@ -696,12 +725,12 @@ class WoSGradientIntegrator(BaseIntegrator[GradientWalkerState]):
                                    f * self.weighted_greens_fn(r=sample_ball_radius, R=radius),
                                    jnp.asarray(0.0, dtype=state.w.dtype))
         control = jnp.asarray(0.0, dtype) if self.control_fn is None else self.control_fn(state.position)
-        new_w = jnp.where(first, state.w - control, state.w + source_contrib)
-        safe_radius = jnp.where(has_ball, radius, 1.0)
-        new_grad_weight = jnp.where(first & has_ball, (self.dim / safe_radius) * sphere_direction,
+        new_w = jnp.where(first, jnp.where(has_ball, state.w - control, state.w),
+                          state.w + source_contrib)
+        first_weight, first_source = first_ball_gradient_weights(
+            self.dim, radius, unit_radius, sphere_direction, ball_direction, f)
+        new_grad_weight = jnp.where(first & has_ball, first_weight,
                                     state.grad_weight)
-        first_source = (jnp.asarray(f)[..., None] * (radius * (1.0 - unit_radius ** self.dim))
-                        * ball_direction)
         new_grad_source = jnp.where(first & has_ball, first_source, state.grad_source)
         new_w = jnp.where(is_done, state.w, new_w)
 

@@ -41,6 +41,20 @@ class GradientWalkerState(NamedTuple):
     grad_weight: jnp.ndarray # shape (dim, ), (d/R) n of the first sphere
     grad_source: jnp.ndarray # shape value_shape + (dim, ), first-ball source term
 
+
+class GradientStarWalkerState(NamedTuple):
+    position: jnp.ndarray
+    nSteps: jnp.ndarray
+    w: jnp.ndarray
+    trust_region_size: jnp.ndarray
+    rng_key: jnp.ndarray
+    done_flag: jnp.ndarray
+    status: jnp.ndarray
+    on_neumann: jnp.ndarray
+    normal: jnp.ndarray
+    grad_weight: jnp.ndarray
+    grad_source: jnp.ndarray
+
 class DifferentialWalkerState(NamedTuple):
     position: jnp.ndarray # shape (dim, )
     boundary_hit_position: jnp.ndarray # shape (dim, ) # position where boundary was hit in phase 0
@@ -55,7 +69,8 @@ class DifferentialWalkerState(NamedTuple):
 
 StateT = TypeVar(
     'StateT',
-    bound=Union[WalkerState, GradientWalkerState, DifferentialWalkerState, StarWalkerState],
+    bound=Union[WalkerState, GradientWalkerState, DifferentialWalkerState,
+                StarWalkerState, GradientStarWalkerState],
 )
 
 
