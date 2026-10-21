@@ -16,7 +16,7 @@ import jnp_bounds.autobounds as autobounds
 from .base import implicitSurface
 from jnp_bounds import interval_arithmetic as interval_arithmetic
 from jnp_bounds import mixed_polynomials_arithmetic as polynomial_arithmetic
-from jnp_bounds.polynomial_roots import RootStatus, envelope_roots, first_root
+from jnp_bounds.polynomial_roots import RootStatus, first_root, ray_envelope_roots
 from utils.jnpbound_empty_sphere import empty_sphere_2nd_order_tensor
 
 
@@ -248,11 +248,15 @@ class jnpboundedImplicit(implicitSurface):
         # The library owns interval-envelope construction, solving and root filtering.
         maximum_direction_component = jnp.max(jnp.abs(ray_direction))
         ray_exit_parameter = trust_region_half_width / (maximum_direction_component + 1e-12)
-        envelope_root_result = envelope_roots(
-            polynomial_arithmetic.restrict_to_line(polynomial_enclosure, ray_direction),
+        envelope_root_result = ray_envelope_roots(
+            polynomial_enclosure,
+            ray_direction,
             side=upper_lower_flag,
             domain=(0.0, ray_exit_parameter),
             level=self.level_set,
+            implementation=(
+                self.range_implementation if self.autobounds_max_degree <= 2 else "jax"
+            ),
         )
         has_envelope_root, envelope_root_parameter = first_root(envelope_root_result)
         has_envelope_root, envelope_root_parameter = (

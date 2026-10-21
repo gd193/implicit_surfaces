@@ -83,6 +83,7 @@ class SimpleIntegrator:
         background_colors = (1.0 - t[:, None]) * jnp.array([1.0, 1.0, 1.0]) + t[:, None] * background_color
         hit_normals = jax.vmap(self.surface_normal_fn, in_axes=(None, 0))(params, output_states.ray_position)
         test_colors = jnp.clip(0.5 * hit_normals + 0.5, 0.0, 1.0)
+        test_colors = 0.6 + 0.4 * test_colors  # Mix surface colors with 60% white.
         colors = jnp.where(output_states.hit_flag[:, None], test_colors, background_colors)
         return colors, output_states.niter
 
