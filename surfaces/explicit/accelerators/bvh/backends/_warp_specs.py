@@ -51,6 +51,15 @@ QUERY_SPECS = {
     "sample_boundary_kernel": WarpQuerySpec(
         "_warp_sampling", 3, 5,
         payload_fields=(*_SPATIAL_FIELDS, "tri_normal", "tri_area", "node_area")),
+    "robin_radius_kernel": WarpQuerySpec(
+        "_warp_robin", 2, 2, 64,
+        payload_fields=(
+            "node_lower", "node_upper", "node_left", "node_right",
+            "node_leaf_offset", "node_leaf_count", "node_robin_bounds",
+            "node_silhouette_offset", "node_silhouette_count", "silhouette_refs",
+            "silhouette_v0", "silhouette_v1", "silhouette_n0", "silhouette_n1",
+            "node_cone_axis", "node_cone_sin_cos", "node_cone_radius",
+            "tri_v0", "tri_e1", "tri_e2", "tri_normal", "tri_robin_bounds")),
 }
 
 

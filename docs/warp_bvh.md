@@ -39,6 +39,11 @@ point, distance, face, status = closest(tree.payload, points)
 
 silhouette = jax.jit(tree.backend.closest_silhouette_with_status)
 point, distance, edge, status = silhouette(tree.payload, points, max_distance=0.5)
+
+robin = tree.with_robin_coefficients(1.0)
+radius, status = jax.jit(robin.backend.robin_radius_with_status)(
+    robin.payload, points, 0.5,
+)
 ```
 
 Vectors have shape `(3,)` or `(..., 3)`; scalar bounds broadcast to query
@@ -55,9 +60,11 @@ such as `tree.closest_point(points)` are also available.
 | `aabb_overlap_with_status(lower, upper)` | Triangle-AABB broad-phase overlap, status |
 | `closest_silhouette_with_status(points, max_distance=inf)` | Point, distance, original edge ID, status |
 | `star_radius_with_status(points, cap)` | Minimum of cap and silhouette distance, status |
+| `robin_radius_with_status(points, cap)` | Robin star-radius bound, status |
 | `sample_boundary(points, radii, randoms)` | Point, normal, area PDF, original face ID, status |
 
-The last three require SNCH. Status **1** means found, **0** means valid
+Silhouette, star-radius, Robin and sampling queries require SNCH.
+Status **1** means found, **0** means valid
 miss/empty geometry, and **-1** means invalid input or failure. Equal computed
 distances or ray parameters choose the smaller original ID. Closest point
 reports failure when squared distances exceed float32 range.
@@ -69,11 +76,18 @@ length; the ray parameter is a distance only for unit directions. Silhouette
 queries include tangencies and open edges; misses return distance `inf` and
 edge `-1`.
 
-Star radius returns status 1 for a valid cap even without a closer silhouette.
-It provides a geometric bound; Robin coefficients and a full WoSt solver are
-not implemented. Boundary sampling consumes three uniforms in `[0,1)`.
+Star and Robin radius queries return status 1 for a valid cap even without a
+smaller bound. They provide geometric bounds; a full explicit-mesh WoSt solver
+is not implemented. Boundary sampling consumes three uniforms in `[0,1)`.
 Samples outside the sphere are null events with PDF/status 0 and no retry;
 retain them in estimators. Accepted PDFs include branch probabilities.
+
+`with_robin_coefficients(minimum, maximum=None)` shares geometry and accepts
+nonnegative scalar or per-face bounds in original face order. Omitting `maximum`
+sets constant face coefficients. Host updates round intervals outward to float32.
+Zero recovers Neumann; infinity gives closest-surface distance. Finite coefficients
+also restrict faces without silhouettes ([Walkin' Robin, Algorithms 2–4](https://imaging.cs.cmu.edu/walk_on_stars_robin/index_files/paper.pdf)).
+The estimator evaluates actual coefficients and boundary data.
 
 ## Construction and extension
 
@@ -84,7 +98,7 @@ absorbing/reflecting subset trees for mixed boundary conditions.
 
 Topology, leaf ranges and packed indices are validated. Leaf size is an SAH
 threshold; retained leaves can exceed it. Tree depth must fit
-`max_stack_depth`, at most 64. Rebuild after geometry changes. Refit and
+`max_stack_depth`, at most 64. Rebuild after geometry changes. Geometry refit and
 automatic differentiation are not supported.
 
 Warp's built-in `wp.jax_kernel` handles FFI, compilation and ownership. The
@@ -102,7 +116,8 @@ Adapted ray helpers retain Warp's
 ```sh
 python -m pytest -q tests/spatial_trees/test_warp_bvh.py \
     tests/spatial_trees/test_backend_discovery.py \
-    tests/spatial_trees/test_warp_payload.py
+    tests/spatial_trees/test_warp_payload.py \
+    tests/spatial_trees/test_warp_robin.py
 
 python -m scripts.bench.spatial_trees.warp_bvh_device \
     --backend bvh.snch.warp --queries closest_silhouette \
@@ -114,6 +129,7 @@ compilation, transfers, readback and CPU dispatch. Results go to
 `assets/benchmark_results/`.
 
 Recorded [ray](benchmarks/warp_bvh_device.json),
-[closest-point](benchmarks/closest_point.json) and
-[silhouette](benchmarks/closest_silhouette.json) comparisons retain samples,
+[closest-point](benchmarks/closest_point.json),
+[silhouette](benchmarks/closest_silhouette.json) and
+[Robin](benchmarks/robin_radius.json) comparisons retain samples,
 timing scope and measured-source hashes.

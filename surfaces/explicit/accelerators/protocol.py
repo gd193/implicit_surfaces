@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
-from typing import Generic, NamedTuple, Tuple, Type, TypeVar
+from typing import Generic, Tuple, Type, TypeVar
 
 import jax.numpy as jnp
 
@@ -36,6 +36,7 @@ class Backend(abc.ABC, Generic[P]):
     has_silhouette_query: bool = False
     has_ray_interval: bool = False
     has_boundary_sampling: bool = False
+    has_robin_query: bool = False
 
 
     @abc.abstractmethod

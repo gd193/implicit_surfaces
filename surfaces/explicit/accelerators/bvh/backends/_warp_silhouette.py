@@ -3,31 +3,24 @@ from __future__ import annotations
 
 import warp as wp
 
+from ._warp_geometry import _NATIVE_POINT_GEOMETRY, _NATIVE_SEGMENT_CLOSEST
 from ._warp_specs import STACK_CAPACITY
 
 
-_NATIVE_SILHOUETTE = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r"""
-    const wp::vec3 p = query;
+_NATIVE_SILHOUETTE = (f"constexpr int stack_capacity = {STACK_CAPACITY};\n"
+                      + _NATIVE_POINT_GEOMETRY + _NATIVE_SEGMENT_CLOSEST + r"""
     out_point.data[qi] = wp::vec3(0.0f);
     out_distance.data[qi] = INFINITY;
     out_edge_id.data[qi] = -1;
     out_status.data[qi] = 0;
-    const float limit = 3.4028234e38f;
-    if (!(p[0] == p[0] && p[1] == p[1] && p[2] == p[2]
-          && wp::abs(p[0]) < limit && wp::abs(p[1]) < limit
-          && wp::abs(p[2]) < limit) || cap != cap || cap < 0.0f) {
+    if (!finite3(p) || cap != cap || cap < 0.0f) {
         out_status.data[qi] = -1;
         return;
     }
     if (node_count == 0) return;
 
-    const auto box_distance_sq = [&](int node) {
-        const wp::vec3 lower = node_lower.data[node];
-        const wp::vec3 upper = node_upper.data[node];
-        const float dx = wp::max(wp::max(lower[0] - p[0], 0.0f), p[0] - upper[0]);
-        const float dy = wp::max(wp::max(lower[1] - p[1], 0.0f), p[1] - upper[1]);
-        const float dz = wp::max(wp::max(lower[2] - p[2], 0.0f), p[2] - upper[2]);
-        return dx * dx + dy * dy + dz * dz;
+    const auto node_distance_sq = [&](int node) {
+        return box_distance_sq(node_lower.data[node], node_upper.data[node]);
     };
     const auto cone_may_have_silhouette = [&](int node) {
         const wp::vec2 angles = node_cone_sin_cos.data[node];
@@ -61,10 +54,10 @@ _NATIVE_SILHOUETTE = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r""
     wp::vec3 best_point(0.0f);
     int best_edge = -1;
     bool failed = false;
-    if (box_distance_sq(0) <= best_d2 && cone_may_have_silhouette(0)) {
+    if (node_distance_sq(0) <= best_d2 && cone_may_have_silhouette(0)) {
         while (node >= 0 || stack_size > 0) {
             if (node < 0) node = stack[--stack_size];
-            if (box_distance_sq(node) > best_d2) {
+            if (node_distance_sq(node) > best_d2) {
                 node = -1;
                 continue;
             }
@@ -79,12 +72,7 @@ _NATIVE_SILHOUETTE = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r""
                     const float side1 = wp::dot(view, silhouette_n1.data[edge]);
                     // Include tangencies and open edges (n1=-n0).
                     if ((side0 <= 0.0f && side1 >= 0.0f) || (side0 >= 0.0f && side1 <= 0.0f)) {
-                        const wp::vec3 ab = silhouette_v1.data[edge] - a;
-                        const float length2 = wp::dot(ab, ab);
-                        float t = 0.0f;
-                        if (length2 > 0.0f)
-                            t = wp::clamp(wp::dot(view, ab) / length2, 0.0f, 1.0f);
-                        const wp::vec3 candidate = a + t * ab;
+                        const wp::vec3 candidate = closest_segment(a, silhouette_v1.data[edge]);
                         const wp::vec3 delta = candidate - p;
                         const float d2 = wp::dot(delta, delta);
                         if (d2 <= best_d2 && (d2 < best_d2 || best_edge < 0 || edge < best_edge)) {
@@ -99,8 +87,8 @@ _NATIVE_SILHOUETTE = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r""
             }
             const int left = node_left.data[node];
             const int right = node_right.data[node];
-            const float left_d2 = box_distance_sq(left);
-            const float right_d2 = box_distance_sq(right);
+            const float left_d2 = node_distance_sq(left);
+            const float right_d2 = node_distance_sq(right);
             bool visit_left = left_d2 <= best_d2;
             bool visit_right = right_d2 <= best_d2;
             if (visit_left) visit_left = cone_may_have_silhouette(left);
@@ -135,7 +123,7 @@ _NATIVE_SILHOUETTE = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r""
         out_edge_id.data[qi] = best_edge;
         out_status.data[qi] = 1;
     }
-"""
+""")
 
 
 @wp.func_native(_NATIVE_SILHOUETTE)
