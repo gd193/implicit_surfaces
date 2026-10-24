@@ -46,6 +46,14 @@ def test_warp_query_bridge_preserves_cpu_execution(backend_name):
     t, face, hit, status = map(np.asarray, outputs)
     assert float(t) == 1 and int(face) == 0 and bool(hit) and int(status) == 1
 
+    cp_outputs = jax.jit(accel.backend.closest_point_with_status)(
+        payload, origin)
+    assert all(value.device.platform == "cpu" for value in cp_outputs)
+    cp, distance, face, status = map(np.asarray, cp_outputs)
+    np.testing.assert_allclose(cp, [.2, .2, 0.], rtol=0, atol=2e-6)
+    np.testing.assert_allclose(distance, 1., rtol=0, atol=2e-6)
+    assert int(face) == 0 and int(status) == 1
+
 
 def _closest_triangle(p, tri):
     a, b, c = tri
@@ -151,6 +159,53 @@ def test_warp_bvh_closest_point_matches_numpy_oracle(backend_name):
         np.testing.assert_allclose(dist[k], d, atol=3e-5, rtol=3e-5)
         np.testing.assert_allclose(np.linalg.norm(cp[k] - q), dist[k], atol=3e-5)
         assert 0 <= ids[k] < len(f)
+
+
+@pytest.mark.parametrize("backend_name", WARP_BVHS, ids=WARP_BVHS)
+def test_warp_bvh_closest_point_equal_distance_tie_across_children(backend_name):
+    # Equal bounds: face 0 in the later child must win.
+    v = np.asarray([[1, 0, 0], [2, 0, 0], [1, 1, 0],
+                    [-2, 0, 0], [-1, 0, 0], [-1, 1, 0]], np.float32)
+    f = np.asarray([[0, 1, 2], [3, 4, 5]], np.int32)
+    accel = BVHAccelerator.build(
+        _mesh(v, f)[0], backend_name, Config(leaf_size_threshold=1))
+    payload = accel.payload
+
+    left = np.asarray(payload.node_left)
+    right = np.asarray(payload.node_right)
+    leaf_offset = np.asarray(payload.node_leaf_offset)
+    leaf_count = np.asarray(payload.node_leaf_count)
+    prim_ids = np.asarray(payload.prim_ids)
+    assert left[0] >= 0 and right[0] >= 0
+    assert leaf_count[left[0]] == leaf_count[right[0]] == 1
+    assert prim_ids[leaf_offset[left[0]]] == 1
+    assert prim_ids[leaf_offset[right[0]]] == 0
+
+    q = np.asarray([0., .25, 1.], np.float32)
+    query = jax.jit(lambda p, point: accel.backend.closest_point_with_status(
+        p, point))
+    cp, distance, face_id, status = map(
+        np.asarray, query(payload, jnp.asarray(q)))
+    assert int(face_id) == 0 and int(status) == 1
+    np.testing.assert_allclose(cp, [1., .25, 0.], rtol=0, atol=1e-6)
+    np.testing.assert_allclose(distance, np.sqrt(2.), rtol=0, atol=1e-6)
+
+
+@pytest.mark.parametrize("backend_name", SAH_WARP, ids=SAH_WARP)
+def test_warp_bvh_closest_point_degenerate_triangles(backend_name):
+    v = np.asarray([[0, 0, 0], [2, 0, 0], [1, 0, 0],
+                    [4, 0, 0], [4, 0, 0], [4, 0, 0]], np.float32)
+    f = np.asarray([[0, 1, 2], [3, 4, 5]], np.int32)
+    accel = _build(backend_name, v, f)
+    queries = np.asarray([[.75, 1., 0.], [4.5, 0., 0.]], np.float32)
+    cp, distance, face_id, status = map(np.asarray, jax.jit(
+        accel.closest_point_with_status)(jnp.asarray(queries)))
+
+    np.testing.assert_allclose(cp, [[.75, 0., 0.], [4., 0., 0.]],
+                               rtol=0, atol=1e-6)
+    np.testing.assert_allclose(distance, [1., .5], rtol=0, atol=1e-6)
+    np.testing.assert_array_equal(face_id, [0, 1])
+    np.testing.assert_array_equal(status, [1, 1])
 
 
 @pytest.mark.parametrize("backend_name", SAH_WARP, ids=SAH_WARP)
@@ -696,6 +751,91 @@ def test_warp_bvh_long_thin_triangle_uses_stable_projection(backend_name):
 
 
 @pytest.mark.parametrize("backend_name", WARP_BVHS, ids=WARP_BVHS)
+def test_warp_bvh_closest_point_small_oblique_triangle_from_far_query(backend_name):
+    vertices = np.asarray([[0., 0., 0.], [.03, .01, .02],
+                           [-.01, .02, .01]], np.float32)
+    faces = np.asarray([[0, 1, 2]], np.int32)
+    accel = _build(backend_name, vertices, faces)
+
+    v64 = vertices.astype(np.float64)
+    a, b, c = v64
+    normal = np.cross(b - a, c - a)
+    normal /= np.linalg.norm(normal)
+    targets = np.stack([a + .25 * (b - a) + .35 * (c - a),
+                        .5 * (a + b), c])
+    queries = np.asarray(targets + 5. * normal, np.float32)
+    oracle = [_oracle_closest(v64, faces, q.astype(np.float64))
+              for q in queries]
+    expected = np.stack([result[0] for result in oracle])
+    expected_distance = np.asarray([result[1] for result in oracle])
+
+    cp, distance, face_id = map(
+        np.asarray, jax.jit(jax.vmap(accel.closest_point))(jnp.asarray(queries)))
+    np.testing.assert_allclose(cp, expected, rtol=2e-5, atol=2e-5)
+    np.testing.assert_allclose(distance, expected_distance, rtol=2e-5, atol=2e-5)
+    np.testing.assert_array_equal(face_id, [0, 0, 0])
+
+
+@pytest.mark.parametrize("backend_name", WARP_BVHS, ids=WARP_BVHS)
+@pytest.mark.parametrize("scale", [1e-4, 1., 1e4])
+@pytest.mark.parametrize("aspect_ratio", [1., .11, .09, 1e-3, 1e-4, 1e-5])
+def test_warp_bvh_closest_point_fastpath_threshold(backend_name, scale,
+                                                aspect_ratio):
+    vertices = (scale * np.asarray([[0., 0., 0.], [1., 0., 0.],
+                                    [.25, aspect_ratio, 0.]], np.float32))
+    faces = np.asarray([[0, 1, 2]], np.int32)
+    accel = _build(backend_name, vertices, faces)
+
+    centroid = np.mean(vertices.astype(np.float64), axis=0).astype(np.float32)
+    queries = np.asarray([
+        centroid + np.asarray([0., 0., .4 * scale], np.float32),
+        np.asarray([.4 * scale, -.1 * scale, .3 * scale], np.float32),
+    ], np.float32)
+    expected_cp = np.asarray([[queries[0, 0], queries[0, 1], 0.],
+                              [queries[1, 0], 0., 0.]], np.float32)
+    expected_distance = np.asarray([
+        abs(float(queries[0, 2])),
+        np.hypot(float(queries[1, 1]), float(queries[1, 2])),
+    ], np.float32)
+
+    cp, distance, face_id = map(
+        np.asarray, jax.jit(jax.vmap(accel.closest_point))(jnp.asarray(queries)))
+    tolerance = 2e-6 * scale
+    np.testing.assert_allclose(cp, expected_cp, rtol=2e-5, atol=tolerance)
+    np.testing.assert_allclose(distance, expected_distance,
+                               rtol=2e-5, atol=tolerance)
+    np.testing.assert_array_equal(face_id, [0, 0])
+
+
+@pytest.mark.parametrize("backend_name", WARP_BVHS, ids=WARP_BVHS)
+@pytest.mark.parametrize("shift", [0, 1, 2])
+def test_warp_bvh_closest_point_obtuse_triangle_vertex_order(backend_name, shift):
+    vertices = np.asarray([[0., 0., 0.], [1., 0., 0.], [-1., .2, 0.]], np.float32)
+    faces = np.roll(np.asarray([[0, 1, 2]], np.int32), shift, axis=1)
+    accel = _build(backend_name, vertices, faces)
+    query = np.asarray([0., .05, .4], np.float32)
+    point, distance, face = map(np.asarray, jax.jit(accel.closest_point)(query))
+    np.testing.assert_allclose(point, [0., .05, 0.], rtol=0, atol=2e-6)
+    np.testing.assert_allclose(distance, .4, rtol=0, atol=2e-6)
+    assert int(face) == 0
+
+
+@pytest.mark.parametrize("backend_name", WARP_BVHS, ids=WARP_BVHS)
+def test_warp_bvh_closest_point_translated_triangle(backend_name):
+    vertices = np.asarray([[10000., 10000., 0.], [10001., 10000., 0.],
+                           [10000., 10001., 0.]], np.float32)
+    accel = _build(backend_name, vertices, [[0, 1, 2]])
+    queries = np.asarray([[10000.123, 10000.321, .4],
+                          [10000.25, 10000.5, -.3]], np.float32)
+    point, distance, face = map(np.asarray, jax.jit(accel.closest_point)(queries))
+    expected = queries.copy()
+    expected[:, 2] = 0.
+    np.testing.assert_allclose(point, expected, rtol=0, atol=2e-6)
+    np.testing.assert_allclose(distance, np.abs(queries[:, 2]), rtol=0, atol=2e-6)
+    np.testing.assert_array_equal(face, [0, 0])
+
+
+@pytest.mark.parametrize("backend_name", WARP_BVHS, ids=WARP_BVHS)
 def test_warp_bvh_status_distinguishes_invalid_from_empty(backend_name):
     v = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], np.float32)
     f = np.array([[0, 1, 2]], np.int32)
@@ -703,6 +843,11 @@ def test_warp_bvh_status_distinguishes_invalid_from_empty(backend_name):
     cp_result = accel.backend.closest_point_with_status(
         accel.payload, jnp.asarray([jnp.nan, 0., 0.]))
     assert int(cp_result[3]) == -1
+    overflow = accel.backend.closest_point_with_status(
+        accel.payload, jnp.asarray([1.e20, 0., 0.], jnp.float32))
+    point, distance, face, status = map(np.asarray, overflow)
+    np.testing.assert_array_equal(point, np.zeros(3, np.float32))
+    assert np.isinf(distance) and int(face) == -1 and int(status) == -1
     ray_result = accel.backend.first_hit_with_status(
         accel.payload, jnp.zeros((3,), jnp.float32),
         jnp.asarray([jnp.nan, 0., -1.]), jnp.float32(2.))

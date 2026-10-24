@@ -162,5 +162,5 @@
       "invalid_count": 0
     }
   ],
-  "source_note": "Measured before comment/docstring edits; executable AST unchanged."
+  "source_note": "Historical ray measurements; executable ray traversal is unchanged."
 }

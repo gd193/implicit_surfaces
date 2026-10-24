@@ -76,6 +76,30 @@ def _native_first_hit(
 
 
 @wp.kernel
+def _native_closest_point(
+    points: wp.array(dtype=wp.vec3), mesh_id: wp.uint64,
+    out_point: wp.array(dtype=wp.vec3), out_distance: wp.array(dtype=float),
+    out_id: wp.array(dtype=int), out_status: wp.array(dtype=int),
+):
+    i = wp.tid()
+    p = points[i]
+    out_point[i] = wp.vec3(0.0)
+    out_distance[i] = wp.inf
+    out_id[i] = -1
+    out_status[i] = 0
+    if not finite3(p):
+        out_status[i] = -1
+    else:
+        q = wp.mesh_query_point_no_sign(mesh_id, p, wp.inf)
+        if q.result:
+            point = wp.mesh_eval_position(mesh_id, q.face, q.u, q.v)
+            out_point[i] = point
+            out_distance[i] = wp.length(point-p)
+            out_id[i] = q.face
+            out_status[i] = 1
+
+
+@wp.kernel
 def _native_any_hit(
     origins: wp.array(dtype=wp.vec3), directions: wp.array(dtype=wp.vec3),
     min_t: wp.array(dtype=float), max_t: wp.array(dtype=float), mesh_id: wp.uint64,
@@ -136,12 +160,21 @@ def _measure(cases, n, device, launches, repeats):
             for _ in range(5):
                 launch(case)
             got = tuple(array.numpy() for array in case.outputs)
+            if case.query == "closest_point":
+                found = got[3] == 1
+                distance = np.linalg.norm(got[0][found]-case.inputs[0].numpy()[found], axis=1)
+                np.testing.assert_allclose(got[1][found], distance, atol=3e-5, rtol=3e-5)
+                assert np.all(got[2][found] >= 0)
             if case.implementation == "custom":
                 reference[case.query] = got
             elif case.query == "first_hit":
                 np.testing.assert_allclose(got[0], reference[case.query][0], atol=3e-5, rtol=3e-5)
                 for actual, expected in zip(got[1:], reference[case.query][1:], strict=True):
                     np.testing.assert_array_equal(actual, expected)
+            elif case.query == "closest_point":
+                # Native Warp uses different tie and sliver rules.
+                np.testing.assert_allclose(got[1], reference[case.query][1], atol=3e-5, rtol=3e-5)
+                np.testing.assert_array_equal(got[3], reference[case.query][3])
             else:
                 for actual, expected in zip(got, reference[case.query], strict=True):
                     np.testing.assert_array_equal(actual, expected)
@@ -169,13 +202,14 @@ def main():
                         choices=[name.removesuffix("_kernel") for name in QUERY_SPECS])
     parser.add_argument("--counts", nargs="+", type=int, default=[65536])
     parser.add_argument("--subdivisions", type=int, default=5)
+    parser.add_argument("--point-distribution", choices=("gaussian", "shell", "interior", "center"), default="gaussian")
     parser.add_argument("--leaf-size", type=int, default=4)
     parser.add_argument("--radius", type=float, default=0.5,
                         help="Cap for silhouette queries and radius for overlap/sampling.")
     parser.add_argument("--block-dim", type=int, help="Override each query's default for both implementations.")
     parser.add_argument("--launches", type=int, default=50)
     parser.add_argument("--repeats", type=int, default=15)
-    parser.add_argument("--native-warp", action="store_true", help="Check and time native mesh ray references.")
+    parser.add_argument("--native-warp", action="store_true", help="Check and time native mesh query references.")
     parser.add_argument("--output", type=Path, default=ROOT/"assets/benchmark_results/warp_bvh_device.jsonl")
     args = parser.parse_args()
     if min(*args.counts, args.leaf_size, args.launches, args.repeats) < 1:
@@ -208,7 +242,7 @@ def main():
                            bvh_constructor="sah", bvh_leaf_size=args.leaf_size)
         geometry_hash = _array_digest((primitives.mesh.vertices, primitives.mesh.faces))
         for n in args.counts:
-            points, origins, directions, max_t = _queries(n)
+            points, origins, directions, max_t = _queries(n, point_distribution=args.point_distribution)
             min_t = jnp.zeros_like(max_t)
             radii = jnp.full((n,), args.radius, dtype=jnp.float32)
             randoms = jnp.asarray(np.random.default_rng(808+n).random((n, 3), dtype=np.float32))
@@ -225,9 +259,10 @@ def main():
                 block_dim = args.block_dim or spec.block_dim
                 inputs = [*query_inputs[query], *spec.payload_arguments(tree.payload)]
                 cases.append(_make_case(query, "custom", query_kernel(name), inputs, n, warp_device, block_dim))
-                if mesh is not None and query in ("first_hit", "any_hit"):
-                    kernel = _native_first_hit if query == "first_hit" else _native_any_hit
-                    cases.append(_make_case(query, "native_mesh", kernel,
+                native_kernel = {"closest_point": _native_closest_point,
+                                 "first_hit": _native_first_hit, "any_hit": _native_any_hit}.get(query)
+                if mesh is not None and native_kernel is not None:
+                    cases.append(_make_case(query, "native_mesh", native_kernel,
                                             [*query_inputs[query], mesh.id], n, warp_device, block_dim))
             _measure(cases, n, warp_device, args.launches, args.repeats)
             for case in cases:
@@ -235,6 +270,7 @@ def main():
                     query=case.query, implementation=case.implementation,
                     backend=args.backend if case.implementation == "custom" else "warp.Mesh(sah)",
                     n_queries=n, n_triangles=ntri, leaf_size=args.leaf_size, block_dim=case.block_dim,
+                    point_distribution=args.point_distribution,
                     radius=args.radius, gpu=warp_device.name, versions=versions,
                     geometry_sha256=geometry_hash, query_sha256=_array_digest(query_inputs[case.query]),
                     source_sha256=sources, metric="cuda_event_graph_kernel_ms",
