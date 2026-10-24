@@ -32,14 +32,15 @@ _RAY_FIELDS = (
 
 QUERY_SPECS = {
     "closest_point_kernel": WarpQuerySpec(
-        "_warp_queries", 1, 4,
-        payload_fields=_SPATIAL_FIELDS),
+        "_warp_closest", 1, 4, 64, _SPATIAL_FIELDS),
     "first_hit_kernel": WarpQuerySpec(
         "_warp_ray", 4, 4, 128, _RAY_FIELDS),
     "any_hit_kernel": WarpQuerySpec(
         "_warp_ray", 4, 2, 128, _RAY_FIELDS),
     "aabb_overlap_kernel": WarpQuerySpec(
-        "_warp_queries", 2, 2, payload_fields=_SPATIAL_FIELDS),
+        "_warp_overlap", 2, 2, payload_fields=(
+            "node_lower", "node_upper", "node_left", "node_right",
+            "node_leaf_offset", "node_leaf_count", "tri_v0", "tri_e1", "tri_e2")),
     "closest_silhouette_kernel": WarpQuerySpec(
         "_warp_silhouette", 2, 4,
         payload_fields=(
