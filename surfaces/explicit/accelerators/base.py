@@ -34,6 +34,7 @@ class MeshAccelerator(abc.ABC):
     # Capability flags — surface-level flags propagate from these.
     has_distance_bounds: bool = False     # tight (d_min, d_max) over an AABB
     has_silhouette_query: bool = False    # closest-silhouette-point query
+    has_robin_query: bool = False
     has_aabb_overlap: bool = True         # mandatory in practice; flag kept
                                           #   so future layouts can advertise
                                           #   weaker support.

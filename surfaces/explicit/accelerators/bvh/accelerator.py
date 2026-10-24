@@ -29,6 +29,7 @@ class BVHAccelerator(MeshAccelerator):
             getattr(backend, "has_silhouette_query", False))
         self.has_boundary_sampling = bool(backend.has_boundary_sampling)
         self.has_ray_interval = bool(backend.has_ray_interval)
+        self.has_robin_query = bool(backend.has_robin_query)
 
     @classmethod
     def build(cls, primitives: Primitives, backend_name: str,
@@ -122,6 +123,20 @@ class BVHAccelerator(MeshAccelerator):
         if not hasattr(self.backend, "sample_boundary"):
             raise NotImplementedError("this backend has no boundary sampler")
         return self.backend.sample_boundary(self.payload, x, radius, randoms)
+
+    def with_robin_coefficients(self, minimum, maximum=None):
+        """Return a tree with coefficient bounds in original face order."""
+        if not self.has_robin_query:
+            raise NotImplementedError(f"{self.backend.name} has no Robin radius query")
+        payload = self.backend.with_robin_coefficients(self.payload, minimum, maximum)
+        return type(self)(self.primitives, payload, self.backend)
+
+    def robin_radius(self, x: jnp.ndarray, radius_cap: jnp.ndarray):
+        return self.robin_radius_with_status(x, radius_cap)[0]
+
+    def robin_radius_with_status(self, x: jnp.ndarray, radius_cap: jnp.ndarray):
+        """(Robin star radius, validity status)."""
+        return self._query_with_status("robin_radius", x, radius_cap)
 
     def aabb_overlap(self, lower: jnp.ndarray, upper: jnp.ndarray
                      ) -> jnp.ndarray:

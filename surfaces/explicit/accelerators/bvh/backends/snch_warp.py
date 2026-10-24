@@ -10,7 +10,7 @@ from surfaces.explicit.primitives import Primitives
 
 from ._warp_build import finite_primitive_bounds, validate_warp_mesh_and_config
 from ._warp_jax import query as _warp_query
-from ._warp_layout import empty_warp_payload, make_warp_payload
+from ._warp_layout import empty_warp_payload, make_warp_payload, with_robin_coefficients
 from .sah_warp import BVHSahWarpBackend, _flatten_vec_queries, _restore
 from .snch_jax import _build_payload_snch
 
@@ -38,6 +38,7 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
     payload_type = BVHSahWarpBackend.payload_type
     has_silhouette_query = True
     has_boundary_sampling = True
+    has_robin_query = True
 
     def build(self, primitives: Primitives, config: Config):
         vertices, faces = validate_warp_mesh_and_config(
@@ -101,3 +102,17 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
         radius = jnp.minimum(cap, distance)
         return (jnp.where(valid, radius, jnp.nan),
                 jnp.where(valid, 1, -1).astype(jnp.int32))
+
+    def with_robin_coefficients(self, payload, minimum, maximum=None):
+        return with_robin_coefficients(payload, minimum, maximum)
+
+    def robin_radius(self, payload, points, cap):
+        return self.robin_radius_with_status(payload, points, cap)[0]
+
+    def robin_radius_with_status(self, payload, points, cap):
+        if payload.node_robin_bounds.shape != (payload.node_left.shape[0], 2):
+            raise ValueError("configure Robin coefficients with with_robin_coefficients first")
+        q, shape = _flatten_vec_queries(points)
+        caps = jnp.broadcast_to(jnp.asarray(cap, jnp.float32), shape).reshape((-1,))
+        radius, status = _warp_query("robin_radius_kernel", payload, q, caps)
+        return _restore(radius, shape), _restore(status, shape)

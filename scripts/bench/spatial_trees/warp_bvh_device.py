@@ -206,7 +206,8 @@ def main():
     parser.add_argument("--point-distribution", choices=("gaussian", "shell", "interior", "center"), default="gaussian")
     parser.add_argument("--leaf-size", type=int, default=4)
     parser.add_argument("--radius", type=float, default=0.5,
-                        help="Cap for silhouette queries and radius for overlap/sampling.")
+                        help="Cap for silhouette/Robin queries; radius for overlap/sampling.")
+    parser.add_argument("--robin-coefficient", type=float, default=1.)
     parser.add_argument("--block-dim", type=int, help="Override each query's default for both implementations.")
     parser.add_argument("--launches", type=int, default=50)
     parser.add_argument("--repeats", type=int, default=15)
@@ -221,8 +222,11 @@ def main():
         parser.error("block dimension must be in [1, 1024]")
     if not np.isfinite(args.radius) or args.radius < 0:
         parser.error("radius must be finite and nonnegative")
-    if args.backend != "bvh.snch.warp" and any(q in args.queries for q in ("closest_silhouette", "sample_boundary")):
-        parser.error("silhouette and boundary sampling require --backend bvh.snch.warp")
+    if np.isnan(args.robin_coefficient) or args.robin_coefficient < 0:
+        parser.error("Robin coefficient must be nonnegative and not NaN")
+    if args.backend != "bvh.snch.warp" and any(
+            q in args.queries for q in ("closest_silhouette", "sample_boundary", "robin_radius")):
+        parser.error("silhouette, sampling and Robin queries require --backend bvh.snch.warp")
     device = jax.devices()[0]
     if device.platform != "gpu":
         parser.error("CUDA-event measurements require a CUDA JAX device")
@@ -237,6 +241,8 @@ def main():
     with jax.default_device(device), args.output.open("a", encoding="utf-8") as output:
         primitives, ntri = _mesh(args.subdivisions, args.mesh)
         tree = BVHAccelerator.build(primitives, args.backend, Config(leaf_size_threshold=args.leaf_size))
+        if "robin_radius" in args.queries:
+            tree = tree.with_robin_coefficients(args.robin_coefficient)
         mesh = None
         if args.native_warp:
             mesh = wp.Mesh(points=wp.from_jax(primitives.mesh.vertices, dtype=wp.vec3),
@@ -253,6 +259,7 @@ def main():
                 "any_hit": (origins, directions, min_t, max_t),
                 "aabb_overlap": (points-args.radius, points+args.radius),
                 "closest_silhouette": (points, radii), "sample_boundary": (points, radii, randoms),
+                "robin_radius": (points, radii),
             }
             cases = []
             for query in args.queries:
@@ -283,6 +290,9 @@ def main():
                     result_count=int(np.count_nonzero(case.outputs[-1].numpy() == 1)),
                     invalid_count=int(np.count_nonzero(case.outputs[-1].numpy() < 0)),
                 )
+                if case.query == "robin_radius":
+                    record["robin_coefficient"] = ("inf" if np.isinf(args.robin_coefficient)
+                                                    else args.robin_coefficient)
                 output.write(json.dumps(record)+"\n")
                 output.flush()
                 print(f"{case.query:20s} {case.implementation:12s} {n:7d} queries "

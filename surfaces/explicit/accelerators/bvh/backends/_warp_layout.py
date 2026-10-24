@@ -41,6 +41,9 @@ class WarpBVHPayload(NamedTuple):
     # Ray nodes: float4 xyz=bounds, w=uint32 metadata.
     node_ray_lower: jnp.ndarray
     node_ray_upper: jnp.ndarray
+    # Optional Robin coefficient intervals.
+    tri_robin_bounds: jnp.ndarray
+    node_robin_bounds: jnp.ndarray
 
 
 def _int32_array(name, value):
@@ -262,6 +265,8 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None):
         node_area=jnp.asarray(node_area),
         node_ray_lower=jnp.asarray(ray_lower),
         node_ray_upper=jnp.asarray(ray_upper),
+        tri_robin_bounds=jnp.zeros((0, 2), jnp.float32),
+        node_robin_bounds=jnp.zeros((0, 2), jnp.float32),
     ), int(depths.max(initial=0))
 
 
@@ -297,4 +302,50 @@ def empty_warp_payload():
         node_area=empty1,
         node_ray_lower=empty4,
         node_ray_upper=empty4,
+        tri_robin_bounds=jnp.zeros((0, 2), jnp.float32),
+        node_robin_bounds=jnp.zeros((0, 2), jnp.float32),
     )
+
+
+def with_robin_coefficients(payload, minimum, maximum=None):
+    """Pack nonnegative face intervals and propagate them through the tree."""
+    n_faces = payload.prim_ids.shape[0]
+    values = []
+    for value in (minimum, minimum if maximum is None else maximum):
+        if np.iscomplexobj(value):
+            raise ValueError("Robin coefficients must be real")
+        raw = np.asarray(value, dtype=np.float64)
+        if np.any(np.isnan(raw)) or np.any(raw < 0):
+            raise ValueError("Robin coefficients must be nonnegative and not NaN")
+        if np.any(np.isfinite(raw) & (raw > np.finfo(np.float32).max)):
+            raise ValueError("Robin coefficients exceed float32 range")
+        try:
+            values.append(np.broadcast_to(raw, (n_faces,)))
+        except ValueError:
+            raise ValueError("Robin coefficients must be scalar or one value per face") from None
+    lower, upper = values
+    if np.any(lower > upper):
+        raise ValueError("Robin coefficient minimum exceeds maximum")
+    # Preserve conservative intervals when converting from wider input dtypes.
+    low32, high32 = lower.astype(np.float32), upper.astype(np.float32)
+    down = low32.astype(np.float64) > lower
+    up = high32.astype(np.float64) < upper
+    low32[down] = np.nextafter(low32[down], np.float32(-np.inf))
+    high32[up] = np.nextafter(high32[up], np.float32(np.inf))
+    refs = np.asarray(payload.prim_ids, np.int32)
+    triangles = np.stack((low32[refs], high32[refs]), axis=-1)
+    nodes = np.empty((payload.node_left.shape[0], 2), np.float32)
+    if refs.size:
+        arrays, _, postorder = _validate_tree(payload, len(refs))
+        for node in postorder:
+            count = arrays["node_leaf_count"][node]
+            if count > 0:
+                offset = arrays["node_leaf_offset"][node]
+                bounds = triangles[offset:offset + count]
+                nodes[node] = bounds[:, 0].min(), bounds[:, 1].max()
+            else:
+                left, right = arrays["node_left"][node], arrays["node_right"][node]
+                nodes[node] = min(nodes[left, 0], nodes[right, 0]), max(nodes[left, 1], nodes[right, 1])
+    device = payload.node_lower.sharding
+    return payload._replace(tri_robin_bounds=jnp.asarray(triangles, device=device),
+                            node_robin_bounds=jnp.asarray(nodes, device=device))

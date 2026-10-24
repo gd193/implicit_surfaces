@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import warp as wp
 
+from ._warp_geometry import _NATIVE_FINITE3
 from ._warp_specs import STACK_CAPACITY
 
 # Packed metadata representation adapted from NVIDIA Warp's bvh.h helpers.
@@ -10,7 +11,7 @@ from ._warp_specs import STACK_CAPACITY
 
 
 # Literal modes specialize first-hit/any-hit; IDs stay int32.
-_NATIVE_QUERY_COMMON = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r"""
+_NATIVE_QUERY_COMMON = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + _NATIVE_FINITE3 + r"""
     const auto run_query = [&](float* result_t, int* result_id,
                                int* result_hit, int* result_status,
                                bool any_hit) {
@@ -23,12 +24,6 @@ _NATIVE_QUERY_COMMON = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r
         *result_hit = 0;
         *result_status = 0;
 
-        const auto finite3 = [](const wp::vec3& v) {
-            const float limit = 3.4028234e38f;
-            return v[0] == v[0] && v[1] == v[1] && v[2] == v[2]
-                && wp::abs(v[0]) < limit && wp::abs(v[1]) < limit
-                && wp::abs(v[2]) < limit;
-        };
         if (!finite3(o) || !finite3(d) || lo_t != lo_t || hi_t != hi_t
             || wp::isinf(lo_t) || lo_t < 0.0f || hi_t < lo_t
             || wp::dot(d, d) <= 1.0e-30f) {
