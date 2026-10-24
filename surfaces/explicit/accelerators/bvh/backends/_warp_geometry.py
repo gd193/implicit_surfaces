@@ -95,3 +95,36 @@ _NATIVE_TRIANGLE_CLOSEST = _NATIVE_SEGMENT_CLOSEST + r"""
         return best;
     };
 """
+
+
+# Packed metadata adapted from NVIDIA Warp's bvh.h helpers.
+# Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. Apache-2.0.
+_NATIVE_PACKED_NODES = r"""
+    const auto load_vec4_nc = [](const wp::vec4* ptr, int index) {
+        wp::vec4 result;
+#if defined(__CUDA_ARCH__)
+        const float4 value = __ldg(reinterpret_cast<const float4*>(ptr + index));
+        result = wp::vec4(value.x, value.y, value.z, value.w);
+#else
+        result = ptr[index];
+#endif
+        return result;
+    };
+    const auto pack_node = [](const wp::vec4& lower, const wp::vec4& upper) {
+        uint32_t lower_bits;
+        uint32_t upper_bits;
+        memcpy(&lower_bits, &lower.c[3], sizeof(lower_bits));
+        memcpy(&upper_bits, &upper.c[3], sizeof(upper_bits));
+        const uint64_t leaf = uint64_t(lower_bits >> 31);
+        const uint64_t lower_payload = uint64_t(lower_bits & 0x7fffffffu);
+        const uint64_t upper_payload = uint64_t(upper_bits & 0x7fffffffu);
+        return (leaf << 62) | (upper_payload << 31) | lower_payload;
+    };
+    const auto lower_payload = [](uint64_t meta) {
+        return static_cast<int>(meta & 0x7fffffffull);
+    };
+    const auto upper_payload = [](uint64_t meta) {
+        return static_cast<int>((meta >> 31) & 0x7fffffffull);
+    };
+    const auto is_leaf = [](uint64_t meta) { return (meta >> 62) != 0; };
+"""

@@ -1,0 +1,303 @@
+{
+  "date": "2026-10-24",
+  "method": {
+    "gpu": "NVIDIA A40",
+    "physical_gpu": 1,
+    "backend": "bvh.snch.warp",
+    "metric": "cuda_event_graph_kernel_ms",
+    "n_queries": 65536,
+    "leaf_size": 4,
+    "block_dim": 128,
+    "launches_per_graph": 50,
+    "repeats": 15,
+    "scope": "Resident buffers, warmed CUDA graphs, CUDA events; excludes build, compilation, transfers, readback and host dispatch.",
+    "ordering": "Randomized custom/native order within each repeat; GPU runs serialized.",
+    "versions": {
+      "jax": "0.10.2",
+      "jaxlib": "0.10.2",
+      "warp-lang": "1.17.0",
+      "trimesh": "4.12.1",
+      "numpy": "2.4.3"
+    },
+    "fixtures": "Gaussian: N(0, 1.5^2). Shell: radii 0.95..1.05. Interior: uniform ball of radius 0.95, also for torus; not conditioned on mesh interior."
+  },
+  "reference": {
+    "source": "https://github.com/NVIDIA/warp/blob/v1.17.0/warp/native/mesh.h",
+    "call": "wp::mesh_query_ray_count_intersections(mesh_id, point, vec3(1,0,0))",
+    "scope": "Classification only: parity of one +X ray; no closest-point work. Same geometry, points and leaf size; independent SAH builders.",
+    "difference": "Custom also detects surface contact and invalid mesh topology; reference comparison uses finite, off-surface queries.",
+    "native_mesh_header_sha256": "eb743e454c5d1ca1f27cf74ad43871e0812f620ada1cdb6b1b87eedfca706a57"
+  },
+  "source_sha256": {
+    "surfaces/explicit/accelerators/bvh/backends/_warp_build.py": "c5462c022c4148f1844837575b41250fcfe9d2ff3c11c52fa0a1623a2b9f1e3d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_closest.py": "3fc86a85f5b6235af677d2090e67247d21d7815b8445334c91b90dd621cc9cb6",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_geometry.py": "f638d279fa84f8ea9170803180b84999e8d213fe976590fe91bdfbbb1e59af0d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_inside.py": "3ab6a12831660ea225fc27d4683742074f93e922cdaf448379469da29fed589f",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_jax.py": "fbd18a6c59573b320ddeb2236705fc8690fd3650cbc371fb9461315034957eb7",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_layout.py": "89f6bd4261392e6760ffc8cf7faba710ffa29ef09afc242b45bc6e7e23e8006d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_overlap.py": "8a5117e3dc4447f11773674303096012ea96a4c9f33fca317d97bbac057b31fa",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_ray.py": "a27e665c459d3d73a4f386772da372ccff27838aaaba37cea58701868b8624c6",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_robin.py": "167a6dac58682901d1d68e0dea2f65a99f8d91e7060da472e7f7fcbe1bfcf83e",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_sampling.py": "4bb3bc0a6562262b837957b7fd80872ebce4867c4c76bf685eae61b124fea122",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_silhouette.py": "b5e277947865127c461cd4f18e35a7e9f71b65c6a7338a8d2e489c642435de00",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_specs.py": "5cf37f67faad4dbcf160e6e9b19cf220da428550b7341ab701d9707d6e585027",
+    "surfaces/explicit/accelerators/bvh/backends/sah_warp.py": "99247cdd533d5c86aa603b20d475e54f741fd9ec5f085c55fd48ef52e084081c",
+    "surfaces/explicit/accelerators/bvh/backends/snch_warp.py": "30632d8c3b18fbb502f9a3a0f165e27621ffba4287724f12d5bd23196e8bcf4e",
+    "surfaces/explicit/accelerators/bvh/backends/snch_jax.py": "b359b976d94450f3d5c37529a674692b0520e042356f9553acc3afdd2f100d5e",
+    "scripts/bench/spatial_trees/warp_bvh_device.py": "d3de1e6c72ce362ac5b5c3d2b927de56fd8eda43adee4a5eedd4a3e1353ffff3",
+    "scripts/bench/spatial_trees/_warp_fixtures.py": "137455ef002e6a44a0dba207444cc041fd2f55b0863c45c681d499662127bf88"
+  },
+  "checks": {
+    "classification": "Signs and statuses match native Warp on all 393216 benchmark points; zero invalid outputs.",
+    "regressions": "165 selected regression checks: geometry oracles, contacts/tangencies, reversed faces, nested shells, thin meshes, invalid/empty input, CPU/JIT/nested vmap and signed-surface integration."
+  },
+  "results": [
+    {
+      "mesh": "sphere",
+      "point_distribution": "gaussian",
+      "n_triangles": 20480,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "141e42571854c490687893a7ca86895f3062b9d9a11b1aeb4ff75b300afff854",
+      "ours": {
+        "device_p50_ms": 0.053923840522766116,
+        "device_samples_ms": [0.05394432067871094, 0.053923840522766116, 0.053923840522766116, 0.05394432067871094, 0.05384191989898682, 0.05396480083465576, 0.05386240005493164, 0.05396480083465576, 0.05375999927520752, 0.05386240005493164, 0.053923840522766116, 0.053923840522766116, 0.053821439743041995, 0.05400576114654541, 0.05388288021087646],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 592
+        }
+      },
+      "warp": {
+        "device_p50_ms": 0.09463808059692383,
+        "device_samples_ms": [0.09472000122070312, 0.09469951629638672, 0.09463808059692383, 0.09472000122070312, 0.09469951629638672, 0.09467904090881347, 0.09459712028503418, 0.09445376396179199, 0.09455615997314454, 0.09461759567260743, 0.09467904090881347, 0.09467904090881347, 0.09455615997314454, 0.09459712028503418, 0.09463808059692383],
+        "properties": {
+          "register_count": 48,
+          "local_memory_size": 128
+        }
+      },
+      "warp_over_ours": 1.7550322766229636
+    },
+    {
+      "mesh": "sphere",
+      "point_distribution": "shell",
+      "n_triangles": 20480,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "b2d8d5c93b7ac97d6be4e53da7e0a9c0525d4f6fa0286f7c866deafdfe3e9b77",
+      "ours": {
+        "device_p50_ms": 0.1062502384185791,
+        "device_samples_ms": [0.10637311935424805, 0.10645503997802734, 0.1062502384185791, 0.1062502384185791, 0.10631168365478516, 0.10620927810668945, 0.10631168365478516, 0.10622976303100586, 0.1062502384185791, 0.10612735748291016, 0.1063321590423584, 0.1062707233428955, 0.10622976303100586, 0.10610688209533692, 0.10620927810668945],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 592
+        }
+      },
+      "warp": {
+        "device_p50_ms": 0.16994304656982423,
+        "device_samples_ms": [0.1699635124206543, 0.17002496719360352, 0.169881591796875, 0.17002496719360352, 0.1699635124206543, 0.1699635124206543, 0.17002496719360352, 0.1699225616455078, 0.16994304656982423, 0.1699020767211914, 0.16994304656982423, 0.1700044822692871, 0.16975872039794923, 0.169881591796875, 0.16994304656982423],
+        "properties": {
+          "register_count": 48,
+          "local_memory_size": 128
+        }
+      },
+      "warp_over_ours": 1.5994603786235617
+    },
+    {
+      "mesh": "sphere",
+      "point_distribution": "interior",
+      "n_triangles": 20480,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "86c4862ff33e966dda2437c8f3a3743f7ee4cb040ab9cd0bd874731c206953af",
+      "ours": {
+        "device_p50_ms": 0.0724787187576294,
+        "device_samples_ms": [0.07249919891357422, 0.07264256000518798, 0.07237631797790528, 0.07243775844573974, 0.07249919891357422, 0.07260159969329834, 0.0724787187576294, 0.07245823860168457, 0.07258111953735352, 0.07243775844573974, 0.07245823860168457, 0.07245823860168457, 0.07249919891357422, 0.07251967906951905, 0.07245823860168457],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 592
+        }
+      },
+      "warp": {
+        "device_p50_ms": 0.09287679672241211,
+        "device_samples_ms": [0.09293824195861816, 0.09289728164672852, 0.09297920227050781, 0.09275391578674316, 0.09279487609863281, 0.09277440071105957, 0.09289728164672852, 0.09289728164672852, 0.09297920227050781, 0.09287679672241211, 0.09287679672241211, 0.09285632133483887, 0.09275391578674316, 0.09279487609863281, 0.09285632133483887],
+        "properties": {
+          "register_count": 48,
+          "local_memory_size": 128
+        }
+      },
+      "warp_over_ours": 1.2814354104822738
+    },
+    {
+      "mesh": "torus",
+      "point_distribution": "gaussian",
+      "n_triangles": 16384,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "141e42571854c490687893a7ca86895f3062b9d9a11b1aeb4ff75b300afff854",
+      "ours": {
+        "device_p50_ms": 0.05539840221405029,
+        "device_samples_ms": [0.055357441902160645, 0.05533696174621582, 0.05533696174621582, 0.05541888236999512, 0.05539840221405029, 0.05543935775756836, 0.05541888236999512, 0.05548031806945801, 0.05541888236999512, 0.05539840221405029, 0.05539840221405029, 0.055357441902160645, 0.05539840221405029, 0.05537792205810547, 0.05533696174621582],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 592
+        }
+      },
+      "warp": {
+        "device_p50_ms": 0.08501248359680176,
+        "device_samples_ms": [0.0849510383605957, 0.085032958984375, 0.08493056297302246, 0.0851353645324707, 0.08501248359680176, 0.0850534439086914, 0.08491007804870605, 0.08501248359680176, 0.08501248359680176, 0.08499199867248536, 0.08497152328491211, 0.0850534439086914, 0.08509440422058105, 0.0850534439086914, 0.08501248359680176],
+        "properties": {
+          "register_count": 48,
+          "local_memory_size": 128
+        }
+      },
+      "warp_over_ours": 1.5345656228193647
+    },
+    {
+      "mesh": "torus",
+      "point_distribution": "shell",
+      "n_triangles": 16384,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "b2d8d5c93b7ac97d6be4e53da7e0a9c0525d4f6fa0286f7c866deafdfe3e9b77",
+      "ours": {
+        "device_p50_ms": 0.08284159660339356,
+        "device_samples_ms": [0.0828825569152832, 0.0828006362915039, 0.08284159660339356, 0.08294400215148925, 0.08278016090393066, 0.08282112121582032, 0.08286208152770996, 0.08290304183959961, 0.08282112121582032, 0.08282112121582032, 0.08278016090393066, 0.08282112121582032, 0.08284159660339356, 0.08290304183959961, 0.08284159660339356],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 592
+        }
+      },
+      "warp": {
+        "device_p50_ms": 0.1415987205505371,
+        "device_samples_ms": [0.14163968086242676, 0.14153727531433105, 0.14147583961486818, 0.14170111656188966, 0.14163968086242676, 0.1415782356262207, 0.14168064117431642, 0.14139391899108886, 0.1415987205505371, 0.14161919593811034, 0.1415782356262207, 0.1415987205505371, 0.1415167999267578, 0.14153727531433105, 0.1415987205505371],
+        "properties": {
+          "register_count": 48,
+          "local_memory_size": 128
+        }
+      },
+      "warp_over_ours": 1.70927078130139
+    },
+    {
+      "mesh": "torus",
+      "point_distribution": "interior",
+      "n_triangles": 16384,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "86c4862ff33e966dda2437c8f3a3743f7ee4cb040ab9cd0bd874731c206953af",
+      "ours": {
+        "device_p50_ms": 0.0880844783782959,
+        "device_samples_ms": [0.0881868839263916, 0.0881663990020752, 0.08820735931396484, 0.0881663990020752, 0.08820735931396484, 0.08812543869018555, 0.08806400299072266, 0.08804351806640626, 0.08783871650695801, 0.0881049633026123, 0.08802304267883301, 0.0880844783782959, 0.08796159744262695, 0.0880844783782959, 0.08804351806640626],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 592
+        }
+      },
+      "warp": {
+        "device_p50_ms": 0.13895680427551269,
+        "device_samples_ms": [0.13889535903930664, 0.1388748836517334, 0.1387724781036377, 0.13897727966308593, 0.13895680427551269, 0.1387929630279541, 0.13895680427551269, 0.13895680427551269, 0.13897727966308593, 0.13897727966308593, 0.13895680427551269, 0.1387724781036377, 0.1389363193511963, 0.138854398727417, 0.13903871536254883],
+        "properties": {
+          "register_count": 48,
+          "local_memory_size": 128
+        }
+      },
+      "warp_over_ours": 1.5775401845343933
+    }
+  ],
+  "command": "python -m scripts.bench.spatial_trees.warp_bvh_device --backend bvh.snch.warp --queries classify_point --native-warp --mesh <sphere|torus> --point-distribution <gaussian|shell|interior> --counts 65536 --leaf-size 4 --launches 50 --repeats 15",
+  "wosx": {
+    "source": "https://github.com/nv-tlabs/wosx/blob/2716c27175bb6b5795749c539393d547fb3a6c2b/include/wosx/gpu/core/geometric-queries.slang#L563-L572",
+    "wosx_commit": "2716c27175bb6b5795749c539393d547fb3a6c2b",
+    "fcpw_commit": "e498ca81fe01ae20ea3482485c90379307008de8",
+    "method": {
+      "call": "Unchanged GeometricQueries::insideDomain with domainIsWatertight=1; one closed absorbing mesh, empty reflecting boundary.",
+      "algorithm": "Signed closest point: findClosestPoint(..., recordNormal=true), then sign(dot(query-closest, faceNormal)). No ray-parity path is substituted.",
+      "compiler": "Slang 2026.16.1, SLANG_OPTIMIZATION_LEVEL_HIGH, CUDA backend.",
+      "build": "FCPW surface-area BVH, leaf size 4, BvhNode/Triangle/NoSilhouette; original WoSX/FCPW query sources unchanged.",
+      "wrapper": "Query-only Slang entry, sign and validity written to 8 bytes in each resident Interaction record. No walk/solver work.",
+      "timing": "Physical A40 GPU 1. Five warmups, 50 resident kernel launches per CUDA graph, 15 CUDA-event samples. Exactly one query kernel verified in each reference capture. Build, compile, parameter uploads, transfers, readback and host dispatch excluded.",
+      "ordering": "Serialized standalone reference runs; ours remeasured afterward on identical hashed fixtures and unchanged production sources.",
+      "blocks": "Best median among 64, 128, 256 per reference case; ours fixed at 128.",
+      "geometry_and_queries": "Match the geometry_sha256/query_sha256 of the corresponding top-level results.",
+      "semantics": "WoSX sign depends on orientation and returns a Boolean, without our separate boundary/invalid categories. Fixtures use closed outward-oriented meshes and finite off-surface queries.",
+      "scope": "Classification-only timings. WoSX includes a closest-point search; callers already needing closest points can reuse that work for sign.",
+      "reference_kernel": {
+        "regs": 53,
+        "local_bytes": 256,
+        "captured_kernels": 1
+      }
+    },
+    "validation": "Zero sign mismatches for 393216 distinct points at all 3 reference block sizes (1179648 reference outputs). Captured-graph and normal RHI outputs are identical.",
+    "source_sha256": {
+      "wosx/include/wosx/gpu/core/geometric-queries.slang": "2acff969954b66d43db47afac05e24c82bc750bb9eb1c70c683974f95a6bfc1a",
+      "wosx/include/wosx/gpu/utils/fcpw-geometric-queries.slang": "f826fbcb5d73f58f65d3cdcac39c56158c146daddf9816f8fccb5df32300e60b",
+      "fcpw/include/fcpw/gpu/bvh.slang": "79fe14d9a90971163f1eda338f147f0893b15535cdeff61b1b50b488e2674540",
+      "fcpw/include/fcpw/gpu/geometry.slang": "d96a59f07bc8bfd419494b6aaccb6dc7cd0cf87348d52e17f9341b67f2cd0ff2",
+      "fcpw/include/fcpw/gpu/bvh-node.slang": "18f8ba095d06bb5e7317c2a7c5188a038e9c3e4b1d49f38c2b87564060a56953",
+      "fcpw/include/fcpw/gpu/bounding-volumes.slang": "c4ca9dfbc24e08d99436d933def3714d9e61d31f2ac54e02b68b0e98f1333012",
+      "fcpw/include/fcpw/gpu/slang_rhi_utils.h": "fe718f4c7533f202c2e01c2ec4cdf4c8b9b8eb7055f85af9848d285dc1930421",
+      "harness/benchmark.cpp": "2368972e7bd102960350d5faf0cebbf529447807c473707195b951a1705889c8",
+      "harness/shaders/query.slang": "b6d61e2ce205d216bca1aa20ee933618c276985699f583eb878b9665e0562637",
+      "harness/shaders/wosx.slang": "6c303cdcd5083a4a3834c2a3aa3f9056ca9c0f8fd28330633b8ce6c05970b915",
+      "harness/measure_ours.py": "b8fd40485cc44829a251440ee9267835634b696011982844da7922152d1db130",
+      "harness/build.py": "cc78ec3407ceece59107651e208415c05997b7c8c269ab694d1539254d6bc935",
+      "timing/kernel_only.h": "41cde3b7ce3683b403be72d0fb768dffab5a72dec6f57b065fb792d29fc498fd",
+      "timing/queue_stream.cpp": "6d70a45a2ad70c6c32f321b68b94667857610c89ab3a32e2e90a24eee58f9e3d"
+    },
+    "results": [
+      {
+        "mesh": "sphere",
+        "point_distribution": "gaussian",
+        "ours_p50_ms": 0.05378047943115234,
+        "ours_samples_ms": [0.05378047943115234, 0.053985280990600584, 0.05375999927520752, 0.053800959587097165, 0.053698558807373044, 0.053739519119262696, 0.05378047943115234, 0.053800959587097165, 0.053800959587097165, 0.053719038963317874, 0.05378047943115234, 0.053800959587097165, 0.05378047943115234, 0.05375999927520752, 0.054087681770324705],
+        "wosx_p50_ms": 7.34490600586,
+        "best_block": 64,
+        "wosx_over_ours": 136.57196967280035,
+        "wosx_samples_ms": [7.3448449707, 7.34439453125, 7.34541809082, 7.34517272949, 7.3439642334, 7.34476318359, 7.34543884277, 7.34500854492, 7.34500854492, 7.34490600586, 7.34509033203, 7.34451721191, 7.34474243164, 7.34554138184, 7.34476318359]
+      },
+      {
+        "mesh": "sphere",
+        "point_distribution": "shell",
+        "ours_p50_ms": 0.10622976303100586,
+        "ours_samples_ms": [0.10647551536560058, 0.10614784240722656, 0.1063526439666748, 0.10612735748291016, 0.1062707233428955, 0.10620927810668945, 0.1062502384185791, 0.10616831779479981, 0.1063526439666748, 0.10622976303100586, 0.10620927810668945, 0.10614784240722656, 0.10620927810668945, 0.10631168365478516, 0.10622976303100586],
+        "wosx_p50_ms": 0.183930873871,
+        "best_block": 64,
+        "wosx_over_ours": 1.7314438875036848,
+        "wosx_samples_ms": [0.183889923096, 0.184012794495, 0.183930873871, 0.18391040802, 0.184115200043, 0.184197120667, 0.185405445099, 0.184381446838, 0.183869438171, 0.183951358795, 0.183869438171, 0.183808002472, 0.183992328644, 0.183746566772, 0.183889923096]
+      },
+      {
+        "mesh": "sphere",
+        "point_distribution": "interior",
+        "ours_p50_ms": 0.07268352031707764,
+        "ours_samples_ms": [0.07278592109680176, 0.07268352031707764, 0.07268352031707764, 0.07264256000518798, 0.07266304016113281, 0.07260159969329834, 0.07270400047302246, 0.07276544094085693, 0.07256063938140869, 0.07270400047302246, 0.07260159969329834, 0.07270400047302246, 0.07268352031707764, 0.0723967981338501, 0.07251967906951905],
+        "wosx_p50_ms": 6.6217980957,
+        "best_block": 128,
+        "wosx_over_ours": 91.10453190506995,
+        "wosx_samples_ms": [6.62192138672, 6.62132751465, 6.62292480469, 6.62202392578, 6.62216674805, 6.62175720215, 6.62169616699, 6.62155273438, 6.62159362793, 6.62286315918, 6.62198242187, 6.62116333008, 6.6217980957, 6.62169616699, 6.62271972656]
+      },
+      {
+        "mesh": "torus",
+        "point_distribution": "gaussian",
+        "ours_p50_ms": 0.0551526403427124,
+        "ours_samples_ms": [0.0551526403427124, 0.055173120498657226, 0.05519360065460205, 0.0551526403427124, 0.05511168003082276, 0.05519360065460205, 0.05509119987487793, 0.0551526403427124, 0.05519360065460205, 0.055173120498657226, 0.05509119987487793, 0.0551526403427124, 0.05511168003082276, 0.055173120498657226, 0.05519360065460205],
+        "wosx_p50_ms": 1.34356994629,
+        "best_block": 64,
+        "wosx_over_ours": 24.36093608467709,
+        "wosx_samples_ms": [1.34344711304, 1.34387710571, 1.34356994629, 1.34379516602, 1.34373382568, 1.34365188599, 1.34346755981, 1.34359039307, 1.34338562012, 1.34356994629, 1.34348800659, 1.34627334595, 1.3432421875, 1.34359039307, 1.34336517334]
+      },
+      {
+        "mesh": "torus",
+        "point_distribution": "shell",
+        "ours_p50_ms": 0.08282112121582032,
+        "ours_samples_ms": [0.08292351722717285, 0.08271871566772461, 0.08290304183959961, 0.08275967597961426, 0.0828825569152832, 0.08273920059204101, 0.08282112121582032, 0.0828006362915039, 0.08282112121582032, 0.08282112121582032, 0.08282112121582032, 0.08284159660339356, 0.08290304183959961, 0.08273920059204101, 0.08269824028015137],
+        "wosx_p50_ms": 1.14790397644,
+        "best_block": 256,
+        "wosx_over_ours": 13.860039076852413,
+        "wosx_samples_ms": [1.14911231995, 1.14788352966, 1.14776062012, 1.14788352966, 1.14808830261, 1.14798591614, 1.14755584717, 1.14747390747, 1.1472077179, 1.14798591614, 1.14741249084, 1.14821121216, 1.14823165894, 1.14798591614, 1.14790397644]
+      },
+      {
+        "mesh": "torus",
+        "point_distribution": "interior",
+        "ours_p50_ms": 0.0882483196258545,
+        "ours_samples_ms": [0.08839167594909668, 0.08822784423828126, 0.0881868839263916, 0.08828927993774414, 0.0882688045501709, 0.08828927993774414, 0.08814592361450195, 0.08822784423828126, 0.08830975532531739, 0.0882483196258545, 0.0882688045501709, 0.08822784423828126, 0.0882483196258545, 0.0882688045501709, 0.08822784423828126],
+        "wosx_p50_ms": 1.44662521362,
+        "best_block": 128,
+        "wosx_over_ours": 16.392665829255925,
+        "wosx_samples_ms": [1.44685058594, 1.44678909302, 1.44648193359, 1.44711685181, 1.44637954712, 1.44721923828, 1.44693252563, 1.44662521362, 1.44668670654, 1.44637954712, 1.44676864624, 1.4463999939, 1.4459085083, 1.44621566772, 1.44605178833]
+      }
+    ]
+  }
+}

@@ -30,6 +30,7 @@ class BVHAccelerator(MeshAccelerator):
         self.has_boundary_sampling = bool(backend.has_boundary_sampling)
         self.has_ray_interval = bool(backend.has_ray_interval)
         self.has_robin_query = bool(backend.has_robin_query)
+        self.has_point_classification = bool(backend.has_point_classification)
 
     @classmethod
     def build(cls, primitives: Primitives, backend_name: str,
@@ -48,6 +49,12 @@ class BVHAccelerator(MeshAccelerator):
     def closest_point(self, x: jnp.ndarray
                       ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         return self.backend.closest_point(self.payload, x)
+
+    def classify_point(self, x: jnp.ndarray) -> jnp.ndarray:
+        return self.backend.classify_point(self.payload, x)
+
+    def classify_point_with_status(self, x: jnp.ndarray):
+        return self._query_with_status("classify_point", x)
 
     def first_hit(self, ray_origin: jnp.ndarray, ray_direction: jnp.ndarray,
                   max_t: jnp.ndarray, *, min_t: jnp.ndarray | float = 0.0,

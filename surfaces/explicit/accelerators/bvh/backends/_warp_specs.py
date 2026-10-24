@@ -31,6 +31,10 @@ _RAY_FIELDS = (
 )
 
 QUERY_SPECS = {
+    "classify_point_kernel": WarpQuerySpec(
+        "_warp_inside", 1, 2, 128, payload_fields=(
+            "node_ray_lower", "node_ray_upper", "mesh_vertices",
+            "tri_indices", "mesh_closed")),
     "closest_point_kernel": WarpQuerySpec(
         "_warp_closest", 1, 4, 64, _SPATIAL_FIELDS),
     "first_hit_kernel": WarpQuerySpec(

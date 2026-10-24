@@ -75,6 +75,27 @@ def _native_first_hit(
     out_status[i] = status
 
 
+@wp.func_native(r"""
+    return (wp::mesh_query_ray_count_intersections(mesh_id, point, wp::vec3(1.0f, 0.0f, 0.0f)) & 1)
+        ? -1.0f : 1.0f;
+""")
+def _native_parity(mesh_id: wp.uint64, point: wp.vec3) -> float:
+    ...
+
+
+@wp.kernel
+def _native_classify_point(
+    points: wp.array(dtype=wp.vec3), mesh_id: wp.uint64,
+    out_sign: wp.array(dtype=float), out_status: wp.array(dtype=int),
+):
+    i = wp.tid()
+    out_sign[i] = wp.nan
+    out_status[i] = -1
+    if finite3(points[i]):
+        out_sign[i] = _native_parity(mesh_id, points[i])
+        out_status[i] = 1
+
+
 @wp.kernel
 def _native_closest_point(
     points: wp.array(dtype=wp.vec3), mesh_id: wp.uint64,
@@ -255,7 +276,7 @@ def main():
             radii = jnp.full((n,), args.radius, dtype=jnp.float32)
             randoms = jnp.asarray(np.random.default_rng(808+n).random((n, 3), dtype=np.float32))
             query_inputs = {
-                "closest_point": (points,), "first_hit": (origins, directions, min_t, max_t),
+                "classify_point": (points,), "closest_point": (points,), "first_hit": (origins, directions, min_t, max_t),
                 "any_hit": (origins, directions, min_t, max_t),
                 "aabb_overlap": (points-args.radius, points+args.radius),
                 "closest_silhouette": (points, radii), "sample_boundary": (points, radii, randoms),
@@ -268,7 +289,8 @@ def main():
                 block_dim = args.block_dim or spec.block_dim
                 inputs = [*query_inputs[query], *spec.payload_arguments(tree.payload)]
                 cases.append(_make_case(query, "custom", query_kernel(name), inputs, n, warp_device, block_dim))
-                native_kernel = {"closest_point": _native_closest_point,
+                native_kernel = {"classify_point": _native_classify_point,
+                                 "closest_point": _native_closest_point,
                                  "first_hit": _native_first_hit, "any_hit": _native_any_hit}.get(query)
                 if mesh is not None and native_kernel is not None:
                     cases.append(_make_case(query, "native_mesh", native_kernel,
@@ -290,6 +312,12 @@ def main():
                     result_count=int(np.count_nonzero(case.outputs[-1].numpy() == 1)),
                     invalid_count=int(np.count_nonzero(case.outputs[-1].numpy() < 0)),
                 )
+                if case.query == "classify_point":
+                    record["reference_scope"] = ("classification only; native Warp intersection-count "
+                                                 "helper, fixed +X ray; no closest-point work")
+                    native_header = Path(wp.__file__).parent/"native/mesh.h"
+                    record["native_mesh_header_sha256"] = hashlib.sha256(
+                        native_header.read_bytes()).hexdigest()
                 if case.query == "robin_radius":
                     record["robin_coefficient"] = ("inf" if np.isinf(args.robin_coefficient)
                                                     else args.robin_coefficient)
