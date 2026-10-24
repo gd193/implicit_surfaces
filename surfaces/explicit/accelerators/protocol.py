@@ -23,12 +23,10 @@ class Config:
 class Backend(abc.ABC, Generic[P]):
     """Stateless backend; payloads are JAX pytrees."""
 
-
     name: str
     flavor: str
     algorithm: str
     runtime: str
-
 
     payload_type: Type[P]
     is_differentiable: bool = False
@@ -36,13 +34,12 @@ class Backend(abc.ABC, Generic[P]):
     has_silhouette_query: bool = False
     has_ray_interval: bool = False
     has_boundary_sampling: bool = False
+    has_point_classification: bool = False
     has_robin_query: bool = False
-
 
     @abc.abstractmethod
     def build(self, primitives: Primitives, config: Config) -> P:
         """Build a payload."""
-
 
     @abc.abstractmethod
     def closest_point(self, payload: P, x: jnp.ndarray
@@ -60,7 +57,6 @@ class Backend(abc.ABC, Generic[P]):
                      lower: jnp.ndarray, upper: jnp.ndarray) -> jnp.ndarray:
         """Whether any primitive AABB overlaps [lower, upper]."""
 
-
     def distance_bounds(self, payload: P,
                         lower: jnp.ndarray, upper: jnp.ndarray
                         ) -> Tuple[jnp.ndarray, jnp.ndarray]:
@@ -68,6 +64,10 @@ class Backend(abc.ABC, Generic[P]):
         raise NotImplementedError(
             f"{type(self).__name__} does not implement distance_bounds"
         )
+
+    def classify_point(self, payload: P, x: jnp.ndarray) -> jnp.ndarray:
+        """Sign: -1 inside, 0 on boundary, +1 outside, NaN on failure."""
+        raise NotImplementedError("point classification is unavailable")
 
     def closest_silhouette(self, payload: P, x: jnp.ndarray
                            ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:

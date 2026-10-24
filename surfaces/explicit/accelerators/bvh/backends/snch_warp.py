@@ -54,7 +54,8 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
         lo_np, hi_np = finite_primitive_bounds(primitives)
         tree = _build_payload_snch(
             lo_np, hi_np, int(config.leaf_size_threshold), faces, vertices)
-        payload, depth = make_warp_payload(tree, vertices, faces, snch=tree)
+        payload, depth = make_warp_payload(
+            tree, vertices, faces, snch=tree, mesh_vertices=primitives.mesh.vertices)
         if depth > config.max_stack_depth:
             raise ValueError(
                 f"built SNCH tree depth {depth} exceeds configured "

@@ -34,6 +34,7 @@ class MeshAccelerator(abc.ABC):
     # Capability flags — surface-level flags propagate from these.
     has_distance_bounds: bool = False     # tight (d_min, d_max) over an AABB
     has_silhouette_query: bool = False    # closest-silhouette-point query
+    has_point_classification: bool = False
     has_robin_query: bool = False
     has_aabb_overlap: bool = True         # mandatory in practice; flag kept
                                           #   so future layouts can advertise
@@ -80,6 +81,10 @@ class MeshAccelerator(abc.ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not implement distance_bounds"
         )
+
+    def classify_point(self, x: jnp.ndarray) -> jnp.ndarray:
+        """Sign: -1 inside, 0 on boundary, +1 outside, NaN on failure."""
+        raise NotImplementedError("point classification is unavailable")
 
     def closest_silhouette(self, x: jnp.ndarray
                            ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:

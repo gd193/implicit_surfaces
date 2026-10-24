@@ -41,6 +41,10 @@ class WarpBVHPayload(NamedTuple):
     # Ray nodes: float4 xyz=bounds, w=uint32 metadata.
     node_ray_lower: jnp.ndarray
     node_ray_upper: jnp.ndarray
+    # Shared vertices avoid cracks from reconstructing packed triangle edges.
+    mesh_vertices: jnp.ndarray
+    tri_indices: jnp.ndarray
+    mesh_closed: jnp.ndarray
     # Optional Robin coefficient intervals.
     tri_robin_bounds: jnp.ndarray
     node_robin_bounds: jnp.ndarray
@@ -143,7 +147,18 @@ def _pack_ray_nodes(node_lower, node_upper, left, right, offset, count):
     return ray_lower, ray_upper
 
 
-def make_warp_payload(tree, vertices_np, faces_np, snch=None):
+def _is_closed(vertices, faces):
+    triangles = vertices[faces].astype(np.float64)
+    normals = np.cross(triangles[:, 1] - triangles[:, 0],
+                       triangles[:, 2] - triangles[:, 0])
+    if np.any(np.all(normals == 0, axis=1)):
+        return False
+    edges = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
+    _, counts = np.unique(edges, axis=0, return_counts=True)
+    return bool(np.all(counts == 2))
+
+
+def make_warp_payload(tree, vertices_np, faces_np, snch=None, *, mesh_vertices=None):
     """Pack triangles in leaf order; preserve original face IDs."""
     vertices = np.asarray(vertices_np, dtype=np.float32)
     faces = np.asarray(faces_np, dtype=np.int32)
@@ -265,6 +280,10 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None):
         node_area=jnp.asarray(node_area),
         node_ray_lower=jnp.asarray(ray_lower),
         node_ray_upper=jnp.asarray(ray_upper),
+        mesh_vertices=jnp.asarray(vertices if mesh_vertices is None else mesh_vertices,
+                                  dtype=jnp.float32),
+        tri_indices=jnp.asarray(faces[prim_ids]),
+        mesh_closed=jnp.asarray([_is_closed(vertices, faces)], jnp.int32),
         tri_robin_bounds=jnp.zeros((0, 2), jnp.float32),
         node_robin_bounds=jnp.zeros((0, 2), jnp.float32),
     ), int(depths.max(initial=0))
@@ -302,6 +321,9 @@ def empty_warp_payload():
         node_area=empty1,
         node_ray_lower=empty4,
         node_ray_upper=empty4,
+        mesh_vertices=empty3,
+        tri_indices=jnp.zeros((0, 3), jnp.int32),
+        mesh_closed=jnp.ones((1,), jnp.int32),
         tri_robin_bounds=jnp.zeros((0, 2), jnp.float32),
         node_robin_bounds=jnp.zeros((0, 2), jnp.float32),
     )

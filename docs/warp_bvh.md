@@ -36,6 +36,7 @@ tree = BVHAccelerator.build(
 )
 closest = jax.jit(tree.backend.closest_point_with_status)
 point, distance, face, status = closest(tree.payload, points)
+sign, status = jax.jit(tree.backend.classify_point_with_status)(tree.payload, points)
 
 silhouette = jax.jit(tree.backend.closest_silhouette_with_status)
 point, distance, edge, status = silhouette(tree.payload, points, max_distance=0.5)
@@ -54,6 +55,7 @@ such as `tree.closest_point(points)` are also available.
 
 | Method | Result |
 |---|---|
+| `classify_point_with_status(points)` | Sign: -1 inside, 0 boundary, +1 outside; status |
 | `closest_point_with_status(points)` | Point, distance, original face ID, status |
 | `first_hit_with_status(origins, directions, max_t, min_t=0)` | Ray parameter, original face ID, hit, status |
 | `any_hit_with_status(origins, directions, max_t, min_t=0)` | Occlusion, status |
@@ -64,10 +66,18 @@ such as `tree.closest_point(points)` are also available.
 | `sample_boundary(points, radii, randoms)` | Point, normal, area PDF, original face ID, status |
 
 Silhouette, star-radius, Robin and sampling queries require SNCH.
-Status **1** means found, **0** means valid
+Status **1** means a valid result, **0** means a valid
 miss/empty geometry, and **-1** means invalid input or failure. Equal computed
 distances or ray parameters choose the smaller original ID. Closest point
 reports failure when squared distances exceed float32 range.
+
+Classification uses orientation-independent even-odd parity on closed indexed
+meshes. Each edge must occur twice; open/nonmanifold edges and degenerate faces
+return NaN/status -1. Empty meshes return +1/status 0. Nested shells alternate
+inside/outside; self-intersections are unchecked. Half-open edge ownership and
+float64 fallback handle ambiguous float32 predicates. Boundary tests have no
+tolerance band. `TriMeshSurface.signed_value` combines classification with
+closest-point distance.
 
 Ray intervals `[min_t, max_t]` and silhouette caps are closed. Positive
 `min_t` excludes starting contact; infinite `max_t` is supported. Ray misses
@@ -117,7 +127,8 @@ Adapted ray helpers retain Warp's
 python -m pytest -q tests/spatial_trees/test_warp_bvh.py \
     tests/spatial_trees/test_backend_discovery.py \
     tests/spatial_trees/test_warp_payload.py \
-    tests/spatial_trees/test_warp_robin.py
+    tests/spatial_trees/test_warp_robin.py \
+    tests/spatial_trees/test_warp_inside.py
 
 python -m scripts.bench.spatial_trees.warp_bvh_device \
     --backend bvh.snch.warp --queries closest_silhouette \
@@ -130,6 +141,9 @@ compilation, transfers, readback and CPU dispatch. Results go to
 
 Recorded [ray](benchmarks/warp_bvh_device.json),
 [closest-point](benchmarks/closest_point.json),
-[silhouette](benchmarks/closest_silhouette.json) and
-[Robin](benchmarks/robin_radius.json) comparisons retain samples,
-timing scope and measured-source hashes.
+[silhouette](benchmarks/closest_silhouette.json),
+[Robin](benchmarks/robin_radius.json) and
+[classification](benchmarks/inside_classification.json) comparisons retain samples,
+timing scope and source hashes. WoSX’s `insideDomain` uses closest point and
+normal orientation, allowing sign to reuse closest-point work; it uses no parity
+test in the measured GPU path.

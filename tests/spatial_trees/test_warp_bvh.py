@@ -10,6 +10,7 @@ import trimesh
 from surfaces.base import TriMesh
 from surfaces.explicit.accelerators import BVHAccelerator, list_backends
 from surfaces.explicit.accelerators.protocol import Config
+from surfaces.explicit.accelerators.bvh.backends._warp_specs import query_spec
 from surfaces.explicit.primitives import TriMeshPrimitives
 
 
@@ -456,8 +457,8 @@ def test_warp_payload_reuse_nested_vmap_jit_and_lax_loop(backend_name):
     probe = jax.make_jaxpr(jax.vmap(
         lambda payload, q: backend.closest_point(payload, q),
         in_axes=(None, 0)))(accel.payload, jnp.zeros((batch, 3), jnp.float32))
-    source_shapes = [tuple(x.shape) for x in jax.tree_util.tree_leaves(accel.payload)
-                     if len(x.shape) >= 1]
+    source_shapes = [tuple(x.shape) for x in query_spec(
+        "closest_point_kernel").payload_arguments(accel.payload)]
     traced_shapes = set()
     jaxpr = probe.jaxpr
     traced_vars = list(jaxpr.constvars) + list(jaxpr.invars) + list(jaxpr.outvars)

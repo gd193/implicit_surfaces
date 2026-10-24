@@ -41,6 +41,7 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
     has_silhouette_query = False
     has_ray_interval = True
     has_boundary_sampling = False
+    has_point_classification = True
 
     def build(self, primitives: Primitives, config: Config) -> WarpBVHPayload:
         vertices, faces = validate_warp_mesh_and_config(
@@ -49,7 +50,8 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
             return empty_warp_payload()
         lo_np, hi_np = finite_primitive_bounds(primitives)
         tree = _build_payload(lo_np, hi_np, int(config.leaf_size_threshold))
-        payload, depth = make_warp_payload(tree, vertices, faces)
+        payload, depth = make_warp_payload(
+            tree, vertices, faces, mesh_vertices=primitives.mesh.vertices)
         if depth > config.max_stack_depth:
             raise ValueError(
                 f"built SAH tree depth {depth} exceeds configured "
@@ -68,6 +70,14 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
         dist = jnp.where(prim >= 0, dist, jnp.inf)
         return (_restore(cp, shape), _restore(dist, shape),
                 _restore(prim, shape), _restore(_status, shape))
+
+    def classify_point(self, payload: WarpBVHPayload, x: jnp.ndarray):
+        return self.classify_point_with_status(payload, x)[0]
+
+    def classify_point_with_status(self, payload: WarpBVHPayload, x: jnp.ndarray):
+        q, shape = _flatten_vec_queries(x)
+        sign, status = _warp_query("classify_point_kernel", payload, q)
+        return _restore(sign, shape), _restore(status, shape)
 
     def first_hit(self, payload: WarpBVHPayload, ray_origin: jnp.ndarray,
                   ray_direction: jnp.ndarray, max_t: jnp.ndarray,
