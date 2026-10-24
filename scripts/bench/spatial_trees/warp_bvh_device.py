@@ -201,7 +201,8 @@ def main():
     parser.add_argument("--queries", nargs="+", default=["first_hit", "any_hit"],
                         choices=[name.removesuffix("_kernel") for name in QUERY_SPECS])
     parser.add_argument("--counts", nargs="+", type=int, default=[65536])
-    parser.add_argument("--subdivisions", type=int, default=5)
+    parser.add_argument("--mesh", choices=("sphere", "torus", "open_torus"), default="sphere")
+    parser.add_argument("--subdivisions", type=int, default=5, help="Icosphere subdivisions.")
     parser.add_argument("--point-distribution", choices=("gaussian", "shell", "interior", "center"), default="gaussian")
     parser.add_argument("--leaf-size", type=int, default=4)
     parser.add_argument("--radius", type=float, default=0.5,
@@ -227,13 +228,14 @@ def main():
         parser.error("CUDA-event measurements require a CUDA JAX device")
     wp.init()
     warp_device = wp.device_from_jax(device)
-    source_paths = sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends").glob("*warp*.py"))
-    source_paths += [Path(__file__), Path(__file__).with_name("_warp_fixtures.py")]
+    backend_dir = ROOT/"surfaces/explicit/accelerators/bvh/backends"
+    source_paths = sorted(backend_dir.glob("*warp*.py"))
+    source_paths += [backend_dir/"snch_jax.py", Path(__file__), Path(__file__).with_name("_warp_fixtures.py")]
     sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths}
     versions = {name: importlib.metadata.version(name) for name in ("jax", "jaxlib", "warp-lang", "trimesh", "numpy")}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with jax.default_device(device), args.output.open("a", encoding="utf-8") as output:
-        primitives, ntri = _mesh(args.subdivisions)
+        primitives, ntri = _mesh(args.subdivisions, args.mesh)
         tree = BVHAccelerator.build(primitives, args.backend, Config(leaf_size_threshold=args.leaf_size))
         mesh = None
         if args.native_warp:
@@ -270,6 +272,7 @@ def main():
                     query=case.query, implementation=case.implementation,
                     backend=args.backend if case.implementation == "custom" else "warp.Mesh(sah)",
                     n_queries=n, n_triangles=ntri, leaf_size=args.leaf_size, block_dim=case.block_dim,
+                    mesh=args.mesh,
                     point_distribution=args.point_distribution,
                     radius=args.radius, gpu=warp_device.name, versions=versions,
                     geometry_sha256=geometry_hash, query_sha256=_array_digest(query_inputs[case.query]),

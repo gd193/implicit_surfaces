@@ -1,40 +1,168 @@
-"""Closest silhouette; cone radii enclose whole edges, open edges use n1=-n0."""
+"""Bounded closest silhouette with box-support cone pruning."""
 from __future__ import annotations
 
 import warp as wp
 
 from ._warp_specs import STACK_CAPACITY
 
-from ._warp_geometry import finite3, point_box_distance_sq
 
-_STACK = wp.types.vector(length=STACK_CAPACITY, dtype=wp.int32)
-_STACK_LIMIT = wp.constant(STACK_CAPACITY)
+_NATIVE_SILHOUETTE = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r"""
+    const wp::vec3 p = query;
+    out_point.data[qi] = wp::vec3(0.0f);
+    out_distance.data[qi] = INFINITY;
+    out_edge_id.data[qi] = -1;
+    out_status.data[qi] = 0;
+    const float limit = 3.4028234e38f;
+    if (!(p[0] == p[0] && p[1] == p[1] && p[2] == p[2]
+          && wp::abs(p[0]) < limit && wp::abs(p[1]) < limit
+          && wp::abs(p[2]) < limit) || cap != cap || cap < 0.0f) {
+        out_status.data[qi] = -1;
+        return;
+    }
+    if (node_count == 0) return;
+
+    const auto box_distance_sq = [&](int node) {
+        const wp::vec3 lower = node_lower.data[node];
+        const wp::vec3 upper = node_upper.data[node];
+        const float dx = wp::max(wp::max(lower[0] - p[0], 0.0f), p[0] - upper[0]);
+        const float dy = wp::max(wp::max(lower[1] - p[1], 0.0f), p[1] - upper[1]);
+        const float dz = wp::max(wp::max(lower[2] - p[2], 0.0f), p[2] - upper[2]);
+        return dx * dx + dy * dy + dz * dz;
+    };
+    const auto cone_may_have_silhouette = [&](int node) {
+        const wp::vec2 angles = node_cone_sin_cos.data[node];
+        const float sin_alpha = angles[0];
+        const float cos_alpha = angles[1];
+        if (sin_alpha < 0.0f) return false;
+        if (cos_alpha <= 0.0f) return true;
+        const wp::vec3 lower = node_lower.data[node];
+        const wp::vec3 upper = node_upper.data[node];
+        const wp::vec3 view = 0.5f * (lower + upper) - p;
+        const wp::vec3 extent = 0.5f * (upper - lower);
+        const wp::vec3 axis = node_cone_axis.data[node];
+        const float projection = wp::dot(axis, view);
+        // Box support along the cone axis bounds every edge endpoint.
+        const float support = wp::abs(axis[0]) * extent[0]
+                            + wp::abs(axis[1]) * extent[1]
+                            + wp::abs(axis[2]) * extent[2];
+        const float gap = wp::abs(projection) - support;
+        if (gap <= 0.0f) return true;
+        const wp::vec3 perpendicular = view - projection * axis;
+        const float radius = node_cone_radius.data[node];
+        const float limit = sin_alpha * (wp::sqrt(wp::dot(perpendicular, perpendicular)) + radius);
+        const float slack = 2.0e-6f * (wp::sqrt(wp::dot(view, view)) + radius);
+        return gap * cos_alpha <= limit + slack;
+    };
+
+    int stack[stack_capacity];
+    int stack_size = 0;
+    int node = 0;
+    float best_d2 = cap * cap;
+    wp::vec3 best_point(0.0f);
+    int best_edge = -1;
+    bool failed = false;
+    if (box_distance_sq(0) <= best_d2 && cone_may_have_silhouette(0)) {
+        while (node >= 0 || stack_size > 0) {
+            if (node < 0) node = stack[--stack_size];
+            if (box_distance_sq(node) > best_d2) {
+                node = -1;
+                continue;
+            }
+            if (node_left.data[node] < 0) {
+                const int offset = node_silhouette_offset.data[node];
+                const int count = node_silhouette_count.data[node];
+                for (int j = 0; j < count; ++j) {
+                    const int edge = silhouette_refs.data[offset + j];
+                    const wp::vec3 a = silhouette_v0.data[edge];
+                    const wp::vec3 view = p - a;
+                    const float side0 = wp::dot(view, silhouette_n0.data[edge]);
+                    const float side1 = wp::dot(view, silhouette_n1.data[edge]);
+                    // Include tangencies and open edges (n1=-n0).
+                    if ((side0 <= 0.0f && side1 >= 0.0f) || (side0 >= 0.0f && side1 <= 0.0f)) {
+                        const wp::vec3 ab = silhouette_v1.data[edge] - a;
+                        const float length2 = wp::dot(ab, ab);
+                        float t = 0.0f;
+                        if (length2 > 0.0f)
+                            t = wp::clamp(wp::dot(view, ab) / length2, 0.0f, 1.0f);
+                        const wp::vec3 candidate = a + t * ab;
+                        const wp::vec3 delta = candidate - p;
+                        const float d2 = wp::dot(delta, delta);
+                        if (d2 <= best_d2 && (d2 < best_d2 || best_edge < 0 || edge < best_edge)) {
+                            best_d2 = d2;
+                            best_point = candidate;
+                            best_edge = edge;
+                        }
+                    }
+                }
+                node = -1;
+                continue;
+            }
+            const int left = node_left.data[node];
+            const int right = node_right.data[node];
+            const float left_d2 = box_distance_sq(left);
+            const float right_d2 = box_distance_sq(right);
+            bool visit_left = left_d2 <= best_d2;
+            bool visit_right = right_d2 <= best_d2;
+            if (visit_left) visit_left = cone_may_have_silhouette(left);
+            if (visit_right) visit_right = cone_may_have_silhouette(right);
+            if (!visit_left && !visit_right) {
+                node = -1;
+                continue;
+            }
+            if (visit_left && visit_right) {
+                int near_node = left;
+                int far_node = right;
+                if (right_d2 < left_d2) {
+                    near_node = right;
+                    far_node = left;
+                }
+                if (stack_size >= stack_capacity) {
+                    failed = true;
+                    break;
+                }
+                stack[stack_size++] = far_node;
+                node = near_node;
+            } else {
+                node = visit_left ? left : right;
+            }
+        }
+    }
+    if (failed) {
+        out_status.data[qi] = -1;
+    } else if (best_edge >= 0) {
+        out_point.data[qi] = best_point;
+        out_distance.data[qi] = wp::sqrt(best_d2);
+        out_edge_id.data[qi] = best_edge;
+        out_status.data[qi] = 1;
+    }
+"""
 
 
-@wp.func
-def cone_may_have_silhouette(
-    point: wp.vec3, lower: wp.vec3, upper: wp.vec3,
-    axis: wp.vec3, half_angle: float, radius: float,
-) -> bool:
-    if half_angle < 0.0:
-        return False
-    if half_angle >= 1.5707953:
-        return True
-    view = 0.5 * (lower + upper) - point
-    distance2 = wp.dot(view, view)
-    # Never cone-prune near contacts.
-    if distance2 <= radius * radius * 1.000002:
-        return True
-    inverse_distance = 1.0 / wp.sqrt(distance2)
-    sin_beta = wp.min(radius * inverse_distance, 1.0)
-    sin_alpha = wp.sin(half_angle)
-    cos_alpha = wp.cos(half_angle)
-    if sin_beta >= cos_alpha:
-        return True
-    # sin(alpha+beta), avoiding inverse trig.
-    limit = sin_alpha * wp.sqrt(wp.max(0.0, 1.0 - sin_beta * sin_beta)) + cos_alpha * sin_beta
-    alignment = wp.abs(wp.dot(axis, view) * inverse_distance)
-    return alignment <= limit + 2.0e-6
+@wp.func_native(_NATIVE_SILHOUETTE)
+def native_closest_silhouette(
+    qi: int,
+    query: wp.vec3,
+    cap: float,
+    node_count: int,
+    node_lower: wp.array(dtype=wp.vec3),
+    node_upper: wp.array(dtype=wp.vec3),
+    node_left: wp.array(dtype=wp.int32),
+    node_right: wp.array(dtype=wp.int32),
+    node_silhouette_offset: wp.array(dtype=wp.int32),
+    node_silhouette_count: wp.array(dtype=wp.int32),
+    silhouette_refs: wp.array(dtype=wp.int32),
+    silhouette_v0: wp.array(dtype=wp.vec3),
+    silhouette_v1: wp.array(dtype=wp.vec3),
+    silhouette_n0: wp.array(dtype=wp.vec3),
+    silhouette_n1: wp.array(dtype=wp.vec3),
+    node_cone_axis: wp.array(dtype=wp.vec3),
+    node_cone_sin_cos: wp.array(dtype=wp.vec2),
+    node_cone_radius: wp.array(dtype=wp.float32),
+    out_point: wp.array(dtype=wp.vec3),
+    out_distance: wp.array(dtype=wp.float32),
+    out_edge_id: wp.array(dtype=wp.int32),
+    out_status: wp.array(dtype=wp.int32),
+): ...
 
 
 @wp.kernel
@@ -45,7 +173,6 @@ def closest_silhouette_kernel(
     node_upper: wp.array(dtype=wp.vec3),
     node_left: wp.array(dtype=wp.int32),
     node_right: wp.array(dtype=wp.int32),
-    node_leaf_count: wp.array(dtype=wp.int32),
     node_silhouette_offset: wp.array(dtype=wp.int32),
     node_silhouette_count: wp.array(dtype=wp.int32),
     silhouette_refs: wp.array(dtype=wp.int32),
@@ -54,7 +181,7 @@ def closest_silhouette_kernel(
     silhouette_n0: wp.array(dtype=wp.vec3),
     silhouette_n1: wp.array(dtype=wp.vec3),
     node_cone_axis: wp.array(dtype=wp.vec3),
-    node_cone_half_angle: wp.array(dtype=wp.float32),
+    node_cone_sin_cos: wp.array(dtype=wp.vec2),
     node_cone_radius: wp.array(dtype=wp.float32),
     out_point: wp.array(dtype=wp.vec3),
     out_distance: wp.array(dtype=wp.float32),
@@ -62,91 +189,11 @@ def closest_silhouette_kernel(
     out_status: wp.array(dtype=wp.int32),
 ):
     q = wp.tid()
-    point = points[q]
-    cap = max_distance[q]
-    out_point[q] = wp.vec3(0.0)
-    out_distance[q] = wp.float32(wp.inf)
-    out_edge_id[q] = -1
-    out_status[q] = 0
-    if not finite3(point) or wp.isnan(cap) or cap < 0.0:
-        out_status[q] = -1
-        return
-    if node_left.shape[0] == 0:
-        return
-
-    best2 = cap * cap
-    best_point = wp.vec3(0.0)
-    best_edge = int(-1)
-    stack = _STACK()
-    size = int(0)
-    node = int(0)
-    failed = bool(False)
-    while node >= 0 or size > 0:
-        if node < 0:
-            size -= 1
-            node = stack[size]
-        box_distance = point_box_distance_sq(point, node_lower[node], node_upper[node])
-        if box_distance > best2:
-            node = -1
-            continue
-        if not cone_may_have_silhouette(
-            point, node_lower[node], node_upper[node], node_cone_axis[node],
-            node_cone_half_angle[node], node_cone_radius[node],
-        ):
-            node = -1
-            continue
-        if node_leaf_count[node] > 0:
-            end = node_silhouette_offset[node] + node_silhouette_count[node]
-            for position in range(node_silhouette_offset[node], end):
-                edge = silhouette_refs[position]
-                a = silhouette_v0[edge]
-                ab = silhouette_v1[edge] - a
-                view = point - a
-                # Retain tangencies; n1=-n0 makes open edges unconditional candidates.
-                side0 = wp.dot(view, silhouette_n0[edge])
-                side1 = wp.dot(view, silhouette_n1[edge])
-                if (side0 <= 0.0 and side1 >= 0.0) or (side0 >= 0.0 and side1 <= 0.0):
-                    length2 = wp.dot(ab, ab)
-                    t = float(0.0)
-                    if length2 > 0.0:
-                        t = wp.clamp(wp.dot(view, ab) / length2, 0.0, 1.0)
-                    candidate = a + t * ab
-                    delta = candidate - point
-                    distance2 = wp.dot(delta, delta)
-                    if distance2 < best2 or (distance2 == best2 and (best_edge < 0 or edge < best_edge)):
-                        best2 = distance2
-                        best_point = candidate
-                        best_edge = edge
-            node = -1
-        else:
-            left = node_left[node]
-            right = node_right[node]
-            left_distance = point_box_distance_sq(point, node_lower[left], node_upper[left])
-            right_distance = point_box_distance_sq(point, node_lower[right], node_upper[right])
-            near = left
-            far = right
-            near_distance = left_distance
-            far_distance = right_distance
-            if right_distance < left_distance:
-                near = right
-                far = left
-                near_distance = right_distance
-                far_distance = left_distance
-            if near_distance > best2:
-                node = -1
-            elif far_distance <= best2:
-                if size >= _STACK_LIMIT:
-                    failed = True
-                    break
-                stack[size] = far
-                size += 1
-                node = near
-            else:
-                node = near
-    if failed:
-        out_status[q] = -1
-    elif best_edge >= 0:
-        out_point[q] = best_point
-        out_distance[q] = wp.sqrt(best2)
-        out_edge_id[q] = best_edge
-        out_status[q] = 1
+    native_closest_silhouette(
+        q, points[q], max_distance[q], wp.len(node_left),
+        node_lower, node_upper, node_left, node_right,
+        node_silhouette_offset, node_silhouette_count, silhouette_refs,
+        silhouette_v0, silhouette_v1, silhouette_n0, silhouette_n1,
+        node_cone_axis, node_cone_sin_cos, node_cone_radius,
+        out_point, out_distance, out_edge_id, out_status,
+    )
