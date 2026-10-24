@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "command": "python -m scripts.bench.spatial_trees.warp_bvh_device --queries first_hit any_hit --counts 65536 --leaf-size 4 --native-warp",
+  "metric": "cuda_event_graph_kernel_ms",
+  "gpu": "NVIDIA A40",
+  "versions": {
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "warp-lang": "1.17.0",
+    "trimesh": "4.12.1",
+    "numpy": "2.4.3"
+  },
+  "fixture": {
+    "mesh": "trimesh icosphere, subdivisions=5",
+    "triangles": 20480,
+    "queries": 65536,
+    "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+    "leaf_size_threshold": 4,
+    "block_dim": 128,
+    "ray_interval": [
+      0,
+      10
+    ],
+    "launches_per_graph": 50,
+    "repeats": 15
+  },
+  "scope": "CUDA events around warmed graphs; host dispatch excluded. Native mesh uses its own SAH tree and strict upper endpoints. Ray outputs checked before timing.",
+  "source_sha256": {
+    "surfaces/explicit/accelerators/bvh/backends/_warp_build.py": "ee515dec5d545b00a716eb0e9278c396551c6d359b40038fc2d3b9d15aa8d1a1",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_geometry.py": "d94297215e462a0a2415fef93004234a14ba76bf062afe965ecc3b73c9678a5b",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_jax.py": "dbeaee2e2339eb755f311025f3c1bedc810d2e0117033b0188276acb6cea4ced",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_layout.py": "092b38a3b5c9cb124d1e23e60727ef295b1447a5cd0f5cec5d54951d4d268776",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_queries.py": "1df8f982ead7aec7bf0093e87ab75f592ae36e76613fca5f265d55eac1a7657e",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_ray.py": "7096d68cde2417d14703e2c5282afffe876c9850beb372212e75f08700d696a1",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_sampling.py": "9bcebb88d186c06146f8eb07e8e02fb2520cdc7e0204702447ed3dcfc75b1bcd",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_silhouette.py": "e18897b85374df55ccba278efc8a1f2dd8b6763a80ad4a1cde81fbc344396a54",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_specs.py": "fd8e365296c454a362da3d24bb6b5ea6993e8c4a0711ccfbf65f672397851f6f",
+    "surfaces/explicit/accelerators/bvh/backends/sah_warp.py": "80c07d887002560c12f20091e479834010508c0f877a1c12324c8b4ede9815c6",
+    "surfaces/explicit/accelerators/bvh/backends/snch_warp.py": "f94f29dda7aff21af086e8a6c07eb5b0ac85367297eceacc3cca2062012f6e86",
+    "scripts/bench/spatial_trees/warp_bvh_device.py": "1b72d1cf2165e8b345932f4075c8836c4f54d9bf586a2dfff3b89be9f31ca23f",
+    "scripts/bench/spatial_trees/_warp_fixtures.py": "62d21b9a05faf9b14c29a87a91aa8630f493f277d46b473351be80503eb1b323"
+  },
+  "measurements": [
+    {
+      "query": "first_hit",
+      "implementation": "custom",
+      "backend": "bvh.sah.warp",
+      "query_sha256": "d2e3ac6f3411eb34efcae650ba0e5e6410443dc9b68beeaac64a940d9182a87a",
+      "device_p50_ms": 0.11608063697814941,
+      "device_samples_ms": [
+        0.11636735916137696,
+        0.11595775604248047,
+        0.11612159729003907,
+        0.11614208221435547,
+        0.11608063697814941,
+        0.11622400283813476,
+        0.11608063697814941,
+        0.1167360019683838,
+        0.11599871635437012,
+        0.11595775604248047,
+        0.11595775604248047,
+        0.11606016159057617,
+        0.11593728065490723,
+        0.11618304252624512,
+        0.11606016159057617
+      ],
+      "properties": {
+        "register_count": 59,
+        "local_memory_size": 512
+      },
+      "result_count": 30264,
+      "invalid_count": 0
+    },
+    {
+      "query": "first_hit",
+      "implementation": "native_mesh",
+      "backend": "warp.Mesh(sah)",
+      "query_sha256": "d2e3ac6f3411eb34efcae650ba0e5e6410443dc9b68beeaac64a940d9182a87a",
+      "device_p50_ms": 0.19908607482910157,
+      "device_samples_ms": [
+        0.19892223358154296,
+        0.19908607482910157,
+        0.1987174415588379,
+        0.19931135177612305,
+        0.19902463912963866,
+        0.19914751052856444,
+        0.1984511947631836,
+        0.19920896530151366,
+        0.19941375732421876,
+        0.19937280654907227,
+        0.1989632034301758,
+        0.19892223358154296,
+        0.19900415420532228,
+        0.19935232162475586,
+        0.19924991607666015
+      ],
+      "properties": {
+        "register_count": 71,
+        "local_memory_size": 320
+      },
+      "result_count": 30264,
+      "invalid_count": 0
+    },
+    {
+      "query": "any_hit",
+      "implementation": "custom",
+      "backend": "bvh.sah.warp",
+      "query_sha256": "d2e3ac6f3411eb34efcae650ba0e5e6410443dc9b68beeaac64a940d9182a87a",
+      "device_p50_ms": 0.09883647918701172,
+      "device_samples_ms": [
+        0.09895936012268067,
+        0.09887743949890136,
+        0.09889792442321778,
+        0.09879551887512207,
+        0.09867263793945312,
+        0.09883647918701172,
+        0.09879551887512207,
+        0.09902079582214356,
+        0.09852928161621094,
+        0.09883647918701172,
+        0.09883647918701172,
+        0.09865216255187988,
+        0.09889792442321778,
+        0.09865216255187988,
+        0.09863167762756347
+      ],
+      "properties": {
+        "register_count": 49,
+        "local_memory_size": 512
+      },
+      "result_count": 30264,
+      "invalid_count": 0
+    },
+    {
+      "query": "any_hit",
+      "implementation": "native_mesh",
+      "backend": "warp.Mesh(sah)",
+      "query_sha256": "d2e3ac6f3411eb34efcae650ba0e5e6410443dc9b68beeaac64a940d9182a87a",
+      "device_p50_ms": 0.1781350326538086,
+      "device_samples_ms": [
+        0.17807359695434571,
+        0.1780940818786621,
+        0.17833984375,
+        0.1781350326538086,
+        0.17750015258789062,
+        0.17872896194458007,
+        0.17811456680297852,
+        0.17887231826782227,
+        0.1780121612548828,
+        0.17766399383544923,
+        0.17778688430786133,
+        0.17833984375,
+        0.1782988739013672,
+        0.1782579231262207,
+        0.1785651206970215
+      ],
+      "properties": {
+        "register_count": 69,
+        "local_memory_size": 320
+      },
+      "result_count": 30264,
+      "invalid_count": 0
+    }
+  ],
+  "source_note": "Measured before comment/docstring edits; executable AST unchanged."
+}

@@ -26,3 +26,12 @@ assets/meshes/*.zip
 algo_paper/
 scripts/*
 assets/
+
+# Keep the Warp BVH benchmark reproducible without exposing other local
+# research scripts or generated benchmark data.
+!scripts/bench/
+scripts/bench/*
+!scripts/bench/spatial_trees/
+scripts/bench/spatial_trees/*
+!scripts/bench/spatial_trees/_warp_fixtures.py
+!scripts/bench/spatial_trees/warp_bvh_device.py
