@@ -22,6 +22,7 @@ from meshExtractor.trees._bucketed_build import (
     build_bucketed_tree_classify_subcubes,
     uses_classify_subcubes_override,
 )
+from surfaces.spatial_tree import SpatialBuildResult
 
 
 # (i, j, k) ∈ {0, 1}^3 octant offsets.
@@ -104,23 +105,42 @@ class Octree(ImplicitTree):
         self.batch_process_size = batch_process_size
 
     def build(self, surface, params, root_lower, root_upper) -> Leaves:
+        leaves, stats = self._dispatch(
+            surface, params, root_lower, root_upper, record_topology=False,
+        )
+        self.last_build_stats = stats
+        return leaves
+
+    def build_with_topology(self, surface, params, root_lower, root_upper) -> SpatialBuildResult:
+        """Build the leaf cover and the full subdivision tree topology.
+
+        Same per-iter `classify_box` / `classify_subcubes` cost as `build`,
+        plus an extra recorder pass per batch (one parent re-classify + a
+        few scatter writes). Build is one-shot, not on the hot query path.
+        """
+        result, stats = self._dispatch(
+            surface, params, root_lower, root_upper, record_topology=True,
+        )
+        self.last_build_stats = stats
+        return result
+
+    def _dispatch(self, surface, params, root_lower, root_upper, *, record_topology: bool):
         if uses_classify_subcubes_override(surface):
-            leaves, stats = build_bucketed_tree_classify_subcubes(
+            return build_bucketed_tree_classify_subcubes(
                 iter_fn=_iter_classify_subcubes,
                 split_factor=8,
                 surface=surface, params=params,
                 root_lower=root_lower, root_upper=root_upper,
                 max_depth=self.max_depth,
                 batch_process_size=self.batch_process_size,
+                record_topology=record_topology, flavor="octree",
             )
-        else:
-            leaves, stats = build_bucketed_tree_classify_box(
-                iter_fn=_iter_classify_box,
-                split_factor=8,
-                surface=surface, params=params,
-                root_lower=root_lower, root_upper=root_upper,
-                max_depth=self.max_depth,
-                batch_process_size=self.batch_process_size,
-            )
-        self.last_build_stats = stats
-        return leaves
+        return build_bucketed_tree_classify_box(
+            iter_fn=_iter_classify_box,
+            split_factor=8,
+            surface=surface, params=params,
+            root_lower=root_lower, root_upper=root_upper,
+            max_depth=self.max_depth,
+            batch_process_size=self.batch_process_size,
+            record_topology=record_topology, flavor="octree",
+        )
