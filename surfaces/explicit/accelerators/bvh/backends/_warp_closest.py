@@ -6,7 +6,6 @@ import warp as wp
 from ._warp_specs import STACK_CAPACITY
 
 
-# The failure flag preserves CUDA throughput; avoid early returns in traversal.
 _NATIVE_CLOSEST_POINT = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r"""
     const wp::vec3 p = query;
     const auto finite3 = [](const wp::vec3& v) {

@@ -22,7 +22,7 @@ class WarpBVHPayload(NamedTuple):
     root: jnp.ndarray
     # SNCH data; empty for ordinary SAH.
     node_cone_axis: jnp.ndarray
-    node_cone_half_angle: jnp.ndarray
+    node_cone_sin_cos: jnp.ndarray
     node_cone_radius: jnp.ndarray
     node_silhouette_offset: jnp.ndarray
     node_silhouette_count: jnp.ndarray
@@ -202,7 +202,7 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None):
 
     if snch is None:
         cone_axis = np.zeros((n_nodes, 3), dtype=np.float32)
-        cone_half_angle = np.full((n_nodes,), np.float32(np.pi), dtype=np.float32)
+        cone_sin_cos = np.tile(np.asarray([1., 0.], np.float32), (n_nodes, 1))
         cone_radius = np.zeros((n_nodes,), dtype=np.float32)
         silh_offset = silh_count = np.zeros((n_nodes,), dtype=np.int32)
         silh_refs = np.zeros((0,), dtype=np.int32)
@@ -210,7 +210,10 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None):
     else:
         cone_axis = np.asarray(snch.node_cone_axis, dtype=np.float32)
         cone_half_angle = np.asarray(snch.node_cone_half_angle, dtype=np.float32)
-        cone_radius = np.asarray(snch.node_cone_radius, dtype=np.float32)
+        cone_sin_cos = np.stack([np.sin(cone_half_angle), np.cos(cone_half_angle)], axis=-1)
+        cone_sin_cos[cone_half_angle >= 1.5707953] = [1., 0.]
+        # Half the box diagonal encloses whole edges.
+        cone_radius = .5 * np.linalg.norm(node_upper - node_lower, axis=1)
         silh_offset = np.asarray(snch.node_silhouette_offset, dtype=np.int32)
         silh_count = np.asarray(snch.node_silhouette_count, dtype=np.int32)
         silh_refs = np.asarray(snch.silhouette_refs, dtype=np.int32)
@@ -219,6 +222,15 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None):
         silh_v1 = np.asarray(snch.silhouette_v1, dtype=np.float32)
         silh_n0 = np.asarray(snch.silhouette_n0, dtype=np.float32)
         silh_n1 = np.asarray(snch.silhouette_n1, dtype=np.float32)
+
+        has_silhouette = np.zeros((n_nodes,), dtype=bool)
+        for node in postorder:
+            if count[node] > 0:
+                has_silhouette[node] = silh_count[node] > 0
+            else:
+                has_silhouette[node] = has_silhouette[left[node]] or has_silhouette[right[node]]
+        # sin<0 marks empty subtrees; cos=0 disables cone pruning.
+        cone_sin_cos[~has_silhouette] = [-1., 0.]
 
     ray_lower, ray_upper = _pack_ray_nodes(
         node_lower, node_upper, left, right, offset, count)
@@ -233,7 +245,7 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None):
         prim_ids=jnp.asarray(prim_ids),
         root=jnp.asarray(0, dtype=jnp.int32),
         node_cone_axis=jnp.asarray(cone_axis),
-        node_cone_half_angle=jnp.asarray(cone_half_angle),
+        node_cone_sin_cos=jnp.asarray(cone_sin_cos),
         node_cone_radius=jnp.asarray(cone_radius),
         node_silhouette_offset=jnp.asarray(silh_offset),
         node_silhouette_count=jnp.asarray(silh_count),
@@ -268,7 +280,7 @@ def empty_warp_payload():
         prim_ids=emptyi,
         root=jnp.asarray(0, jnp.int32),
         node_cone_axis=empty3,
-        node_cone_half_angle=empty1,
+        node_cone_sin_cos=jnp.zeros((0, 2), dtype=jnp.float32),
         node_cone_radius=empty1,
         node_silhouette_offset=emptyi,
         node_silhouette_count=emptyi,

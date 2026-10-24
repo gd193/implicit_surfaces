@@ -372,40 +372,20 @@ def _assign_silhouette_refs_and_cones(state, n_nodes,
                                       leaf_buckets,
                                       silh_v0, silh_v1, silh_n0, silh_n1,
                                       silh_face_a, silh_face_b):
-    """Steps 3 + 4 of the brief.
-
-    Step 3: per-leaf silhouette-ref assignment. A silhouette edge
-    belongs to a leaf if either of its two adjacent faces is in that
-    leaf's face bucket.
-
-    Step 4: bottom-up post-order propagation of cone (axis, half_angle,
-    radius). For each node we collect the set of silhouette indices in
-    its subtree (using leaf-bucket assignment recursively). Cone axis =
-    normalised sum of all face normals (n0 and n1 of every silhouette
-    in the subtree); half_angle = max angle between axis and any
-    contributing normal; radius = max distance from node centroid to
-    any silhouette midpoint. Empty/cancelling sets emit a sentinel
-    invalid cone (axis=0, half_angle=pi).
-    """
+    """Assign leaf edges and bound subtree normals and edge midpoints."""
     E = int(silh_v0.shape[0])
 
-    # Build face -> list of silhouette-edge indices for fast leaf lookup.
     face_to_silhs: dict = {}
     for e in range(E):
         face_to_silhs.setdefault(int(silh_face_a[e]), []).append(e)
         face_to_silhs.setdefault(int(silh_face_b[e]), []).append(e)
 
-    # Per-node silhouette-index set (subtree). Computed post-order.
     node_silh_set: list = [set() for _ in range(n_nodes)]
-    # Per-node silhouette refs to write to flat array (only for leaves;
-    # internal nodes carry counts via the cone summary, not refs).
     node_silh_offset = np.zeros((n_nodes,), dtype=np.int32)
     node_silh_count = np.zeros((n_nodes,), dtype=np.int32)
     silh_ref_out: list = []
 
-    # Determine post-order via iterative DFS over node_left/node_right.
     post: list = []
-    # Standard iterative post-order using a visited flag.
     visit_stack = [(0, False)]
     while visit_stack:
         node, visited = visit_stack.pop()
@@ -416,16 +396,13 @@ def _assign_silhouette_refs_and_cones(state, n_nodes,
         if state.node_leaf_count[node] == 0:
             l = int(state.node_left[node])
             r = int(state.node_right[node])
-            # Push right then left so left is visited first.
             if r >= 0:
                 visit_stack.append((r, False))
             if l >= 0:
                 visit_stack.append((l, False))
 
-    # Compute centroid AABB for every node (needed for cone radius).
     node_centroid = 0.5 * (state.node_lower[:n_nodes] + state.node_upper[:n_nodes])
 
-    # Silhouette midpoints for cone radius (Step 4).
     silh_mid = 0.5 * (silh_v0 + silh_v1) if E > 0 else np.zeros((0, 3),
                                                                  dtype=np.float32)
 
@@ -442,7 +419,6 @@ def _assign_silhouette_refs_and_cones(state, n_nodes,
                 if f in face_to_silhs:
                     silh_set.update(face_to_silhs[f])
             node_silh_set[node] = silh_set
-            # Write silhouette refs to flat array (Step 3, leaf only).
             if len(silh_set) > 0:
                 offset = len(silh_ref_out)
                 refs_sorted = sorted(silh_set)
@@ -454,13 +430,10 @@ def _assign_silhouette_refs_and_cones(state, n_nodes,
             r = int(state.node_right[node])
             silh_set = node_silh_set[l] | node_silh_set[r]
             node_silh_set[node] = silh_set
-            # Internal nodes: no flat-array refs (cones aggregate work).
             node_silh_offset[node] = 0
             node_silh_count[node] = 0
 
-        # Step 4: cone summary for this node.
         if len(silh_set) == 0:
-            # Sentinel invalid cone: axis=0, half_angle=pi.
             cone_axis_arr[node] = np.zeros(3, dtype=np.float32)
             cone_half_angle_arr[node] = float(np.pi)
             cone_radius_arr[node] = 0.0
@@ -470,29 +443,21 @@ def _assign_silhouette_refs_and_cones(state, n_nodes,
             axis_sum = normals.sum(axis=0)
             axis_norm = float(np.linalg.norm(axis_sum))
             if axis_norm < 1e-12:
-                # Cancelling normals (e.g. boundary-edge subtree with
-                # n1 = -n0 sentinel). The subtree IS non-empty so we
-                # cannot prune like the empty-set sentinel; instead
-                # emit a maximally-wide valid cone (axis=0,
-                # half_angle slightly below pi) so the cone-overlap
-                # test conservatively descends. `_cone_overlap_box`
-                # treats half_angle >= pi/2 as early-pass, so this
-                # behaves as "always overlap" while still being
-                # distinguishable from the empty-subtree sentinel
-                # (half_angle == pi).
+                # Opposing normals need a wide valid cone, not an empty cone.
                 cone_axis_arr[node] = np.zeros(3, dtype=np.float32)
                 cone_half_angle_arr[node] = float(np.pi) * np.float32(
                     0.5)
             else:
                 axis = axis_sum / axis_norm
-                # Half-angle = max angle between axis and any contributing
-                # normal: dots in [-1, 1], angle = acos(dot).
-                dots = np.clip(normals @ axis, -1.0, 1.0)
-                half_angle = float(np.arccos(np.min(dots)))
+                # Float32 acos can collapse narrow cones to zero.
+                normals64 = normals.astype(np.float64)
+                axis64 = axis.astype(np.float64)
+                angles = np.arctan2(np.linalg.norm(np.cross(normals64, axis64), axis=1),
+                                    normals64 @ axis64)
+                half_angle = float(np.nextafter(np.float32(angles.max()), np.float32(np.inf)))
                 cone_axis_arr[node] = axis.astype(np.float32)
                 cone_half_angle_arr[node] = min(half_angle, float(np.pi))
-            # Cone radius: max distance from node centroid to any
-            # silhouette-midpoint in the subtree.
+            # JAX cones bound edge midpoints; Warp expands radii during packing.
             mids = silh_mid[idx]
             d = np.linalg.norm(mids - node_centroid[node][None, :], axis=-1)
             cone_radius_arr[node] = float(d.max()) if d.size > 0 else 0.0

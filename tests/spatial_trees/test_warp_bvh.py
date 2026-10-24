@@ -54,6 +54,15 @@ def test_warp_query_bridge_preserves_cpu_execution(backend_name):
     np.testing.assert_allclose(distance, 1., rtol=0, atol=2e-6)
     assert int(face) == 0 and int(status) == 1
 
+    if accel.has_silhouette_query:
+        contact = jax.device_put(np.zeros(3, np.float32), cpu)
+        outputs = jax.jit(accel.backend.closest_silhouette_with_status)(
+            payload, contact, jax.device_put(np.float32(0), cpu))
+        assert all(value.device.platform == "cpu" for value in outputs)
+        cp, distance, edge, status = map(np.asarray, outputs)
+        np.testing.assert_array_equal(cp, [0., 0., 0.])
+        assert float(distance) == 0 and int(edge) == 0 and int(status) == 1
+
 
 def _closest_triangle(p, tri):
     a, b, c = tri
@@ -513,6 +522,29 @@ def test_warp_snch_closed_mesh_has_no_interior_silhouette(backend_name):
 
 @pytest.mark.parametrize("backend_name", [n for n in WARP_BVHS if n == "bvh.snch.warp"],
                          ids=lambda n: n)
+def test_warp_snch_silhouette_cap_and_ties_across_children(backend_name):
+    v = np.asarray([[1, 0, 0], [2, 0, 0], [1, 1, 0],
+                    [-2, 0, 0], [-1, 0, 0], [-1, 1, 0]], np.float32)
+    f = np.asarray([[0, 1, 2], [3, 4, 5]], np.int32)
+    accel = BVHAccelerator.build(
+        _mesh(v, f)[0], backend_name, Config(leaf_size_threshold=1))
+    payload = accel.payload
+    left = int(payload.node_left[0])
+    assert int(payload.prim_ids[payload.node_leaf_offset[left]]) == 1
+
+    points = jnp.asarray([[0., 0., 0.], [0., 0., 0.], [1., 0., 0.]])
+    caps = jnp.asarray([1., np.nextafter(np.float32(1), np.float32(0)), 0.])
+    query = jax.jit(accel.backend.closest_silhouette_with_status)
+    cp, distance, edge, status = map(np.asarray, query(payload, points, caps))
+    np.testing.assert_array_equal(status, [1, 0, 1])
+    np.testing.assert_array_equal(edge, [0, -1, 0])
+    np.testing.assert_array_equal(cp[[0, 2]], [[1., 0., 0.], [1., 0., 0.]])
+    np.testing.assert_array_equal(distance[[0, 2]], [1., 0.])
+    assert np.isinf(distance[1])
+
+
+@pytest.mark.parametrize("backend_name", [n for n in WARP_BVHS if n == "bvh.snch.warp"],
+                         ids=lambda n: n)
 def test_warp_snch_concave_prism_matches_exhaustive_edge_oracle(backend_name):
     # The re-entrant edge catches invalid cone pruning.
     outline = np.array([[-1, -1], [0, -1], [1, -1], [1, 0],
@@ -564,6 +596,86 @@ def test_warp_snch_long_edges_match_exhaustive_edge_oracle(backend_name):
         np.testing.assert_allclose(dist[k], want_dist, atol=3e-4, rtol=3e-5)
         np.testing.assert_allclose(cp[k], want_cp, atol=4e-4, rtol=3e-5)
         assert ids[k] >= 0
+
+
+@pytest.mark.parametrize("backend_name", [n for n in WARP_BVHS if n == "bvh.snch.warp"],
+                         ids=lambda n: n)
+def test_warp_snch_bounded_silhouette_on_torus(backend_name):
+    tm = trimesh.creation.torus(major_radius=.7, minor_radius=.3,
+                               major_sections=24, minor_sections=12)
+    prims, vertices, faces = _mesh(tm.vertices, tm.faces)
+    accel = BVHAccelerator.build(prims, backend_name, Config(leaf_size_threshold=2))
+    qs = np.random.default_rng(647).uniform(-1.2, 1.2, (35, 3)).astype(np.float32)
+    caps = np.resize(np.asarray([.15, .75, np.inf], np.float32), len(qs))
+    cp, distance, edge, status = map(np.asarray, jax.jit(
+        accel.closest_silhouette_with_status)(jnp.asarray(qs), max_distance=jnp.asarray(caps)))
+    for k, q in enumerate(qs):
+        want_cp, want_distance = _oracle_silhouette(vertices, faces, q)
+        if want_distance <= caps[k]:
+            assert status[k] == 1 and edge[k] >= 0
+            np.testing.assert_allclose(distance[k], want_distance, atol=4e-5, rtol=5e-5)
+            np.testing.assert_allclose(cp[k], want_cp, atol=5e-5, rtol=5e-5)
+        else:
+            assert status[k] == 0 and edge[k] == -1
+            assert np.isinf(distance[k])
+
+
+@pytest.mark.parametrize("scale", [1.e-3, 1., 1.e3])
+@pytest.mark.parametrize("backend_name", [n for n in WARP_BVHS if n == "bvh.snch.warp"],
+                         ids=lambda n: n)
+def test_warp_snch_thin_box_contacts_at_multiple_scales(backend_name, scale):
+    tm = trimesh.creation.box(extents=[4., 2., .125])
+    rotation = trimesh.transformations.rotation_matrix(.37, [0., 0., 1.])[:3, :3]
+    vertices = ((np.asarray(tm.vertices) @ rotation.T) * scale).astype(np.float32)
+    faces = np.asarray(tm.faces, np.int32)
+    accel = BVHAccelerator.build(
+        _mesh(vertices, faces)[0], backend_name, Config(leaf_size_threshold=1))
+    qs = np.asarray([[0., 0., .0625], [2., 0., .0625], [0., 1., .0625],
+                     [2.0001, 0., .0625], [0., 0., .062501], [0., 0., .062499]])
+    qs = ((qs @ rotation.T) * scale).astype(np.float32)
+    cp, distance, edge = map(np.asarray, jax.jit(accel.closest_silhouette)(jnp.asarray(qs)))
+    for k, q in enumerate(qs):
+        _, want_distance = _oracle_silhouette(vertices, faces, q)
+        np.testing.assert_allclose(distance[k], want_distance, atol=2e-6 * scale, rtol=5e-5)
+        if np.isfinite(want_distance):
+            assert edge[k] >= 0
+            np.testing.assert_allclose(np.linalg.norm(cp[k] - q), distance[k],
+                                       atol=2e-6 * scale, rtol=5e-5)
+        else:
+            assert edge[k] == -1
+
+
+@pytest.mark.parametrize("backend_name", [n for n in WARP_BVHS if n == "bvh.snch.warp"],
+                         ids=lambda n: n)
+def test_warp_snch_silhouette_on_nearly_flat_closed_mesh(backend_name):
+    tm = trimesh.creation.icosphere(subdivisions=2)
+    vertices = np.asarray(tm.vertices, np.float32) * np.asarray([1., 1., 1.e-4], np.float32)
+    faces = np.asarray(tm.faces, np.int32)
+    accel = BVHAccelerator.build(
+        _mesh(vertices, faces)[0], backend_name, Config(leaf_size_threshold=1))
+    payload = jax.tree_util.tree_map(np.asarray, accel.payload)
+    for node in np.flatnonzero(payload.node_leaf_count):
+        sin_alpha, cos_alpha = payload.node_cone_sin_cos[node]
+        if cos_alpha <= 0:
+            continue
+        start = payload.node_silhouette_offset[node]
+        refs = payload.silhouette_refs[start:start + payload.node_silhouette_count[node]]
+        normals = np.concatenate([payload.silhouette_n0[refs], payload.silhouette_n1[refs]])
+        axis = payload.node_cone_axis[node].astype(np.float64)
+        normals = normals.astype(np.float64)
+        angles = np.arctan2(np.linalg.norm(np.cross(normals, axis), axis=1), normals @ axis)
+        assert np.max(angles) <= np.arctan2(float(sin_alpha), float(cos_alpha)) + 1.e-7
+    qs = np.random.default_rng(927).uniform(-1.5, 1.5, (71, 3)).astype(np.float32)
+    qs[:, 2] *= 1.e-4
+    cp, distance, edge = map(np.asarray, jax.jit(accel.closest_silhouette)(jnp.asarray(qs)))
+    for k, q in enumerate(qs):
+        _, want_distance = _oracle_silhouette(vertices, faces, q)
+        np.testing.assert_allclose(distance[k], want_distance, atol=4e-5, rtol=5e-5)
+        if np.isfinite(want_distance):
+            assert edge[k] >= 0
+            np.testing.assert_allclose(np.linalg.norm(cp[k] - q), distance[k], atol=4e-5)
+        else:
+            assert edge[k] == -1
 
 
 @pytest.mark.parametrize("backend_name", [n for n in WARP_BVHS if n == "bvh.snch.warp"],

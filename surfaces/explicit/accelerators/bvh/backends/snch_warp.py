@@ -60,25 +60,6 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
                 f"max_stack_depth={config.max_stack_depth}"
             )
 
-        # Cone angle -1 marks empty subtrees.
-        left = np.asarray(payload.node_left, np.int32)
-        right = np.asarray(payload.node_right, np.int32)
-        leaf_count = np.asarray(payload.node_leaf_count, np.int32)
-        leaf_silh = np.asarray(payload.node_silhouette_count, np.int32)
-        has_silh = np.zeros_like(leaf_count, dtype=bool)
-        for i in range(len(left) - 1, -1, -1):
-            if leaf_count[i] > 0:
-                has_silh[i] = leaf_silh[i] > 0
-            elif left[i] >= 0 and right[i] >= 0:
-                has_silh[i] = has_silh[left[i]] or has_silh[right[i]]
-        cone_angle = np.asarray(payload.node_cone_half_angle, np.float32).copy()
-        cone_angle[~has_silh] = -1.0
-        # Half the box diagonal encloses whole edges.
-        bounds = np.asarray(payload.node_upper) - np.asarray(payload.node_lower)
-        cone_radius = 0.5 * np.linalg.norm(np.maximum(bounds, 0.0), axis=1)
-        payload = payload._replace(
-            node_cone_half_angle=jnp.asarray(cone_angle),
-            node_cone_radius=jnp.asarray(cone_radius, jnp.float32))
         return payload
 
     def closest_silhouette(self, payload, x, max_distance=jnp.inf):

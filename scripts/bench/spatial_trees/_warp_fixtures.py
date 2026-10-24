@@ -9,8 +9,17 @@ from surfaces.base import TriMesh
 from surfaces.explicit.primitives import TriMeshPrimitives
 
 
-def _mesh(subdivisions=3):
-    tm = trimesh.creation.icosphere(subdivisions=subdivisions)
+def _mesh(subdivisions=3, shape="sphere"):
+    if shape == "sphere":
+        tm = trimesh.creation.icosphere(subdivisions=subdivisions)
+    elif shape in ("torus", "open_torus"):
+        tm = trimesh.creation.torus(major_radius=.7, minor_radius=.3,
+                                   major_sections=128, minor_sections=64)
+        if shape == "open_torus":
+            tm.update_faces(np.asarray(tm.triangles_center)[:, 2] < .2)
+            tm.remove_unreferenced_vertices()
+    else:
+        raise ValueError(f"unknown mesh shape: {shape}")
     vertices = np.asarray(tm.vertices, np.float32)
     faces = np.asarray(tm.faces, np.int32)
     p = TriMesh(vertices=jnp.asarray(vertices), faces=jnp.asarray(faces))
