@@ -30,7 +30,13 @@ _RAY_FIELDS = (
     "node_ray_lower", "node_ray_upper", "prim_ids", "tri_v0", "tri_e1", "tri_e2",
 )
 
+_CROSSING_FIELDS = (
+    "node_ray_lower", "node_ray_upper", "prim_ids", "mesh_vertices", "tri_indices",
+)
+
 QUERY_SPECS = {
+    "count_hits_kernel": WarpQuerySpec("_warp_crossings", 5, 2, 128, _CROSSING_FIELDS),
+    "all_hits_kernel": WarpQuerySpec("_warp_crossings", 5, 4, 128, _CROSSING_FIELDS),
     "classify_point_kernel": WarpQuerySpec(
         "_warp_inside", 1, 2, 128, payload_fields=(
             "node_ray_lower", "node_ray_upper", "mesh_vertices",

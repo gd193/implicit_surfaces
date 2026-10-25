@@ -9,28 +9,31 @@ import jax.numpy as jnp
 from ._warp_specs import query_kernel, query_spec
 
 
-def query(kernel_name: str, payload, *query_args):
-    """Run a flat query batch with explicit geometry."""
+def query(kernel_name: str, payload, *query_args, output_shapes=None):
+    """Run flat queries; output_shapes gives trailing dimensions per output."""
     spec = query_spec(kernel_name)
     if len(query_args) != spec.num_query_args:
         raise ValueError(f"{kernel_name} expects {spec.num_query_args} query arguments")
-    return _batched_kernel(kernel_name)(*query_args, *spec.payload_arguments(payload))
+    return _batched_kernel(kernel_name, output_shapes)(*query_args, *spec.payload_arguments(payload))
 
 
 @lru_cache(maxsize=None)
-def _batched_kernel(kernel_name: str):
+def _batched_kernel(kernel_name: str, output_shapes=None):
     spec = query_spec(kernel_name)
     num_query_args = spec.num_query_args
     import warp as wp
 
-    ffi_call = wp.jax_kernel(query_kernel(kernel_name),
-                             num_outputs=spec.num_outputs,
-                             vmap_method="expand_dims",
-                             block_dim=spec.block_dim)
+    kernel = query_kernel(kernel_name)
+    ffi_call = wp.jax_kernel(kernel, num_outputs=spec.num_outputs,
+                              vmap_method="expand_dims", block_dim=spec.block_dim)
 
     @jax.custom_batching.custom_vmap
     def selective_call(*args):
-        return tuple(ffi_call(*args))
+        dims = None
+        if output_shapes is not None:
+            dims = {arg.label: (args[0].shape[0],) + shape for arg, shape in
+                    zip(kernel.adj.args[-spec.num_outputs:], output_shapes, strict=True)}
+        return tuple(ffi_call(*args, output_dims=dims))
 
     @selective_call.def_vmap
     def selective_vmap(axis_size, in_batched, *args):

@@ -31,6 +31,7 @@ class BVHAccelerator(MeshAccelerator):
         self.has_ray_interval = bool(backend.has_ray_interval)
         self.has_robin_query = bool(backend.has_robin_query)
         self.has_point_classification = bool(backend.has_point_classification)
+        self.has_all_hits = bool(backend.has_all_hits)
 
     @classmethod
     def build(cls, primitives: Primitives, backend_name: str,
@@ -73,6 +74,27 @@ class BVHAccelerator(MeshAccelerator):
             return self.backend.any_hit(self.payload, ray_origin, ray_direction,
                                         max_t, min_t=min_t)
         return self.first_hit(ray_origin, ray_direction, max_t, min_t=min_t)[2]
+
+    def count_hits(self, ray_origin, ray_direction, max_t=jnp.inf,
+                   *, min_t=0.0, exclude_face=-1):
+        return self.count_hits_with_status(ray_origin, ray_direction, max_t,
+            min_t=min_t, exclude_face=exclude_face)[0]
+
+    def count_hits_with_status(self, ray_origin, ray_direction, max_t=jnp.inf,
+                               *, min_t=0.0, exclude_face=-1):
+        return self._query_with_status("count_hits", ray_origin, ray_direction, max_t,
+                                       min_t=min_t, exclude_face=exclude_face)
+
+    def all_hits(self, ray_origin, ray_direction, max_t=jnp.inf,
+                 *, max_hits, min_t=0.0, exclude_face=-1):
+        return self.all_hits_with_status(ray_origin, ray_direction, max_t,
+            max_hits=max_hits, min_t=min_t, exclude_face=exclude_face)[:3]
+
+    def all_hits_with_status(self, ray_origin, ray_direction, max_t=jnp.inf,
+                             *, max_hits, min_t=0.0, exclude_face=-1):
+        """(unsorted t, face, total count, status); -2 means output overflow."""
+        return self._query_with_status("all_hits", ray_origin, ray_direction, max_t,
+            max_hits=max_hits, min_t=min_t, exclude_face=exclude_face)
 
     def star_radius(self, x: jnp.ndarray, radius_cap: jnp.ndarray) -> jnp.ndarray:
         """min(cap, silhouette distance)."""

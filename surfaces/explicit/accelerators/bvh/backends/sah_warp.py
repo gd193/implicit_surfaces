@@ -1,6 +1,7 @@
 """Warp SAH backend."""
 from __future__ import annotations
 
+from operator import index
 from typing import Tuple
 
 import jax.numpy as jnp
@@ -28,6 +29,27 @@ def _restore(value, batch_shape):
     return value.reshape(batch_shape + value.shape[1:])
 
 
+def _ray_args(origin, direction, minimum, maximum):
+    origins, shape = _flatten_vec_queries(origin)
+    directions, dshape = _flatten_vec_queries(direction)
+    if shape != dshape:
+        raise ValueError("ray_origin and ray_direction batch shapes must match")
+    bounds = tuple(jnp.broadcast_to(jnp.asarray(v, jnp.float32), shape).reshape((-1,))
+                   for v in (minimum, maximum))
+    return (origins, directions, *bounds), shape
+
+
+def _crossing_args(origin, direction, minimum, maximum, exclude_face):
+    args, shape = _ray_args(origin, direction, minimum, maximum)
+    face = jnp.asarray(exclude_face)
+    if not jnp.issubdtype(face.dtype, jnp.integer):
+        raise TypeError("exclude_face must contain integer face IDs")
+    face32 = face.astype(jnp.int32)
+    min_face = 0 if jnp.issubdtype(face.dtype, jnp.unsignedinteger) else -1
+    face = jnp.where((face32 >= min_face) & (face32.astype(face.dtype) == face), face32, -2)
+    return (*args, jnp.broadcast_to(face, shape).reshape((-1,))), shape
+
+
 @register_backend
 class BVHSahWarpBackend(Backend[WarpBVHPayload]):
 
@@ -42,6 +64,7 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
     has_ray_interval = True
     has_boundary_sampling = False
     has_point_classification = True
+    has_all_hits = True
 
     def build(self, primitives: Primitives, config: Config) -> WarpBVHPayload:
         vertices, faces = validate_warp_mesh_and_config(
@@ -90,16 +113,8 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
                               ray_origin: jnp.ndarray,
                               ray_direction: jnp.ndarray, max_t: jnp.ndarray,
                               min_t: jnp.ndarray | float = 0.0):
-        origins, shape = _flatten_vec_queries(ray_origin)
-        directions, dshape = _flatten_vec_queries(ray_direction)
-        if shape != dshape:
-            raise ValueError("ray_origin and ray_direction batch shapes must match")
-        max_t = jnp.asarray(max_t, dtype=jnp.float32)
-        max_t = jnp.broadcast_to(max_t, shape).reshape((-1,))
-        min_t = jnp.broadcast_to(jnp.asarray(min_t, dtype=jnp.float32),
-                                 shape).reshape((-1,))
-        t, prim, hit, _status = _warp_query(
-            "first_hit_kernel", payload, origins, directions, min_t, max_t)
+        args, shape = _ray_args(ray_origin, ray_direction, min_t, max_t)
+        t, prim, hit, _status = _warp_query("first_hit_kernel", payload, *args)
         return (_restore(t, shape), _restore(prim, shape),
                 _restore(hit.astype(jnp.bool_), shape),
                 _restore(_status, shape))
@@ -114,16 +129,35 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
                             ray_origin: jnp.ndarray,
                             ray_direction: jnp.ndarray, max_t: jnp.ndarray,
                             min_t: jnp.ndarray | float = 0.0):
-        origins, shape = _flatten_vec_queries(ray_origin)
-        directions, dshape = _flatten_vec_queries(ray_direction)
-        if shape != dshape:
-            raise ValueError("ray_origin and ray_direction batch shapes must match")
-        mt = jnp.broadcast_to(jnp.asarray(max_t, jnp.float32), shape).reshape((-1,))
-        nt = jnp.broadcast_to(jnp.asarray(min_t, jnp.float32), shape).reshape((-1,))
-        hit, status = _warp_query(
-            "any_hit_kernel", payload, origins, directions, nt, mt)
+        args, shape = _ray_args(ray_origin, ray_direction, min_t, max_t)
+        hit, status = _warp_query("any_hit_kernel", payload, *args)
         return (_restore(hit.astype(jnp.bool_), shape),
                 _restore(status, shape))
+
+    def count_hits(self, payload, ray_origin, ray_direction, max_t=jnp.inf,
+                   *, min_t=0.0, exclude_face=-1):
+        return self.count_hits_with_status(payload, ray_origin, ray_direction,
+                                           max_t, min_t=min_t, exclude_face=exclude_face)[0]
+
+    def count_hits_with_status(self, payload, ray_origin, ray_direction, max_t=jnp.inf,
+                               *, min_t=0.0, exclude_face=-1):
+        args, shape = _crossing_args(ray_origin, ray_direction, min_t, max_t, exclude_face)
+        return tuple(_restore(v, shape) for v in _warp_query("count_hits_kernel", payload, *args))
+
+    def all_hits(self, payload, ray_origin, ray_direction, max_t=jnp.inf,
+                 *, max_hits, min_t=0.0, exclude_face=-1):
+        return self.all_hits_with_status(payload, ray_origin, ray_direction, max_t,
+            max_hits=max_hits, min_t=min_t, exclude_face=exclude_face)[:3]
+
+    def all_hits_with_status(self, payload, ray_origin, ray_direction, max_t=jnp.inf,
+                             *, max_hits, min_t=0.0, exclude_face=-1):
+        max_hits = index(max_hits)
+        if max_hits < 1 or max_hits > 2**31-1:
+            raise ValueError("max_hits must be a positive static int32 capacity")
+        args, shape = _crossing_args(ray_origin, ray_direction, min_t, max_t, exclude_face)
+        result = _warp_query("all_hits_kernel", payload, *args,
+                             output_shapes=((max_hits,), (max_hits,), (), ()))
+        return tuple(_restore(v, shape) for v in result)
 
     def aabb_overlap(self, payload: WarpBVHPayload,
                      lower: jnp.ndarray, upper: jnp.ndarray) -> jnp.ndarray:

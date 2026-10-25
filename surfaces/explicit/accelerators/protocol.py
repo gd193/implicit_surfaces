@@ -34,6 +34,7 @@ class Backend(abc.ABC, Generic[P]):
     has_silhouette_query: bool = False
     has_ray_interval: bool = False
     has_boundary_sampling: bool = False
+    has_all_hits: bool = False
     has_point_classification: bool = False
     has_robin_query: bool = False
 

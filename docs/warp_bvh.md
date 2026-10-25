@@ -59,6 +59,8 @@ such as `tree.closest_point(points)` are also available.
 | `closest_point_with_status(points)` | Point, distance, original face ID, status |
 | `first_hit_with_status(origins, directions, max_t, min_t=0)` | Ray parameter, original face ID, hit, status |
 | `any_hit_with_status(origins, directions, max_t, min_t=0)` | Occlusion, status |
+| `count_hits_with_status(origins, directions, max_t=inf, min_t=0, exclude_face=-1)` | Count, status |
+| `all_hits_with_status(origins, directions, max_t=inf, max_hits=K, min_t=0, exclude_face=-1)` | Unsorted parameters, original face IDs, total count, status |
 | `aabb_overlap_with_status(lower, upper)` | Triangle-AABB broad-phase overlap, status |
 | `closest_silhouette_with_status(points, max_distance=inf)` | Point, distance, original edge ID, status |
 | `star_radius_with_status(points, cap)` | Minimum of cap and silhouette distance, status |
@@ -85,6 +87,13 @@ return `t=max_t`, face `-1`, and `hit=False`. Directions need not be unit
 length; the ray parameter is a distance only for unit directions. Silhouette
 queries include tangencies and open edges; misses return distance `inf` and
 edge `-1`.
+
+Count/all-hit intervals may be signed: `min_t=-inf` queries a full line.
+`exclude_face` skips one original face. Half-open edges give consistent ownership
+of shared edges; coplanar faces are ignored. `all_hits` requires static positive
+`max_hits` and pads with `inf`/face -1. Status -2 retains an unsorted prefix and
+the exact total count. Invalid queries return count/status -1. `count_hits`
+allocates no hit buffer.
 
 Star and Robin radius queries return status 1 for a valid cap even without a
 smaller bound. They provide geometric bounds; a full explicit-mesh WoSt solver
@@ -128,7 +137,8 @@ python -m pytest -q tests/spatial_trees/test_warp_bvh.py \
     tests/spatial_trees/test_backend_discovery.py \
     tests/spatial_trees/test_warp_payload.py \
     tests/spatial_trees/test_warp_robin.py \
-    tests/spatial_trees/test_warp_inside.py
+    tests/spatial_trees/test_warp_inside.py \
+    tests/spatial_trees/test_warp_crossings.py
 
 python -m scripts.bench.spatial_trees.warp_bvh_device \
     --backend bvh.snch.warp --queries closest_silhouette \
@@ -140,6 +150,7 @@ compilation, transfers, readback and CPU dispatch. Results go to
 `assets/benchmark_results/`.
 
 Recorded [ray](benchmarks/warp_bvh_device.json),
+[crossing](benchmarks/ray_crossings.json),
 [closest-point](benchmarks/closest_point.json),
 [silhouette](benchmarks/closest_silhouette.json),
 [Robin](benchmarks/robin_radius.json) and

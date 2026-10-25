@@ -46,8 +46,7 @@ def _native_ray_result(o: wp.vec3, d: wp.vec3, lo: float, hi: float,
     face = int(-1)
     hit = int(0)
     status = int(0)
-    if (not finite3(o) or not finite3(d) or lo != lo or hi != hi or wp.isinf(lo)
-            or lo < 0.0 or hi < lo or wp.dot(d, d) <= 1.e-30):
+    if not _valid_ray(o, d, lo, hi):
         status = -1
     else:
         q = wp.mesh_query_ray(mesh_id, o+lo*d, d, hi-lo)
@@ -94,6 +93,28 @@ def _native_classify_point(
     if finite3(points[i]):
         out_sign[i] = _native_parity(mesh_id, points[i])
         out_status[i] = 1
+
+
+@wp.func_native(r"""
+    int count = wp::mesh_query_ray_count_intersections(mesh_id, origin, direction);
+    if (line) count += wp::mesh_query_ray_count_intersections(mesh_id, origin, -direction);
+    return count;
+""")
+def _native_count(mesh_id: wp.uint64, origin: wp.vec3, direction: wp.vec3, line: bool) -> int:
+    ...
+
+
+@wp.kernel
+def _native_count_hits(
+    origins: wp.array(dtype=wp.vec3), directions: wp.array(dtype=wp.vec3),
+    min_t: wp.array(dtype=float), max_t: wp.array(dtype=float),
+    exclude_face: wp.array(dtype=int), mesh_id: wp.uint64,
+    out_count: wp.array(dtype=int), out_status: wp.array(dtype=int),
+):
+    i = wp.tid()
+    count = _native_count(mesh_id, origins[i], directions[i], min_t[i] < 0.0)
+    out_count[i] = count
+    out_status[i] = wp.int32(count > 0)
 
 
 @wp.kernel
@@ -159,10 +180,11 @@ class _Case:
     samples_ms: list[float] = field(default_factory=list)
 
 
-def _make_case(query, implementation, kernel, inputs, n, device, block_dim):
+def _make_case(query, implementation, kernel, inputs, n, device, block_dim, output_shapes=None):
     spec = query_spec(query+"_kernel")
-    outputs = [wp.empty(n, dtype=parameter.type.dtype, device=device)
-               for parameter in kernel.adj.args[-spec.num_outputs:]]
+    shapes = output_shapes or ((n,),) * spec.num_outputs
+    outputs = [wp.empty(shape, dtype=parameter.type.dtype, device=device)
+               for shape, parameter in zip(shapes, kernel.adj.args[-spec.num_outputs:], strict=True)]
     converted = [wp.from_jax(value, dtype=parameter.type.dtype)
                  if isinstance(value, jax.Array) else value
                  for value, parameter in zip(inputs, kernel.adj.args, strict=False)]
@@ -186,6 +208,12 @@ def _measure(cases, n, device, launches, repeats):
                 distance = np.linalg.norm(got[0][found]-case.inputs[0].numpy()[found], axis=1)
                 np.testing.assert_allclose(got[1][found], distance, atol=3e-5, rtol=3e-5)
                 assert np.all(got[2][found] >= 0)
+            if case.query == "all_hits":
+                count = got[2]
+                slots = np.arange(got[0].shape[1])[None, :] < count[:, None]
+                assert np.all(got[3] >= 0), "increase --max-hits to avoid output overflow"
+                assert np.all(np.isfinite(got[0][slots])) and np.all(got[1][slots] >= 0)
+                np.testing.assert_array_equal(got[1][~slots], -1)
             if case.implementation == "custom":
                 reference[case.query] = got
             elif case.query == "first_hit":
@@ -206,6 +234,9 @@ def _measure(cases, n, device, launches, repeats):
             wp.capture_launch(case.graph)
             wp.synchronize_device(device)
 
+        if "count_hits" in reference and "all_hits" in reference:
+            np.testing.assert_array_equal(reference["count_hits"][0], reference["all_hits"][2])
+            np.testing.assert_array_equal(reference["count_hits"][1], reference["all_hits"][3])
         start, stop = wp.Event(enable_timing=True), wp.Event(enable_timing=True)
         for repeat in range(repeats):
             for index in np.random.default_rng(404+repeat).permutation(len(cases)):
@@ -232,10 +263,12 @@ def main():
     parser.add_argument("--block-dim", type=int, help="Override each query's default for both implementations.")
     parser.add_argument("--launches", type=int, default=50)
     parser.add_argument("--repeats", type=int, default=15)
+    parser.add_argument("--max-hits", type=int, default=8, help="Per-query all-hit output capacity.")
+    parser.add_argument("--line", action="store_true", help="Count/all-hit queries use the full line.")
     parser.add_argument("--native-warp", action="store_true", help="Check and time native mesh query references.")
     parser.add_argument("--output", type=Path, default=ROOT/"assets/benchmark_results/warp_bvh_device.jsonl")
     args = parser.parse_args()
-    if min(*args.counts, args.leaf_size, args.launches, args.repeats) < 1:
+    if min(*args.counts, args.leaf_size, args.launches, args.repeats, args.max_hits) < 1:
         parser.error("query counts, leaf size, launches and repeats must be positive")
     if max(args.counts) > np.iinfo(np.int32).max or args.subdivisions < 0:
         parser.error("query counts must fit int32 and subdivisions must be nonnegative")
@@ -255,7 +288,7 @@ def main():
     warp_device = wp.device_from_jax(device)
     backend_dir = ROOT/"surfaces/explicit/accelerators/bvh/backends"
     source_paths = sorted(backend_dir.glob("*warp*.py"))
-    source_paths += [backend_dir/"snch_jax.py", Path(__file__), Path(__file__).with_name("_warp_fixtures.py")]
+    source_paths += [backend_dir/"snch_jax.py", backend_dir/"sah_jax.py", Path(__file__), Path(__file__).with_name("_warp_fixtures.py")]
     sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths}
     versions = {name: importlib.metadata.version(name) for name in ("jax", "jaxlib", "warp-lang", "trimesh", "numpy")}
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -275,7 +308,12 @@ def main():
             min_t = jnp.zeros_like(max_t)
             radii = jnp.full((n,), args.radius, dtype=jnp.float32)
             randoms = jnp.asarray(np.random.default_rng(808+n).random((n, 3), dtype=np.float32))
+            crossing_min = jnp.full_like(max_t, -jnp.inf if args.line else 0.)
+            crossing_max = jnp.full_like(max_t, jnp.inf)
+            excluded = jnp.full((n,), -1, jnp.int32)
+            crossing_args = (origins, directions, crossing_min, crossing_max, excluded)
             query_inputs = {
+                "count_hits": crossing_args, "all_hits": crossing_args,
                 "classify_point": (points,), "closest_point": (points,), "first_hit": (origins, directions, min_t, max_t),
                 "any_hit": (origins, directions, min_t, max_t),
                 "aabb_overlap": (points-args.radius, points+args.radius),
@@ -288,8 +326,11 @@ def main():
                 spec = query_spec(name)
                 block_dim = args.block_dim or spec.block_dim
                 inputs = [*query_inputs[query], *spec.payload_arguments(tree.payload)]
-                cases.append(_make_case(query, "custom", query_kernel(name), inputs, n, warp_device, block_dim))
-                native_kernel = {"classify_point": _native_classify_point,
+                shapes = (((n, args.max_hits), (n, args.max_hits), (n,), (n,))
+                          if query == "all_hits" else None)
+                cases.append(_make_case(query, "custom", query_kernel(name), inputs,
+                                        n, warp_device, block_dim, shapes))
+                native_kernel = {"count_hits": _native_count_hits, "classify_point": _native_classify_point,
                                  "closest_point": _native_closest_point,
                                  "first_hit": _native_first_hit, "any_hit": _native_any_hit}.get(query)
                 if mesh is not None and native_kernel is not None:
@@ -312,6 +353,10 @@ def main():
                     result_count=int(np.count_nonzero(case.outputs[-1].numpy() == 1)),
                     invalid_count=int(np.count_nonzero(case.outputs[-1].numpy() < 0)),
                 )
+                if case.query in ("count_hits", "all_hits"):
+                    record["interval"] = "line" if args.line else "ray"
+                    record["max_hits"] = args.max_hits if case.query == "all_hits" else None
+                    record["reference_scope"] = "Warp intersection-count helper; full line uses two rays."
                 if case.query == "classify_point":
                     record["reference_scope"] = ("classification only; native Warp intersection-count "
                                                  "helper, fixed +X ray; no closest-point work")
