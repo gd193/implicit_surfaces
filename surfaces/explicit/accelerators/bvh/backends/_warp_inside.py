@@ -3,13 +3,11 @@ from __future__ import annotations
 
 import warp as wp
 
-from ._warp_geometry import _NATIVE_FINITE3, _NATIVE_PACKED_NODES
-from ._warp_specs import STACK_CAPACITY
+from ._warp_geometry import _NATIVE_EDGE_PREDICATES, _NATIVE_FINITE3, _NATIVE_PACKED_TRAVERSAL
 
 
 @wp.func_native(
-    f"constexpr int stack_capacity = {STACK_CAPACITY};\n"
-    + _NATIVE_FINITE3 + _NATIVE_PACKED_NODES + r"""
+    _NATIVE_FINITE3 + _NATIVE_PACKED_TRAVERSAL + _NATIVE_EDGE_PREDICATES + r"""
     out_sign.data[qi] = NAN;
     out_status.data[qi] = -1;
     if (!finite3(p) || !mesh_closed.data[0]) return;
@@ -17,19 +15,9 @@ from ._warp_specs import STACK_CAPACITY
     out_status.data[qi] = node_count ? 1 : 0;
     if (!node_count) return;
 
-    const auto overlaps = [&](const wp::vec4& lo, const wp::vec4& hi) {
+    const auto overlaps = [&](const wp::vec4& lo, const wp::vec4& hi, float&) {
         return p[0] <= hi[0] && p[1] >= lo[1] && p[1] <= hi[1]
             && p[2] >= lo[2] && p[2] <= hi[2];
-    };
-    // Separate rounding preserves antisymmetry on shared projected edges.
-    const auto cross2 = [](double ax, double ay, double bx, double by) {
-#if defined(__CUDA_ARCH__)
-        return __dadd_rn(__dmul_rn(ax, by), -__dmul_rn(ay, bx));
-#else
-        volatile double a = ax * by;
-        volatile double b = ay * bx;
-        return a - b;
-#endif
     };
     const auto triangle = [&](int slot) {
         const wp::vec3i ids = tri_indices.data[slot];
@@ -100,55 +88,25 @@ from ._warp_specs import STACK_CAPACITY
         for (int i = 0; i < 3; ++i) {
             if (e[i] == 0.0) {
                 const int a = (i+1)%3, b = (i+2)%3;
-                const double dy = orientation * (v[b][1] - v[a][1]);
-                const double dz = orientation * (v[b][2] - v[a][2]);
-                if (!(dz > 0.0 || (dz == 0.0 && dy < 0.0))) return 0;
+                if (!owns_edge(v[a][1], v[a][2], v[b][1], v[b][2], orientation)) return 0;
             }
         }
         return 1;
     };
 
-    const wp::vec4* lower = node_ray_lower.data;
-    const wp::vec4* upper = node_ray_upper.data;
-    const wp::vec4 root_lo = load_vec4_nc(lower, 0);
-    const wp::vec4 root_hi = load_vec4_nc(upper, 0);
-    if (!overlaps(root_lo, root_hi)) return;
-    uint64_t current = pack_node(root_lo, root_hi);
-    uint64_t stack[stack_capacity];
-    int size = 0;
     int parity = 0;
-    while (true) {
-        if (is_leaf(current)) {
-            for (int i = lower_payload(current); i < upper_payload(current); ++i) {
-                const int hit = triangle(i);
-                if (hit == 2) {
-                    out_sign.data[qi] = 0.0f;
-                    return;
-                }
-                parity ^= hit;
-            }
-        } else {
-            const int left = lower_payload(current), right = upper_payload(current);
-            const wp::vec4 ll = load_vec4_nc(lower, left), lu = load_vec4_nc(upper, left);
-            const wp::vec4 rl = load_vec4_nc(lower, right), ru = load_vec4_nc(upper, right);
-            const bool l = overlaps(ll, lu), r = overlaps(rl, ru);
-            if (l && r) {
-                if (size == stack_capacity) {
-                    out_sign.data[qi] = NAN;
-                    out_status.data[qi] = -1;
-                    return;
-                }
-                stack[size++] = pack_node(rl, ru);
-            }
-            if (l || r) {
-                current = l ? pack_node(ll, lu) : pack_node(rl, ru);
-                continue;
-            }
-        }
-        if (!size) break;
-        current = stack[--size];
+    const int traversal = traverse(overlaps, [&](int slot) {
+        const int hit = triangle(slot);
+        if (hit == 2) return 1;
+        parity ^= hit;
+        return 0;
+    });
+    if (traversal < 0) {
+        out_sign.data[qi] = NAN;
+        out_status.data[qi] = -1;
+    } else {
+        out_sign.data[qi] = traversal ? 0.0f : (parity ? -1.0f : 1.0f);
     }
-    out_sign.data[qi] = parity ? -1.0f : 1.0f;
 """)
 def native_classify_point(
     qi: int,

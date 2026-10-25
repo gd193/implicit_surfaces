@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import warp as wp
 
+from ._warp_specs import STACK_CAPACITY
+
 
 @wp.func
 def point_box_distance_sq(p: wp.vec3, lo: wp.vec3, hi: wp.vec3) -> wp.float32:
@@ -99,7 +101,7 @@ _NATIVE_TRIANGLE_CLOSEST = _NATIVE_SEGMENT_CLOSEST + r"""
 
 # Packed metadata adapted from NVIDIA Warp's bvh.h helpers.
 # Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. Apache-2.0.
-_NATIVE_PACKED_NODES = r"""
+_NATIVE_PACKED_TRAVERSAL = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r"""
     const auto load_vec4_nc = [](const wp::vec4* ptr, int index) {
         wp::vec4 result;
 #if defined(__CUDA_ARCH__)
@@ -127,4 +129,114 @@ _NATIVE_PACKED_NODES = r"""
         return static_cast<int>((meta >> 31) & 0x7fffffffull);
     };
     const auto is_leaf = [](uint64_t meta) { return (meta >> 62) != 0; };
+
+    // Callbacks inline; visit returns 0 to continue, nonzero to stop.
+    const auto traverse = [&](auto&& bounds, auto&& visit,
+                               bool near_first = false, bool test_root = true) {
+        if (!node_count) return 0;
+        const wp::vec4* lower = node_ray_lower.data;
+        const wp::vec4* upper = node_ray_upper.data;
+        const wp::vec4 root_lo = load_vec4_nc(lower, 0), root_hi = load_vec4_nc(upper, 0);
+        float enter;
+        if (test_root && !bounds(root_lo, root_hi, enter)) return 0;
+        uint64_t current = pack_node(root_lo, root_hi);
+        uint64_t stack[stack_capacity];
+        int size = 0;
+        while (true) {
+            if (is_leaf(current)) {
+                for (int k = lower_payload(current); k < upper_payload(current); ++k) {
+                    const int result = visit(k);
+                    if (result) return result;
+                }
+            } else {
+                const int left = lower_payload(current), right = upper_payload(current);
+                const wp::vec4 ll = load_vec4_nc(lower, left), lu = load_vec4_nc(upper, left);
+                const wp::vec4 rl = load_vec4_nc(lower, right), ru = load_vec4_nc(upper, right);
+                const uint64_t left_node = pack_node(ll, lu), right_node = pack_node(rl, ru);
+                float tl, tr;
+                const bool l = bounds(ll, lu, tl), r = bounds(rl, ru, tr);
+                if (l && r) {
+                    if (size == stack_capacity) return -1;
+                    const bool swap = near_first && tr < tl;
+                    stack[size++] = swap ? left_node : right_node;
+                    current = swap ? right_node : left_node;
+                    continue;
+                }
+                if (l) { current = left_node; continue; }
+                if (r) { current = right_node; continue; }
+            }
+            if (!size) return 0;
+            current = stack[--size];
+        }
+    };
+"""
+
+
+_NATIVE_RAY_BOX = r"""
+    const bool fast_aabb = wp::abs(d[0]) >= 1.0e-20f
+        && wp::abs(d[1]) >= 1.0e-20f && wp::abs(d[2]) >= 1.0e-20f;
+    wp::vec3 inv_dir(0.0f);
+    if (fast_aabb) {
+        inv_dir = wp::vec3(1.0f / d[0], 1.0f / d[1], 1.0f / d[2]);
+    }
+
+    const auto box_interval = [&](const wp::vec3& lower, const wp::vec3& upper,
+                           float tmin, float tmax, float& enter, bool conservative = false) {
+        enter = tmin;
+        float leave = tmax;
+        const auto update = [&](float t0, float t1) {
+            float near_t = wp::min(t0,t1), far_t = wp::max(t0,t1);
+            if (conservative) {
+                const float padding = 9.5367431640625e-7f
+                    * wp::max(wp::abs(t0),wp::abs(t1)) + 1.e-37f;
+                if (wp::isfinite(padding)) { near_t -= padding; far_t += padding; }
+                else { near_t = -INFINITY; far_t = INFINITY; }
+            }
+            enter = wp::max(enter,near_t);
+            leave = wp::min(leave,far_t);
+        };
+        if (fast_aabb) {
+            float t0 = (lower[0] - o[0]) * inv_dir[0];
+            float t1 = (upper[0] - o[0]) * inv_dir[0];
+            update(t0,t1);
+            t0 = (lower[1] - o[1]) * inv_dir[1];
+            t1 = (upper[1] - o[1]) * inv_dir[1];
+            update(t0,t1);
+            t0 = (lower[2] - o[2]) * inv_dir[2];
+            t1 = (upper[2] - o[2]) * inv_dir[2];
+            update(t0,t1);
+        } else {
+            for (int axis = 0; axis < 3; ++axis) {
+                const float component = d[axis];
+                const float origin_component = o[axis];
+                if (component == 0.0f) {
+                    if (origin_component < lower[axis]
+                        || origin_component > upper[axis]) return false;
+                } else {
+                    const float t0 = (lower[axis] - origin_component) / component;
+                    const float t1 = (upper[axis] - origin_component) / component;
+                    update(t0,t1);
+                }
+            }
+        }
+        return enter <= leave;
+    };
+"""
+
+
+_NATIVE_EDGE_PREDICATES = r"""
+    // Separate rounding preserves antisymmetry on shared projected edges.
+    const auto cross2 = [](double ax, double ay, double bx, double by) {
+#if defined(__CUDA_ARCH__)
+        return __dadd_rn(__dmul_rn(ax, by), -__dmul_rn(ay, bx));
+#else
+        volatile double a = ax * by;
+        volatile double b = ay * bx;
+        return a - b;
+#endif
+    };
+    const auto owns_edge = [](double ax, double ay, double bx, double by, double orientation) {
+        const double dx = orientation*(bx-ax), dy = orientation*(by-ay);
+        return dy > 0 || (dy == 0 && dx < 0);
+    };
 """
