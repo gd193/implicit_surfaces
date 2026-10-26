@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import minimize_scalar
 
-from .test_warp_bvh import _oracle_silhouette, _closest_triangle
+from ._warp_helpers import _oracle_silhouette, _closest_triangle
 
 
 def brute_robin_radius(vertices, faces, point, maximum_coefficients, cap):

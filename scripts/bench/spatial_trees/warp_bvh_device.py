@@ -266,6 +266,7 @@ def main():
     parser.add_argument("--max-hits", type=int, default=8, help="Per-query all-hit output capacity.")
     parser.add_argument("--line", action="store_true", help="Count/all-hit queries use the full line.")
     parser.add_argument("--native-warp", action="store_true", help="Check and time native mesh query references.")
+    parser.add_argument("--factory", action="store_true", help="Compare caller-specialized nearest/ray kernels.")
     parser.add_argument("--output", type=Path, default=ROOT/"assets/benchmark_results/warp_bvh_device.jsonl")
     args = parser.parse_args()
     if min(*args.counts, args.leaf_size, args.launches, args.repeats, args.max_hits) < 1:
@@ -289,6 +290,7 @@ def main():
     backend_dir = ROOT/"surfaces/explicit/accelerators/bvh/backends"
     source_paths = sorted(backend_dir.glob("*warp*.py"))
     source_paths += [backend_dir/"snch_jax.py", backend_dir/"sah_jax.py", Path(__file__), Path(__file__).with_name("_warp_fixtures.py")]
+    source_paths.append(backend_dir.parent/"warp.py")
     sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths}
     versions = {name: importlib.metadata.version(name) for name in ("jax", "jaxlib", "warp-lang", "trimesh", "numpy")}
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -297,6 +299,11 @@ def main():
         tree = BVHAccelerator.build(primitives, args.backend, Config(leaf_size_threshold=args.leaf_size))
         if "robin_radius" in args.queries:
             tree = tree.with_robin_coefficients(args.robin_coefficient)
+        if args.factory:
+            from surfaces.explicit.accelerators.bvh.warp import Euclidean, make_nearest, make_ray_query
+            from surfaces.explicit.accelerators.bvh.backends.sah_warp import _factory_data
+
+            primitive, factory_tree, geometry = _factory_data(tree.payload)
         mesh = None
         if args.native_warp:
             mesh = wp.Mesh(points=wp.from_jax(primitives.mesh.vertices, dtype=wp.vec3),
@@ -330,6 +337,16 @@ def main():
                           if query == "all_hits" else None)
                 cases.append(_make_case(query, "custom", query_kernel(name), inputs,
                                         n, warp_device, block_dim, shapes))
+                if args.factory and query in ("closest_point", "first_hit", "any_hit", "count_hits", "all_hits"):
+                    if query == "closest_point":
+                        specialized = make_nearest(primitive, Euclidean(), block_dim=block_dim)
+                        factory_args = [points, jnp.full((n,), jnp.inf)]
+                    else:
+                        mode = {"first_hit": "first", "any_hit": "any", "count_hits": "count", "all_hits": "all"}[query]
+                        specialized = make_ray_query(primitive, mode, block_dim=block_dim)
+                        factory_args = list(query_inputs[query])
+                    cases.append(_make_case(query, "factory", specialized.kernel,
+                        [*factory_args, *factory_tree, *geometry], n, warp_device, block_dim, shapes))
                 native_kernel = {"count_hits": _native_count_hits, "classify_point": _native_classify_point,
                                  "closest_point": _native_closest_point,
                                  "first_hit": _native_first_hit, "any_hit": _native_any_hit}.get(query)
@@ -340,7 +357,7 @@ def main():
             for case in cases:
                 record = dict(
                     query=case.query, implementation=case.implementation,
-                    backend=args.backend if case.implementation == "custom" else "warp.Mesh(sah)",
+                    backend=args.backend if case.implementation != "native_mesh" else "warp.Mesh(sah)",
                     n_queries=n, n_triangles=ntri, leaf_size=args.leaf_size, block_dim=case.block_dim,
                     mesh=args.mesh,
                     point_distribution=args.point_distribution,

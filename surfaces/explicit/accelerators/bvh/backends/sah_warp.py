@@ -1,7 +1,6 @@
 """Warp SAH backend."""
 from __future__ import annotations
 
-from operator import index
 from typing import Tuple
 
 import jax.numpy as jnp
@@ -11,43 +10,27 @@ from surfaces.explicit.accelerators.registry import register_backend
 from surfaces.explicit.primitives import Primitives
 
 from ._warp_build import finite_primitive_bounds, validate_warp_mesh_and_config
-from ._warp_jax import query as _warp_query
+from ._warp_jax import query as _warp_query, _flatten_vec_queries, _restore
 from ._warp_layout import (WarpBVHPayload, empty_warp_payload,
                            make_warp_payload)
 from .sah_jax import _build_payload
 
 
-def _flatten_vec_queries(x):
-    x = jnp.asarray(x, dtype=jnp.float32)
-    if x.shape[-1:] != (3,):
-        raise ValueError(f"expected query shape (..., 3), got {x.shape}")
-    batch_shape = x.shape[:-1]
-    return x.reshape((-1, 3)), batch_shape
+def _factory_data(payload):
+    from ._warp_primitives import Triangles
+    from ._warp_tree import TreeData
+
+    primitive = Triangles()
+    geometry = primitive.payload_type(payload.tri_v0, payload.tri_e1, payload.tri_e2,
+                                       payload.mesh_vertices, payload.tri_indices)
+    return primitive, TreeData.from_payload(payload), geometry
 
 
-def _restore(value, batch_shape):
-    return value.reshape(batch_shape + value.shape[1:])
+def _ray_query(payload, mode, *args, **kwargs):
+    from ._warp_rays import make_ray_query
 
-
-def _ray_args(origin, direction, minimum, maximum):
-    origins, shape = _flatten_vec_queries(origin)
-    directions, dshape = _flatten_vec_queries(direction)
-    if shape != dshape:
-        raise ValueError("ray_origin and ray_direction batch shapes must match")
-    bounds = tuple(jnp.broadcast_to(jnp.asarray(v, jnp.float32), shape).reshape((-1,))
-                   for v in (minimum, maximum))
-    return (origins, directions, *bounds), shape
-
-
-def _crossing_args(origin, direction, minimum, maximum, exclude_face):
-    args, shape = _ray_args(origin, direction, minimum, maximum)
-    face = jnp.asarray(exclude_face)
-    if not jnp.issubdtype(face.dtype, jnp.integer):
-        raise TypeError("exclude_face must contain integer face IDs")
-    face32 = face.astype(jnp.int32)
-    min_face = 0 if jnp.issubdtype(face.dtype, jnp.unsignedinteger) else -1
-    face = jnp.where((face32 >= min_face) & (face32.astype(face.dtype) == face), face32, -2)
-    return (*args, jnp.broadcast_to(face, shape).reshape((-1,))), shape
+    primitive, tree, geometry = _factory_data(payload)
+    return make_ray_query(primitive, mode)(tree, geometry, *args, **kwargs)
 
 
 @register_backend
@@ -87,12 +70,10 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
         return self.closest_point_with_status(payload, x)[:3]
 
     def closest_point_with_status(self, payload: WarpBVHPayload, x: jnp.ndarray):
-        q, shape = _flatten_vec_queries(x)
-        cp, dist, prim, _status = _warp_query(
-            "closest_point_kernel", payload, q)
-        dist = jnp.where(prim >= 0, dist, jnp.inf)
-        return (_restore(cp, shape), _restore(dist, shape),
-                _restore(prim, shape), _restore(_status, shape))
+        from ._warp_metrics import Euclidean
+        from ._warp_nearest import make_nearest
+        primitive, tree, geometry = _factory_data(payload)
+        return make_nearest(primitive, Euclidean())(tree, geometry, x)
 
     def classify_point(self, payload: WarpBVHPayload, x: jnp.ndarray):
         return self.classify_point_with_status(payload, x)[0]
@@ -113,11 +94,7 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
                               ray_origin: jnp.ndarray,
                               ray_direction: jnp.ndarray, max_t: jnp.ndarray,
                               min_t: jnp.ndarray | float = 0.0):
-        args, shape = _ray_args(ray_origin, ray_direction, min_t, max_t)
-        t, prim, hit, _status = _warp_query("first_hit_kernel", payload, *args)
-        return (_restore(t, shape), _restore(prim, shape),
-                _restore(hit.astype(jnp.bool_), shape),
-                _restore(_status, shape))
+        return _ray_query(payload, "first", ray_origin, ray_direction, max_t, min_t=min_t)
 
     def any_hit(self, payload: WarpBVHPayload, ray_origin: jnp.ndarray,
                 ray_direction: jnp.ndarray, max_t: jnp.ndarray,
@@ -129,10 +106,7 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
                             ray_origin: jnp.ndarray,
                             ray_direction: jnp.ndarray, max_t: jnp.ndarray,
                             min_t: jnp.ndarray | float = 0.0):
-        args, shape = _ray_args(ray_origin, ray_direction, min_t, max_t)
-        hit, status = _warp_query("any_hit_kernel", payload, *args)
-        return (_restore(hit.astype(jnp.bool_), shape),
-                _restore(status, shape))
+        return _ray_query(payload, "any", ray_origin, ray_direction, max_t, min_t=min_t)
 
     def count_hits(self, payload, ray_origin, ray_direction, max_t=jnp.inf,
                    *, min_t=0.0, exclude_face=-1):
@@ -141,8 +115,8 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
 
     def count_hits_with_status(self, payload, ray_origin, ray_direction, max_t=jnp.inf,
                                *, min_t=0.0, exclude_face=-1):
-        args, shape = _crossing_args(ray_origin, ray_direction, min_t, max_t, exclude_face)
-        return tuple(_restore(v, shape) for v in _warp_query("count_hits_kernel", payload, *args))
+        return _ray_query(payload, "count", ray_origin, ray_direction, max_t,
+                           min_t=min_t, exclude_face=exclude_face)
 
     def all_hits(self, payload, ray_origin, ray_direction, max_t=jnp.inf,
                  *, max_hits, min_t=0.0, exclude_face=-1):
@@ -151,13 +125,8 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
 
     def all_hits_with_status(self, payload, ray_origin, ray_direction, max_t=jnp.inf,
                              *, max_hits, min_t=0.0, exclude_face=-1):
-        max_hits = index(max_hits)
-        if max_hits < 1 or max_hits > 2**31-1:
-            raise ValueError("max_hits must be a positive static int32 capacity")
-        args, shape = _crossing_args(ray_origin, ray_direction, min_t, max_t, exclude_face)
-        result = _warp_query("all_hits_kernel", payload, *args,
-                             output_shapes=((max_hits,), (max_hits,), (), ()))
-        return tuple(_restore(v, shape) for v in result)
+        return _ray_query(payload, "all", ray_origin, ray_direction, max_t,
+                           max_hits=max_hits, min_t=min_t, exclude_face=exclude_face)
 
     def aabb_overlap(self, payload: WarpBVHPayload,
                      lower: jnp.ndarray, upper: jnp.ndarray) -> jnp.ndarray:

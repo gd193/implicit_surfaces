@@ -8,23 +8,7 @@ from ._warp_geometry import (
 )
 
 
-_NATIVE_CROSSINGS = (
-    _NATIVE_FINITE3 + _NATIVE_PACKED_TRAVERSAL + _NATIVE_EDGE_PREDICATES + r"""
-    const auto run_query = [&](float* times, int* faces, int capacity,
-                               int* result_count, int* status) {
-        *result_count = -1;
-        *status = -1;
-        for (int i = 0; i < capacity; ++i) { times[i] = INFINITY; faces[i] = -1; }
-        const wp::vec3 o = origin, d = direction;
-        const float lo_t = min_t, hi_t = max_t;
-        if (!finite3(o) || !finite3(d) || (d[0] == 0 && d[1] == 0 && d[2] == 0)
-            || lo_t != lo_t || hi_t != hi_t || lo_t > hi_t
-            || lo_t == INFINITY || hi_t == -INFINITY
-            || exclude_face < -1 || exclude_face >= prim_ids.shape[0]) return;
-        *result_count = 0;
-        *status = 0;
-        if (!node_count) return;
-""" + _NATIVE_RAY_BOX + r"""
+_NATIVE_TRIANGLE_CROSSING = r"""
         int kz = 0;
         if (wp::abs(d[1]) > wp::abs(d[kz])) kz = 1;
         if (wp::abs(d[2]) > wp::abs(d[kz])) kz = 2;
@@ -108,18 +92,39 @@ _NATIVE_CROSSINGS = (
                     if (t < lo_t || t > hi_t) return 0;
                     const S orientation = det > 0 ? 1 : -1;
                     for (int i = 0; i < 3; ++i) {
-                        if (e[i] == 0) {
+                        if (half_open && e[i] == 0) {
                             const int a = (i+1)%3, b = (i+2)%3;
                             if (!owns_edge(x[a], y[a], x[b], y[b], orientation)) return 0;
                         }
                     }
                 }
                 result = static_cast<float>(t);
-                return times && !wp::isfinite(result) ? -2 : 1;
+                return store_times && !wp::isfinite(result) ? -2 : 1;
             };
             const int fast = solve(0.0f);
             return fast == -1 ? solve(0.0) : fast;
         };
+"""
+
+
+_NATIVE_CROSSINGS = (
+    _NATIVE_FINITE3 + _NATIVE_PACKED_TRAVERSAL + _NATIVE_EDGE_PREDICATES + r"""
+    const auto run_query = [&](float* times, int* faces, int capacity,
+                               int* result_count, int* status) {
+        *result_count = -1;
+        *status = -1;
+        for (int i = 0; i < capacity; ++i) { times[i] = INFINITY; faces[i] = -1; }
+        const wp::vec3 o = origin, d = direction;
+        const float lo_t = min_t, hi_t = max_t;
+        const bool half_open = true, store_times = times != nullptr;
+        if (!finite3(o) || !finite3(d) || (d[0] == 0 && d[1] == 0 && d[2] == 0)
+            || lo_t != lo_t || hi_t != hi_t || lo_t > hi_t
+            || lo_t == INFINITY || hi_t == -INFINITY
+            || exclude_face < -1 || exclude_face >= prim_ids.shape[0]) return;
+        *result_count = 0;
+        *status = 0;
+        if (!node_count) return;
+""" + _NATIVE_RAY_BOX + _NATIVE_TRIANGLE_CROSSING + r"""
         const auto overlaps = [&](const wp::vec4& lower, const wp::vec4& upper, float& enter) {
             return box_interval(wp::vec3(lower[0],lower[1],lower[2]),
                                 wp::vec3(upper[0],upper[1],upper[2]), lo_t, hi_t, enter, true);
@@ -179,34 +184,16 @@ def native_all_hits(
 ): ...
 
 
-@wp.kernel
-def count_hits_kernel(
-    origins: wp.array(dtype=wp.vec3), directions: wp.array(dtype=wp.vec3),
-    min_t: wp.array(dtype=wp.float32), max_t: wp.array(dtype=wp.float32),
-    exclude_face: wp.array(dtype=wp.int32),
-    node_ray_lower: wp.array(dtype=wp.vec4), node_ray_upper: wp.array(dtype=wp.vec4),
-    prim_ids: wp.array(dtype=wp.int32), mesh_vertices: wp.array(dtype=wp.vec3),
-    tri_indices: wp.array(dtype=wp.vec3i), out_count: wp.array(dtype=wp.int32),
-    out_status: wp.array(dtype=wp.int32),
-):
-    i = wp.tid()
-    native_count_hits(i, origins[i], directions[i], min_t[i], max_t[i], exclude_face[i],
-        wp.len(node_ray_lower), node_ray_lower, node_ray_upper, prim_ids,
-        mesh_vertices, tri_indices, out_count, out_status)
-
-
-@wp.kernel
-def all_hits_kernel(
-    origins: wp.array(dtype=wp.vec3), directions: wp.array(dtype=wp.vec3),
-    min_t: wp.array(dtype=wp.float32), max_t: wp.array(dtype=wp.float32),
-    exclude_face: wp.array(dtype=wp.int32),
-    node_ray_lower: wp.array(dtype=wp.vec4), node_ray_upper: wp.array(dtype=wp.vec4),
-    prim_ids: wp.array(dtype=wp.int32), mesh_vertices: wp.array(dtype=wp.vec3),
-    tri_indices: wp.array(dtype=wp.vec3i), out_t: wp.array2d(dtype=wp.float32),
-    out_face: wp.array2d(dtype=wp.int32), out_count: wp.array(dtype=wp.int32),
-    out_status: wp.array(dtype=wp.int32),
-):
-    i = wp.tid()
-    native_all_hits(i, origins[i], directions[i], min_t[i], max_t[i], exclude_face[i],
-        wp.len(node_ray_lower), node_ray_lower, node_ray_upper, prim_ids,
-        mesh_vertices, tri_indices, out_t, out_face, out_count, out_status)
+@wp.func_native(_NATIVE_EDGE_PREDICATES + r"""
+    const wp::vec3 o = origin, d = direction;
+    const float lo_t = min_t, hi_t = max_t;
+""" + _NATIVE_TRIANGLE_CROSSING + r"""
+    float t = 0;
+    const int hit = triangle_t(slot, t);
+    return wp::vec2(t, hit < 0 ? -1.f : static_cast<float>(hit));
+""")
+def native_triangle_crossing(
+    origin: wp.vec3, direction: wp.vec3, min_t: float, max_t: float, slot: int,
+    mesh_vertices: wp.array(dtype=wp.vec3), tri_indices: wp.array(dtype=wp.vec3i),
+    half_open: bool, store_times: bool,
+) -> wp.vec2: ...

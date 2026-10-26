@@ -50,8 +50,8 @@ _NATIVE_POINT_GEOMETRY = "const wp::vec3 p = query;\n" + _NATIVE_FINITE3 + r"""
 """
 
 _NATIVE_SEGMENT_CLOSEST = r"""
-    const auto closest_segment = [&](const wp::vec3& a, const wp::vec3& b) {
-        const wp::vec3 ab = b - a;
+    const auto closest_segment = [&](const auto& a, const auto& b) {
+        const auto ab = b - a;
         const float denom = wp::dot(ab, ab);
         float t = 0.0f;
         if (denom > 0.0f)
