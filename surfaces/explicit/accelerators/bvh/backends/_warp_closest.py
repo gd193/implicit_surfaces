@@ -14,7 +14,7 @@ _NATIVE_CLOSEST_POINT = (f"constexpr int stack_capacity = {STACK_CAPACITY};\n"
     out_distance.data[qi] = INFINITY;
     out_primitive_id.data[qi] = -1;
     out_status.data[qi] = 0;
-    if (!finite3(p)) {
+    if (!finite3(p) || cap != cap || cap < 0.0f) {
         out_status.data[qi] = -1;
         return;
     }
@@ -25,7 +25,7 @@ _NATIVE_CLOSEST_POINT = (f"constexpr int stack_capacity = {STACK_CAPACITY};\n"
     int stack_size = 0;
     int node = 0;
     const float root_lower_d2 = box_distance_sq(node_lower.data[0], node_upper.data[0]);
-    float best_d2 = 3.4028234e38f;
+    float best_d2 = wp::min(3.4028234e38f, cap*cap);
     wp::vec3 best_point(0.0f);
     int best_id = -1;
     bool failed = false;
@@ -110,9 +110,9 @@ _NATIVE_CLOSEST_POINT = (f"constexpr int stack_capacity = {STACK_CAPACITY};\n"
             if (!found_next) break;
         }
     }
-    if (failed || best_id < 0) {
+    if (failed || (best_id < 0 && cap*cap >= 3.4028234e38f)) {
         out_status.data[qi] = -1;
-    } else {
+    } else if (best_id >= 0) {
         out_point.data[qi] = best_point;
         out_distance.data[qi] = wp::sqrt(best_d2);
         out_primitive_id.data[qi] = best_id;
@@ -125,6 +125,7 @@ _NATIVE_CLOSEST_POINT = (f"constexpr int stack_capacity = {STACK_CAPACITY};\n"
 def native_closest_point(
     qi: int,
     query: wp.vec3,
+    cap: wp.float32,
     node_count: int,
     node_lower: wp.array(dtype=wp.vec3),
     node_upper: wp.array(dtype=wp.vec3),
@@ -141,29 +142,3 @@ def native_closest_point(
     out_primitive_id: wp.array(dtype=wp.int32),
     out_status: wp.array(dtype=wp.int32),
 ): ...
-
-
-@wp.kernel
-def closest_point_kernel(
-    query: wp.array(dtype=wp.vec3),
-    node_lower: wp.array(dtype=wp.vec3),
-    node_upper: wp.array(dtype=wp.vec3),
-    node_left: wp.array(dtype=wp.int32),
-    node_right: wp.array(dtype=wp.int32),
-    node_leaf_offset: wp.array(dtype=wp.int32),
-    node_leaf_count: wp.array(dtype=wp.int32),
-    prim_ids: wp.array(dtype=wp.int32),
-    tri_v0: wp.array(dtype=wp.vec3),
-    tri_e1: wp.array(dtype=wp.vec3),
-    tri_e2: wp.array(dtype=wp.vec3),
-    out_point: wp.array(dtype=wp.vec3),
-    out_distance: wp.array(dtype=wp.float32),
-    out_primitive_id: wp.array(dtype=wp.int32),
-    out_status: wp.array(dtype=wp.int32),
-):
-    qi = wp.tid()
-    native_closest_point(
-        qi, query[qi], wp.len(node_left), node_lower, node_upper, node_left, node_right,
-        node_leaf_offset, node_leaf_count, prim_ids, tri_v0, tri_e1, tri_e2,
-        out_point, out_distance, out_primitive_id, out_status,
-    )

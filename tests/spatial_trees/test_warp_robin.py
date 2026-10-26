@@ -11,7 +11,7 @@ from surfaces.explicit.accelerators import BVHAccelerator, list_backends
 from surfaces.explicit.accelerators.protocol import Config
 
 from ._robin_oracle import brute_robin_radius
-from .test_warp_bvh import _mesh
+from ._warp_helpers import _mesh
 
 
 pytestmark = pytest.mark.skipif("bvh.snch.warp" not in list_backends("bvh", runtime="warp"),

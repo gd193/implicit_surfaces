@@ -1,0 +1,495 @@
+{
+  "date": "2026-10-25",
+  "device": {
+    "name": "NVIDIA A40",
+    "physical_index": 1
+  },
+  "versions": {
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "warp-lang": "1.17.0",
+    "trimesh": "4.12.1",
+    "numpy": "2.4.3"
+  },
+  "method": {
+    "metric": "cuda_event_graph_kernel_ms",
+    "n_queries": 65536,
+    "leaf_size": 4,
+    "warmup_launches": 5,
+    "launches_per_graph": 50,
+    "samples": 15,
+    "scope": "Resident arrays, warmed CUDA graphs, CUDA events. Build, compilation, uploads, readback and host dispatch excluded.",
+    "order": "Legacy/factory cases randomized each repeat; GPU processes serialized.",
+    "comparison": "Native triangle entry point versus public query factory; identical native traversal, topology, geometry and queries.",
+    "counts": "Unbounded forward rays or signed full lines; no face exclusion. All-hit capacity 8, with no overflow in these fixtures."
+  },
+  "source_sha256": {
+    "surfaces/explicit/accelerators/bvh/backends/_warp_build.py": "c5462c022c4148f1844837575b41250fcfe9d2ff3c11c52fa0a1623a2b9f1e3d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_closest.py": "e06aa55957a60a0dac0386f6247547761a573a26660a1c7eaf6c64b3a694d390",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_crossings.py": "609b7352a77e9ecbadf76b2e6866f6861749f1f5b9333d26dc83b4362a455d9f",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_factory.py": "51f4e411a71739df77c530fcea4fc842f17ef2febfa0c1b4775826e09405582f",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_geometry.py": "df19199f65cb36774d32b853a62139d5b12361d5015a3f1e76407986c587cb8a",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_inside.py": "c0de7bf4fea078cabb09ec217a237d3c8b4e7fdd436c1212ff27ae5621187c22",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_jax.py": "234982078c9e827ad7c0e433a035c949e5fd57d5340fb818b7dd2a0646a60a71",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_layout.py": "89f6bd4261392e6760ffc8cf7faba710ffa29ef09afc242b45bc6e7e23e8006d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_metrics.py": "a4191c62c74cc2b7f862e2d266cd2fc852ac198e8ee78cefdbe99bca54ddd5d2",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_nearest.py": "2b6057e95e02c92059f760b49945e563102f624bbd43eb54ab29edfb4e328b86",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_overlap.py": "8a5117e3dc4447f11773674303096012ea96a4c9f33fca317d97bbac057b31fa",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_primitives.py": "e69a6063b162a8d5f7ae6445181f6c2d5b1d77e112c30a57bcb871310f4ef915",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_ray.py": "4c4822ac6e248500e4932d11b1aabbdb64a2de99cf631678fd3f51c9ad70f808",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_rays.py": "3b04655978cdb30bfebca054118cbd165786df21236bd4150552daa97ad655e4",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_robin.py": "167a6dac58682901d1d68e0dea2f65a99f8d91e7060da472e7f7fcbe1bfcf83e",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_sampling.py": "4bb3bc0a6562262b837957b7fd80872ebce4867c4c76bf685eae61b124fea122",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_silhouette.py": "b5e277947865127c461cd4f18e35a7e9f71b65c6a7338a8d2e489c642435de00",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_specs.py": "88bc05d2a4ccb1bacc2380b1305a6f9a893405462332f8003cf4b9f0c9203960",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_tree.py": "e95eddd2a43905f04359e37ab167f888ef3af0216c3009c968ebae4e8a1adfe5",
+    "surfaces/explicit/accelerators/bvh/backends/sah_warp.py": "104313521b32050889a7a649040d3fc45513ea086712c00f3689542311c80a6d",
+    "surfaces/explicit/accelerators/bvh/backends/snch_warp.py": "30632d8c3b18fbb502f9a3a0f165e27621ffba4287724f12d5bd23196e8bcf4e",
+    "surfaces/explicit/accelerators/bvh/backends/snch_jax.py": "b359b976d94450f3d5c37529a674692b0520e042356f9553acc3afdd2f100d5e",
+    "surfaces/explicit/accelerators/bvh/backends/sah_jax.py": "b878ba21e8dd200a6a3a6418c9c50b368c24f7b430ba8d851bc736a0b2f3d478",
+    "scripts/bench/spatial_trees/warp_bvh_device.py": "1987dd3c55d7c0b451b882e1d102591f8b6dd8396c7313fca32b155347066ffc",
+    "scripts/bench/spatial_trees/_warp_fixtures.py": "137455ef002e6a44a0dba207444cc041fd2f55b0863c45c681d499662127bf88",
+    "surfaces/explicit/accelerators/bvh/warp.py": "d32fd64d4ddbd6babf46a5b9fac0fc5700525cea6ebbe6800df0399fea153d4f"
+  },
+  "validation": {
+    "tests": "216 selected tests pass, including 23 factory cases.",
+    "coverage": "2D/3D points and segments, triangles, independent nearest and angular oracles, custom metric and primitive schemas, custom ray callbacks, node data, scalar query types, CPU/GPU, nested vmap, dynamic geometry, caps, ties, ownership, overflow, stack and invalid-input failures.",
+    "timed_outputs": "Factory counts, IDs, statuses and ray outputs agree with concrete kernels; closest distances agree within 3e-5."
+  },
+  "limits": "Timings cover built-in triangle fast specializations. Arbitrary callbacks use shared Warp traversal; this report does not establish their speed or angular-query performance.",
+  "results": [
+    {
+      "mesh": "sphere",
+      "point_distribution": "gaussian",
+      "interval": "line",
+      "query": "all_hits",
+      "n_triangles": 20480,
+      "block_dim": 128,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "a2fd995245cc6ac48b00784bb4d22f047a42383365fcd7e0ff2541b25afbc59f",
+      "concrete": {
+        "device_p50_ms": 0.4047872161865234,
+        "device_samples_ms": [0.4031897735595703, 0.4057497787475586, 0.4049919891357422, 0.404766731262207, 0.4055859375, 0.40372222900390625, 0.4048691177368164, 0.4047872161865234, 0.4043571090698242, 0.40452095031738283, 0.4050534439086914, 0.40488960266113283, 0.4060774230957031, 0.4046438217163086, 0.4042752075195313],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.4041932678222656,
+        "device_samples_ms": [0.4027596664428711, 0.4034969711303711, 0.40380416870117186, 0.40329216003417967, 0.4045004653930664, 0.4026777648925781, 0.4041932678222656, 0.4053811264038086, 0.40448001861572264, 0.4048486328125, 0.4033536148071289, 0.40517631530761716, 0.4032511901855469, 0.40624126434326174, 0.40554496765136716],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory_over_concrete": 0.9985326899158196
+    },
+    {
+      "mesh": "sphere",
+      "point_distribution": "gaussian",
+      "interval": "line",
+      "query": "count_hits",
+      "n_triangles": 20480,
+      "block_dim": 128,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "a2fd995245cc6ac48b00784bb4d22f047a42383365fcd7e0ff2541b25afbc59f",
+      "concrete": {
+        "device_p50_ms": 0.3509657669067383,
+        "device_samples_ms": [0.3506175994873047, 0.3521535873413086, 0.3523379135131836, 0.35158016204833986, 0.35037185668945314, 0.3510067367553711, 0.3526451110839844, 0.35080192565917967, 0.35194881439208986, 0.3499417495727539, 0.3498393630981445, 0.3506380844116211, 0.35194881439208986, 0.3509657669067383, 0.35069950103759767],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.35080192565917967,
+        "device_samples_ms": [0.3501670455932617, 0.3510067367553711, 0.35151870727539064, 0.3518668746948242, 0.34985984802246095, 0.3511910247802734, 0.3508428955078125, 0.35110912322998045, 0.3498188781738281, 0.3499827194213867, 0.3500441741943359, 0.34971649169921876, 0.3505356979370117, 0.35080192565917967, 0.35108863830566406],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory_over_concrete": 0.9995331702889354
+    },
+    {
+      "mesh": "sphere",
+      "point_distribution": "gaussian",
+      "interval": "ray",
+      "query": "all_hits",
+      "n_triangles": 20480,
+      "block_dim": 128,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "a6530a030907b9482b070313aa7925602043ca621fe1317ccc7e34a80cd314a2",
+      "concrete": {
+        "device_p50_ms": 0.39634944915771486,
+        "device_samples_ms": [0.39643135070800783, 0.39671806335449217, 0.3968819046020508, 0.39534591674804687, 0.3964723205566406, 0.39514110565185545, 0.39612415313720706, 0.39622657775878906, 0.39634944915771486, 0.3955507278442383, 0.39665664672851564, 0.3969228744506836, 0.3958169555664062, 0.3972505569458008, 0.39585792541503906],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.3971481704711914,
+        "device_samples_ms": [0.3971481704711914, 0.3978444671630859, 0.3966156768798828, 0.3956940841674805, 0.3982131195068359, 0.3970048141479492, 0.3979878234863281, 0.39739391326904294, 0.39796737670898436, 0.3974758529663086, 0.397127685546875, 0.39620609283447267, 0.396943359375, 0.3971481704711914, 0.3978239822387695],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory_over_concrete": 1.0020151947105613
+    },
+    {
+      "mesh": "sphere",
+      "point_distribution": "gaussian",
+      "interval": "ray",
+      "query": "any_hit",
+      "n_triangles": 20480,
+      "block_dim": 128,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "d2e3ac6f3411eb34efcae650ba0e5e6410443dc9b68beeaac64a940d9182a87a",
+      "concrete": {
+        "device_p50_ms": 0.10043392181396485,
+        "device_samples_ms": [0.10035200119018554, 0.1003110408782959, 0.10037247657775879, 0.1004748821258545, 0.10053631782531738, 0.10043392181396485, 0.10067968368530274, 0.10049535751342774, 0.10037247657775879, 0.10037247657775879, 0.10078207969665527, 0.10070015907287598, 0.10041343688964843, 0.10039296150207519, 0.10072064399719238],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 512
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.1008844757080078,
+        "device_samples_ms": [0.1008844757080078, 0.10076160430908203, 0.10090496063232422, 0.10084351539611816, 0.10080256462097167, 0.10113023757934571, 0.1008844757080078, 0.1010483169555664, 0.10080256462097167, 0.10074111938476563, 0.10094592094421387, 0.1010483169555664, 0.10076160430908203, 0.10102784156799316, 0.10092543601989747],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 512
+        }
+      },
+      "factory_over_concrete": 1.0044860728915628
+    },
+    {
+      "mesh": "sphere",
+      "point_distribution": "gaussian",
+      "interval": "ray",
+      "query": "closest_point",
+      "n_triangles": 20480,
+      "block_dim": 64,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "141e42571854c490687893a7ca86895f3062b9d9a11b1aeb4ff75b300afff854",
+      "concrete": {
+        "device_p50_ms": 6.832864990234375,
+        "device_samples_ms": [6.828810424804687, 6.8305511474609375, 6.83130859375, 6.831718139648437, 6.832864990234375, 6.8320458984375, 6.832967529296875, 6.8323126220703125, 6.8336639404296875, 6.832864990234375, 6.833541259765625, 6.834114379882813, 6.834114379882813, 6.834298706054687, 6.833438720703125],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 512
+        }
+      },
+      "factory": {
+        "device_p50_ms": 6.825021362304687,
+        "device_samples_ms": [6.821703491210937, 6.82250244140625, 6.825021362304687, 6.824530029296875, 6.8241815185546875, 6.82471435546875, 6.824099731445313, 6.825697021484375, 6.824918823242188, 6.826495971679687, 6.825390014648438, 6.8255126953125, 6.825103149414063, 6.826024780273437, 6.82629150390625],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 512
+        }
+      },
+      "factory_over_concrete": 0.9988520733336751
+    },
+    {
+      "mesh": "sphere",
+      "point_distribution": "gaussian",
+      "interval": "ray",
+      "query": "count_hits",
+      "n_triangles": 20480,
+      "block_dim": 128,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "a6530a030907b9482b070313aa7925602043ca621fe1317ccc7e34a80cd314a2",
+      "concrete": {
+        "device_p50_ms": 0.34500606536865236,
+        "device_samples_ms": [0.34516990661621094, 0.34453502655029294, 0.34519039154052733, 0.34557952880859377, 0.34473983764648436, 0.34402305603027344, 0.3449446487426758, 0.34541568756103513, 0.34560001373291016, 0.34541568756103513, 0.34488319396972655, 0.34451454162597656, 0.34500606536865236, 0.34541568756103513, 0.34402305603027344],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.3450675201416016,
+        "device_samples_ms": [0.34488319396972655, 0.34510848999023436, 0.34408447265625, 0.3452108764648438, 0.3439616012573242, 0.344453125, 0.34514942169189455, 0.34539520263671875, 0.3453337478637695, 0.3450675201416016, 0.3438387298583984, 0.34560001373291016, 0.34490367889404294, 0.34437118530273436, 0.34557952880859377],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory_over_concrete": 1.0001781266450593
+    },
+    {
+      "mesh": "sphere",
+      "point_distribution": "gaussian",
+      "interval": "ray",
+      "query": "first_hit",
+      "n_triangles": 20480,
+      "block_dim": 128,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "d2e3ac6f3411eb34efcae650ba0e5e6410443dc9b68beeaac64a940d9182a87a",
+      "concrete": {
+        "device_p50_ms": 0.11347968101501466,
+        "device_samples_ms": [0.11366399765014648, 0.11356160163879395, 0.11366399765014648, 0.1135206413269043, 0.11350015640258788, 0.11339776039123535, 0.1135206413269043, 0.11309056282043457, 0.11347968101501466, 0.11321344375610351, 0.11374591827392579, 0.11339776039123535, 0.11325440406799317, 0.11319295883178711, 0.11307007789611817],
+        "properties": {
+          "register_count": 61,
+          "local_memory_size": 512
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.11384832382202148,
+        "device_samples_ms": [0.11360256195068359, 0.11399168014526367, 0.11376640319824219, 0.11384832382202148, 0.11370495796203613, 0.11409407615661621, 0.11397120475769043, 0.11386879920959472, 0.11354111671447754, 0.11405311584472656, 0.1136844825744629, 0.11407360076904297, 0.11378687858581543, 0.11360256195068359, 0.11395071983337403],
+        "properties": {
+          "register_count": 61,
+          "local_memory_size": 512
+        }
+      },
+      "factory_over_concrete": 1.0032485358057892
+    },
+    {
+      "mesh": "sphere",
+      "point_distribution": "interior",
+      "interval": "ray",
+      "query": "closest_point",
+      "n_triangles": 20480,
+      "block_dim": 64,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "86c4862ff33e966dda2437c8f3a3743f7ee4cb040ab9cd0bd874731c206953af",
+      "concrete": {
+        "device_p50_ms": 6.563655395507812,
+        "device_samples_ms": [6.561812744140625, 6.562734375, 6.562570190429687, 6.562877197265625, 6.563123168945313, 6.563655395507812, 6.563307495117187, 6.563819580078125, 6.563860473632812, 6.56437255859375, 6.56521240234375, 6.564188232421875, 6.563512573242187, 6.564290771484375, 6.5650482177734375],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 512
+        }
+      },
+      "factory": {
+        "device_p50_ms": 6.558801879882813,
+        "device_samples_ms": [6.554276123046875, 6.557511596679688, 6.55720458984375, 6.557901000976562, 6.557921142578125, 6.557962036132812, 6.558658447265625, 6.558801879882813, 6.559457397460937, 6.5590478515625, 6.559232177734375, 6.5590478515625, 6.559375610351562, 6.559191284179687, 6.560481567382812],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 512
+        }
+      },
+      "factory_over_concrete": 0.9992605468549856
+    },
+    {
+      "mesh": "sphere",
+      "point_distribution": "shell",
+      "interval": "ray",
+      "query": "closest_point",
+      "n_triangles": 20480,
+      "block_dim": 64,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "b2d8d5c93b7ac97d6be4e53da7e0a9c0525d4f6fa0286f7c866deafdfe3e9b77",
+      "concrete": {
+        "device_p50_ms": 0.18384895324707032,
+        "device_samples_ms": [0.17909759521484375, 0.17907712936401368, 0.1806540870666504, 0.18325504302978515, 0.18333696365356444, 0.18323455810546874, 0.18325504302978515, 0.18384895324707032, 0.1844838333129883, 0.18499584197998048, 0.1847091293334961, 0.18483200073242187, 0.18483200073242187, 0.18487295150756836, 0.18464767456054687],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 512
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.18233343124389648,
+        "device_samples_ms": [0.1779097557067871, 0.178155517578125, 0.17911808013916017, 0.18225151062011719, 0.18196479797363282, 0.18233343124389648, 0.1821286392211914, 0.18208768844604492, 0.18331647872924806, 0.1839308738708496, 0.18345983505249022, 0.1836851119995117, 0.18384895324707032, 0.18356224060058593, 0.18372608184814454],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 512
+        }
+      },
+      "factory_over_concrete": 0.9917567003977599
+    },
+    {
+      "mesh": "torus",
+      "point_distribution": "gaussian",
+      "interval": "line",
+      "query": "all_hits",
+      "n_triangles": 16384,
+      "block_dim": 128,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "a2fd995245cc6ac48b00784bb4d22f047a42383365fcd7e0ff2541b25afbc59f",
+      "concrete": {
+        "device_p50_ms": 0.31963136672973635,
+        "device_samples_ms": [0.31963136672973635, 0.3220275115966797, 0.3218227386474609, 0.3222323226928711, 0.31891456604003904, 0.32057342529296873, 0.317890567779541, 0.32026622772216795, 0.3202252960205078, 0.31924224853515626, 0.31903743743896484, 0.31893503189086914, 0.3194879913330078, 0.31862783432006836, 0.320184326171875],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.319365119934082,
+        "device_samples_ms": [0.3188121604919434, 0.31823871612548826, 0.319365119934082, 0.3199180793762207, 0.3168460845947266, 0.3182182312011719, 0.3198975944519043, 0.31924224853515626, 0.32040958404541015, 0.3177676773071289, 0.31899648666381836, 0.32192512512207033, 0.3197337532043457, 0.3194060707092285, 0.3219456100463867],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory_over_concrete": 0.9991670191872017
+    },
+    {
+      "mesh": "torus",
+      "point_distribution": "gaussian",
+      "interval": "line",
+      "query": "count_hits",
+      "n_triangles": 16384,
+      "block_dim": 128,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "a2fd995245cc6ac48b00784bb4d22f047a42383365fcd7e0ff2541b25afbc59f",
+      "concrete": {
+        "device_p50_ms": 0.28270591735839845,
+        "device_samples_ms": [0.28395519256591795, 0.28055551528930667, 0.28698623657226563, 0.28262399673461913, 0.281026554107666, 0.2852249526977539, 0.2814771270751953, 0.28192768096923826, 0.2815590476989746, 0.2835865592956543, 0.28270591735839845, 0.2831564712524414, 0.28420095443725585, 0.28295167922973635, 0.2811699295043945],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.28436479568481443,
+        "device_samples_ms": [0.2830131149291992, 0.2807807922363281, 0.283054084777832, 0.28471296310424804, 0.28436479568481443, 0.28454912185668946, 0.28112895965576173, 0.28493824005126955, 0.2864742469787598, 0.28659711837768553, 0.28100608825683593, 0.28280832290649416, 0.2858803176879883, 0.2844876861572266, 0.2829311943054199],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory_over_concrete": 1.0058678585220873
+    },
+    {
+      "mesh": "torus",
+      "point_distribution": "gaussian",
+      "interval": "ray",
+      "query": "all_hits",
+      "n_triangles": 16384,
+      "block_dim": 128,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "a6530a030907b9482b070313aa7925602043ca621fe1317ccc7e34a80cd314a2",
+      "concrete": {
+        "device_p50_ms": 0.30574592590332034,
+        "device_samples_ms": [0.30869504928588865, 0.3064012718200684, 0.3056025505065918, 0.30763008117675783, 0.30574592590332034, 0.30519296646118166, 0.3055820846557617, 0.3081830406188965, 0.30574592590332034, 0.3053977584838867, 0.30711807250976564, 0.3035750389099121, 0.3076915168762207, 0.3055206489562988, 0.3077734375],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.30627840042114257,
+        "device_samples_ms": [0.30603263854980467, 0.30695423126220706, 0.305479679107666, 0.30627840042114257, 0.3070566368103027, 0.30722047805786135, 0.3067699241638184, 0.30486528396606444, 0.30816255569458006, 0.30494720458984376, 0.30709760665893554, 0.30711807250976564, 0.3058278465270996, 0.305029125213623, 0.3059097671508789],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory_over_concrete": 1.0017415588327108
+    },
+    {
+      "mesh": "torus",
+      "point_distribution": "gaussian",
+      "interval": "ray",
+      "query": "any_hit",
+      "n_triangles": 16384,
+      "block_dim": 128,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "d2e3ac6f3411eb34efcae650ba0e5e6410443dc9b68beeaac64a940d9182a87a",
+      "concrete": {
+        "device_p50_ms": 0.08275967597961426,
+        "device_samples_ms": [0.08275967597961426, 0.08271871566772461, 0.08269824028015137, 0.08253439903259277, 0.08269824028015137, 0.08284159660339356, 0.08275967597961426, 0.0828825569152832, 0.08290304183959961, 0.08286208152770996, 0.08278016090393066, 0.08269824028015137, 0.08273920059204101, 0.08267775535583496, 0.08286208152770996],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 512
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.08275967597961426,
+        "device_samples_ms": [0.08273920059204101, 0.08275967597961426, 0.08284159660339356, 0.08282112121582032, 0.08257535934448242, 0.0830668830871582, 0.08271871566772461, 0.08275967597961426, 0.08271871566772461, 0.08290304183959961, 0.08269824028015137, 0.08284159660339356, 0.08271871566772461, 0.08271871566772461, 0.08278016090393066],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 512
+        }
+      },
+      "factory_over_concrete": 1.0
+    },
+    {
+      "mesh": "torus",
+      "point_distribution": "gaussian",
+      "interval": "ray",
+      "query": "closest_point",
+      "n_triangles": 16384,
+      "block_dim": 64,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "141e42571854c490687893a7ca86895f3062b9d9a11b1aeb4ff75b300afff854",
+      "concrete": {
+        "device_p50_ms": 1.4960435485839845,
+        "device_samples_ms": [1.4990336608886718, 1.4940159606933594, 1.497681884765625, 1.4983987426757812, 1.4948556518554688, 1.49391357421875, 1.4948556518554688, 1.4960435485839845, 1.4963917541503906, 1.4942822265625, 1.49676025390625, 1.496637420654297, 1.4977229309082032, 1.4954495239257812, 1.495203857421875],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 512
+        }
+      },
+      "factory": {
+        "device_p50_ms": 1.4945893859863282,
+        "device_samples_ms": [1.4940570068359376, 1.4954086303710938, 1.492295684814453, 1.4911283874511718, 1.4957363891601563, 1.4916812133789064, 1.491005401611328, 1.495941162109375, 1.4945893859863282, 1.49538818359375, 1.4946099853515624, 1.4946917724609374, 1.4946099853515624, 1.4925619506835937, 1.4911488342285155],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 512
+        }
+      },
+      "factory_over_concrete": 0.9990279944731337
+    },
+    {
+      "mesh": "torus",
+      "point_distribution": "gaussian",
+      "interval": "ray",
+      "query": "count_hits",
+      "n_triangles": 16384,
+      "block_dim": 128,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "a6530a030907b9482b070313aa7925602043ca621fe1317ccc7e34a80cd314a2",
+      "concrete": {
+        "device_p50_ms": 0.2635775947570801,
+        "device_samples_ms": [0.2657279968261719, 0.2634547233581543, 0.26251264572143557, 0.2634956741333008, 0.2632908821105957, 0.26365951538085936, 0.2634137535095215, 0.26386432647705077, 0.2629427146911621, 0.2632089614868164, 0.2643558311462402, 0.2635775947570801, 0.26380287170410155, 0.26411008834838867, 0.26425344467163087],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.26322944641113283,
+        "device_samples_ms": [0.2633523178100586, 0.2630041694641113, 0.26429439544677735, 0.26365951538085936, 0.26208255767822264, 0.2630860710144043, 0.26150911331176757, 0.2639462471008301, 0.26454015731811525, 0.26322944641113283, 0.2617548751831055, 0.2634342384338379, 0.263372802734375, 0.26286079406738283, 0.26243072509765625],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "factory_over_concrete": 0.998679142867708
+    },
+    {
+      "mesh": "torus",
+      "point_distribution": "gaussian",
+      "interval": "ray",
+      "query": "first_hit",
+      "n_triangles": 16384,
+      "block_dim": 128,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "d2e3ac6f3411eb34efcae650ba0e5e6410443dc9b68beeaac64a940d9182a87a",
+      "concrete": {
+        "device_p50_ms": 0.09400320053100586,
+        "device_samples_ms": [0.09398271560668946, 0.09400320053100586, 0.09406463623046875, 0.09406463623046875, 0.09400320053100586, 0.09381888389587402, 0.09406463623046875, 0.09385984420776367, 0.09400320053100586, 0.09379839897155762, 0.09424896240234375, 0.09398271560668946, 0.09390080451965332, 0.09390080451965332, 0.09412608146667481],
+        "properties": {
+          "register_count": 61,
+          "local_memory_size": 512
+        }
+      },
+      "factory": {
+        "device_p50_ms": 0.09373696327209473,
+        "device_samples_ms": [0.09359359741210938, 0.09381888389587402, 0.09390080451965332, 0.09365504264831542, 0.09351167678833008, 0.09381888389587402, 0.09365504264831542, 0.09367551803588867, 0.09373696327209473, 0.0940441608428955, 0.09379839897155762, 0.09396224021911621, 0.09369600296020508, 0.09363455772399902, 0.09398271560668946],
+        "properties": {
+          "register_count": 61,
+          "local_memory_size": 512
+        }
+      },
+      "factory_over_concrete": 0.9971677851668113
+    }
+  ],
+  "command": "python -m scripts.bench.spatial_trees.warp_bvh_device --factory --queries closest_point first_hit any_hit count_hits all_hits --mesh <sphere|torus> --point-distribution <gaussian|shell|interior> [--line]"
+}

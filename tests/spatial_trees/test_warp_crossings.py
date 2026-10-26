@@ -8,14 +8,9 @@ import pytest
 import trimesh
 
 from surfaces.explicit.accelerators import BVHAccelerator, Config
-from tests.spatial_trees.test_warp_bvh import WARP_BVHS, _mesh
+from ._warp_helpers import WARP_BVHS, _mesh, _build_mesh as _build
 
 pytestmark = pytest.mark.skipif(not WARP_BVHS, reason="Warp is unavailable")
-
-
-def _build(mesh, backend="bvh.sah.warp", leaf=4):
-    return BVHAccelerator.build(_mesh(mesh.vertices, mesh.faces)[0], backend,
-                                Config(leaf_size_threshold=leaf))
 
 
 def _oracle(vertices, faces, origin, direction, low, high, excluded=-1):

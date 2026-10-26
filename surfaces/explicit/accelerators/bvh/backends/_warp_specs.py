@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from importlib import import_module
 from typing import Any
 
@@ -80,10 +81,17 @@ def query_spec(kernel_name: str) -> WarpQuerySpec:
         raise ValueError(f"unknown Warp BVH query kernel {kernel_name!r}") from None
 
 
+@lru_cache(maxsize=None)
 def query_kernel(kernel_name: str):
     """Load lazily and check payload argument order."""
     spec = query_spec(kernel_name)
-    kernel = getattr(import_module(f".{spec.module}", __package__), kernel_name)
+    module = import_module(f".{spec.module}", __package__)
+    kernel = getattr(module, kernel_name, None)
+    if kernel is None:
+        from ._warp_factory import native_entrypoint
+
+        native = getattr(module, "native_" + kernel_name.removesuffix("_kernel"))
+        kernel = native_entrypoint(kernel_name, native, spec)
     args = kernel.adj.args
     payload_end = len(args) - spec.num_outputs
     actual_fields = tuple(arg.label for arg in args[spec.num_query_args:payload_end])

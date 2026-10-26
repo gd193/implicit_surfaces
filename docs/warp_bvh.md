@@ -51,6 +51,47 @@ Vectors have shape `(3,)` or `(..., 3)`; scalar bounds broadcast to query
 shape. Ray origins and directions must have matching shapes. Bound methods
 such as `tree.closest_point(points)` are also available.
 
+## Static query factories
+
+Select primitives and metrics with ordinary Python arguments before JAX tracing:
+
+```python
+from surfaces.explicit.accelerators.bvh.warp import (
+    Segments, Euclidean, build_tree, make_nearest, make_ray_query,
+)
+
+primitive = Segments(2)
+tree, data = build_tree(primitive, primitive.data(starts, ends))
+nearest = make_nearest(primitive, Euclidean())
+point, distance, segment, status = jax.jit(nearest)(tree, data, points)
+all_hits = make_ray_query(primitive, "all")
+times, segments, count, status = all_hits(tree, data, origins, directions, max_hits=8)
+```
+
+Float32 builtins: `Points(2|3)`, `Segments(2|3)`, `Triangles()` and
+`SilhouetteEdges()`. Euclidean nearest queries support all four. `Angular()`
+supports 3D segments/edges; queries end in `(2,3)` with viewpoint and direction
+as rows, and distances/caps are radians. For view-dependent edges, supply
+`SilhouetteEdges().data(a,b,n0,n1)` and `predicate=Silhouette()`.
+
+Implement `PrimitiveSpec` and `MetricSpec.bind(primitive)` to extend the factory.
+Primitive specifications provide an array-only Warp struct, device load/bounds
+functions, and host bounds/packing. Metrics return `NearestOps`: query type/shape,
+validity, box bound, primitive minimizer, cap/score conversions and culling slack.
+Callbacks are `@wp.func` or `@wp.func_native`. Bounds and minimizers must use the
+same score units; bounds must be conservative. Optional `node_bound_with_data`
+receives `(query, tree, data, node)` for additional node arrays.
+
+Specifications are immutable and hashable; geometry and queries remain dynamic
+array pytrees. Kernels are cached per specialization and exposed as `.kernel`.
+Triangle defaults retain native fast specializations; caller-defined policies
+use shared Warp traversal. Existing backend methods use the same factories.
+
+Ray modes are `first`, `any`, `count` and `all`. Triangles and 2D segments support
+rays; points and 3D segments have no ray operation. First/any accept nonnegative
+intervals; count/all also support signed lines. Use `exclude=True` when creating
+first/any queries that need face exclusion. Count/all always support exclusion.
+
 ## Query contracts
 
 | Method | Result |
@@ -150,6 +191,7 @@ compilation, transfers, readback and CPU dispatch. Results go to
 `assets/benchmark_results/`.
 
 Recorded [ray](benchmarks/warp_bvh_device.json),
+[factory](benchmarks/warp_factories.json),
 [crossing](benchmarks/ray_crossings.json),
 [closest-point](benchmarks/closest_point.json),
 [silhouette](benchmarks/closest_silhouette.json),

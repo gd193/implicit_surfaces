@@ -1,4 +1,4 @@
-"""Layer 2/3/4: first_hit (ray-primitive) query correctness."""
+"""First hit against external and exhaustive references."""
 from __future__ import annotations
 
 import jax
@@ -16,7 +16,9 @@ def _backend_first_hit_batch(accel, ros, rds, max_t):
     return jax.vmap(lambda o, d, t: accel.first_hit(o, d, t))(ros, rds, max_t)
 
 
-def _check_first_hit(flavor, backend_name, tri_fixture):
+@parametrize_backends()
+def test_first_hit_matches_oracle_and_brute(tri_fixture, backend_name):
+    flavor = backend_name.split(".")[0]
     skip_if_primitive_math_missing("ray_primitive_intersect",
                                    tri_fixture.primitives)
 
@@ -27,12 +29,10 @@ def _check_first_hit(flavor, backend_name, tri_fixture):
 
     t_t, idx_t, hit_t = _backend_first_hit_batch(accel, ros, rds, mts)
 
-    # Layer 3 — brute.
     t_b, idx_b, hit_b = brute_first_hit_batch(tri_fixture.primitives,
                                               ros, rds, mts)
     np.testing.assert_array_equal(np.asarray(hit_t), np.asarray(hit_b),
                                   err_msg="hit-mask disagrees with brute")
-    # Compare t only where both report a hit.
     mask = np.asarray(hit_t) & np.asarray(hit_b)
     if mask.any():
         np.testing.assert_allclose(
@@ -40,7 +40,6 @@ def _check_first_hit(flavor, backend_name, tri_fixture):
             rtol=T_RTOL, atol=T_ATOL,
             err_msg="t disagrees with brute on common hits")
 
-    # Layer 2 — trimesh oracle.
     ros_np = np.asarray(ros)
     rds_np = np.asarray(rds)
     mts_np = np.asarray(mts)
@@ -55,23 +54,4 @@ def _check_first_hit(flavor, backend_name, tri_fixture):
             rtol=T_RTOL, atol=T_ATOL,
             err_msg="t disagrees with trimesh on common hits")
 
-    # Layer 4 — self-consistency.
-    for k in range(ros.shape[0]):
-        assert_first_hit_consistent(
-            tri_fixture.primitives, ros[k], rds[k], mts[k],
-            t_t[k], idx_t[k], hit_t[k])
-
-
-@parametrize_backends("bvh")
-def test_bvh_first_hit_matches_oracle_and_brute(tri_fixture, backend_name):
-    _check_first_hit("bvh", backend_name, tri_fixture)
-
-
-@parametrize_backends("kd")
-def test_kd_first_hit_matches_oracle_and_brute(tri_fixture, backend_name):
-    _check_first_hit("kd", backend_name, tri_fixture)
-
-
-@parametrize_backends("octree")
-def test_octree_first_hit_matches_oracle_and_brute(tri_fixture, backend_name):
-    _check_first_hit("octree", backend_name, tri_fixture)
+    assert_first_hit_consistent(tri_fixture.primitives, ros, rds, mts, t_t, idx_t, hit_t)

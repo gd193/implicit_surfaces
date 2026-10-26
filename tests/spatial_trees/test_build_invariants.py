@@ -13,7 +13,6 @@ when primitive math (closest_point_on_primitive, ...) is unimplemented.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from ._harness import parametrize_backends, build_accelerator
 
