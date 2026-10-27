@@ -47,6 +47,8 @@ class MultiHitRayState(NamedTuple):
     t_max: jnp.ndarray
     hit_counts: jnp.ndarray
     in_hit_band: jnp.ndarray  # epsilon-band membership, NOT object interior
+    last_value: jnp.ndarray  # last nonzero residual, for crossing-mode sampling
+    last_t: jnp.ndarray
     ray_origin: jnp.ndarray
     ray_direction: jnp.ndarray
     trust_region_size: jnp.ndarray

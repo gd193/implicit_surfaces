@@ -15,6 +15,15 @@ def power_of_two_size_generator(start_base: int, n_compactions: int) -> List[int
     return ([0] + [(2 ** i) for i in range(start_base, start_base+n_compactions)])[::-1]
 
 
+def geometric_size_generator(size: int, n_compactions: int) -> List[int]:
+    """Halve drain capacity, including a non-power-of-two initial buffer."""
+    if n_compactions <= 0 or size <= 1:
+        return [size]
+    highest = (int(size)-1).bit_length()-1
+    lowest = max(0, highest-n_compactions+1)
+    return [size]+power_of_two_size_generator(lowest, highest-lowest+1)
+
+
 def should_compact(N_valid: int, current_compaction_index: int, compaction_sizes: List[int]) -> Tuple[bool, int, int]:
     for idx in range(len(compaction_sizes)-1, current_compaction_index, -1):
         if N_valid <= compaction_sizes[idx]:
