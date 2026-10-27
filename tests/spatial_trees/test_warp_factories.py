@@ -11,6 +11,7 @@ import pytest
 wp = pytest.importorskip("warp")
 
 from surfaces.explicit.accelerators.bvh.backends._warp_domain import Ray  # noqa: E402
+from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
 
 from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
     Angular, Euclidean, Points, Segments, Silhouette, SilhouetteEdges, Triangles,
@@ -75,20 +76,23 @@ def test_warp_factory_batching_dynamic_data_and_cpu():
     assert nearest(tree, geometry, jnp.empty((2, 0, 2)))[0].shape == (2, 0, 2)
 
 
-def test_warp_factory_caps_ties_empty_and_invalid():
-    primitive = Points()
-    tree, geometry = build_tree(primitive, primitive.data([[-1., 0, 0], [1., 0, 0]]))
+@pytest.mark.parametrize("dimension", [2, 3])
+def test_warp_factory_caps_ties_empty_and_invalid(dimension):
+    primitive = Points(dimension)
+    points = np.zeros((2, dimension), np.float32)
+    points[:, 0] = [-1., 1.]
+    tree, geometry = build_tree(primitive, primitive.data(points))
     nearest = make_nearest(primitive, Euclidean())
-    queries = jnp.zeros((7, 3)).at[4, 0].set(jnp.nan)
+    queries = jnp.zeros((7, dimension)).at[4, 0].set(jnp.nan)
     caps = jnp.array([0., .5, 1., jnp.inf, 1., -1., jnp.nan])
     _, distance, ids, status = jax.jit(nearest)(tree, geometry, queries, caps)
     np.testing.assert_array_equal(status, [0, 0, 1, 1, -1, -1, -1])
     np.testing.assert_array_equal(ids, [-1, -1, 0, 0, -1, -1, -1])
     np.testing.assert_allclose(distance[2:4], 1.)
-    empty_tree, empty = build_tree(primitive, primitive.data(np.empty((0, 3))))
-    assert int(nearest(empty_tree, empty, jnp.zeros(3))[3]) == 0
+    empty_tree, empty = build_tree(primitive, primitive.data(np.empty((0, dimension))))
+    assert int(nearest(empty_tree, empty, jnp.zeros(dimension))[3]) == 0
     with pytest.raises(ValueError, match="trailing shape"):
-        nearest(tree, geometry, jnp.zeros(2))
+        nearest(tree, geometry, jnp.zeros(dimension-1))
     with pytest.raises(TypeError, match="Angular"):
         make_nearest(Triangles(), Angular())
 
@@ -211,6 +215,134 @@ def test_warp_factory_ray_batching_and_cpu():
         np.testing.assert_array_equal(a, b)
 
 
+def _assert_ray_hit(mode, result, expected):
+    np.testing.assert_array_equal(result[-1], expected)
+    np.testing.assert_array_equal(result[2] if mode in ("first", "all") else result[0], expected)
+
+
+@pytest.mark.parametrize("mode", ["first", "any", "count", "all"])
+def test_segment_ray_interval_endpoints(mode):
+    primitive = Segments(2)
+    vertices = np.array([[-1., -1], [1., -1], [1., 1], [-1., 1]], np.float32)
+    base = np.array([[1., 0], [1., 1e-30], [.75, 1.], [1., 1.]], np.float32)
+    directions = np.concatenate([base*s for s in (2.**-30, 1., 2.**30, -1.)])
+    times = 1/np.max(np.abs(directions), axis=1)
+    previous, following = np.nextafter(times, -np.inf), np.nextafter(times, np.inf)
+    maximum = np.column_stack((previous, times, following, np.full_like(times, np.inf))).ravel()
+    minimum = np.column_stack((np.zeros((len(times), 3)), following)).astype(np.float32).ravel()
+    directions = np.repeat(directions, 4, axis=0)
+    expected = np.tile([False, True, True, False], len(times))
+    query = jax.jit(make_ray_query(primitive, mode), static_argnames=("max_hits",))
+    for reverse in (False, True):
+        a, b = vertices, np.roll(vertices, -1, axis=0)
+        tree, data = build_tree(primitive, primitive.data(b, a) if reverse else primitive.data(a, b),
+                                Config(leaf_size_threshold=1))
+        result = query(tree, data, np.zeros_like(directions), directions, maximum,
+                       min_t=minimum, **({"max_hits": 2} if mode == "all" else {}))
+        _assert_ray_hit(mode, result, expected)
+        if mode in ("first", "all"):
+            returned = np.asarray(result[0])[:, 0] if mode == "all" else np.asarray(result[0])
+            np.testing.assert_array_equal(returned[expected], np.repeat(times, 4)[expected])
+
+
+@pytest.mark.parametrize("dimension", [2, 3])
+@pytest.mark.parametrize("mode", ["first", "any", "count", "all"])
+def test_ray_narrow_leaf_roundoff(mode, dimension):
+    vertices = np.array([[0xbf2948b8, 0x3f4009f0], [0xbf296e69, 0x3f3fe8af],
+                         [0xbf299415, 0x3f3fc767]], np.uint32).view(np.float32)
+    origin, direction = np.array([[3193768802, 1019335998], [3204854055, 1062863525]],
+                                 np.uint32).view(np.float32)
+    primitive = Segments(2) if dimension == 2 else Triangles()
+    a, b = np.vstack((vertices[:2], [10., 10.])), np.vstack((vertices[1:], [11., 11.]))
+    if dimension == 2:
+        raw = primitive.data(a, b)
+    else:
+        a, b = (np.pad(v, ((0, 0), (0, 1))) for v in (a, b))
+        c = b+np.array([0., 0., 1.], np.float32)
+        raw = primitive.indexed(np.stack((b, c, a), axis=1).reshape(-1, 3), np.arange(9).reshape(3, 3))
+        origin, direction = np.append(origin, np.float32(.25)), np.append(direction, np.float32(.125))
+    tree, data = build_tree(primitive, raw, Config(leaf_size_threshold=2))
+    # The third primitive forces a child test whose unpadded slabs invert by one ULP.
+    assert np.any(np.asarray(tree.node_leaf_count) == 2)
+    result = jax.jit(make_ray_query(primitive, mode), static_argnames=("max_hits",))(
+        tree, data, origin, direction, 10., **({"max_hits": 1} if mode == "all" else {}))
+    _assert_ray_hit(mode, result, 1)
+    if mode in ("first", "all"):
+        assert np.asarray(result[1]).reshape(-1)[0] == 1
+        expected = np.float32(0.8518937471553134)
+        # First-hit triangles compute t in FP32, unlike the double segment path.
+        np.testing.assert_allclose(np.asarray(result[0]).reshape(-1)[0], expected,
+                                   atol=np.spacing(expected) if dimension == 3 and mode == "first" else 0., rtol=0.)
+
+
+@pytest.mark.parametrize("scale", [2.**-120, 2.**-100, 1., 2.**100])
+@pytest.mark.parametrize("translated", [False, True])
+def test_segment_ray_filtered_endpoint_neighbours(scale, translated):
+    primitive = Segments(2)
+    shift = 2.**20*scale if translated else 0.
+    slope = np.float32(2.**-20)
+    tree, data = build_tree(primitive, primitive.data(
+        [[shift+scale, -scale*slope]], [[shift+scale, scale*slope]]))
+    directions = np.column_stack((np.ones(3, np.float32),
+        [np.nextafter(slope, np.float32(0)), slope,
+         np.nextafter(slope, np.float32(np.inf))]))
+    # The CPU's existing DAZ conversion loses subnormal endpoint components.
+    expected = ([False, False, False] if scale == 2.**-120
+                and jax.devices()[0].platform == "cpu" else [True, True, False])
+    for mode in ("first", "any"):
+        result = jax.jit(make_ray_query(primitive, mode))(
+            tree, data, np.tile(np.array([shift, 0], np.float32), (3, 1)), directions, np.float32(2*scale))
+        _assert_ray_hit(mode, result, expected)
+        if mode == "first":
+            np.testing.assert_array_equal(np.asarray(result[0])[expected], np.float32(scale))
+
+
+@pytest.mark.parametrize("bits,exponent,cpu_hits,gpu_hits", [
+    ([0x31699a4a, 0xb5dcb961, 0x008d716b, 0x5b62ba12,
+      0x969072b0, 0xf7860f0b, 0x049ffe95, 0x658ee884], 33,
+     (False, False, False, False), (True, True, True, True)),
+    ([0xef963dbe, 0x2338f59b, 0x259bfad0, 0x9cd1c63a,
+      0x98d4b857, 0x18dc93ad, 0x5f1731bd, 0xc6d22ad4], 0,
+     (True, True, False, False), (True, True, False, False)),
+])
+def test_segment_ray_unbalanced_endpoint_margin_uses_double_fallback(bits, exponent, cpu_hits, gpu_hits):
+    a, b, origin, direction = np.array(bits, np.uint32).view(np.float32).reshape(4, 2)
+    direction = np.ldexp(direction, exponent)
+    primitive = Segments(2)
+    tree, data = build_tree(primitive, primitive.data(a[None], b[None]))
+    # Preserve measured original decisions where double cancellation differs
+    # across CPU/CUDA, or root-box rejection differs from the closed predicate.
+    expected = cpu_hits if jax.devices()[0].platform == "cpu" else gpu_hits
+    for mode, hit in zip(("first", "any", "count", "all"), expected, strict=True):
+        result = jax.jit(make_ray_query(primitive, mode), static_argnames=("max_hits",))(
+            tree, data, origin, direction, 10., **({"max_hits": 1} if mode == "all" else {}))
+        _assert_ray_hit(mode, result, hit)
+
+
+@pytest.mark.parametrize("mode", ["first", "all"])
+def test_segment_ray_axis_edge_factor_rounding(mode):
+    primitive = Segments(2)
+    query = jax.jit(make_ray_query(primitive, mode), static_argnames=("max_hits",))
+    cases = [
+        ((0x3f9e402e, 0x32dea7f8, 0x3f57f6f4), 0., 0x3fbb964a),
+        ((0x3f9e402e, 0x32dea7f8, 0x3f57f6f4), 2.**-25, 0x3fbb964b),
+        ((0x3f800000, 0x00000000, 0x3f15ca56), 0., 0x3fdac251),
+        ((0x3f800000, 0xb3800000, 0x3f15ca56), 0., 0x3fdac252),
+    ]
+    # Rounding either a nonpower-of-two edge or an inexact offset to FP32
+    # before cancellation/division changes these results by one FP32 ULP.
+    for bits, extra, expected in cases:
+        coordinate, offset, speed = np.array(bits, np.uint32).view(np.float32)
+        a = np.array([[coordinate, -extra], [-extra, coordinate]], np.float32)
+        b = np.array([[coordinate, 1.], [1., coordinate]], np.float32)
+        origins = np.array([[offset, .5], [.5, offset]], np.float32)
+        directions = np.array([[speed, 0.], [0., speed]], np.float32)
+        tree, data = build_tree(primitive, primitive.data(a, b))
+        result = query(tree, data, origins, directions, **({"max_hits": 1} if mode == "all" else {}))
+        _assert_ray_hit(mode, result, 1)
+        np.testing.assert_array_equal(np.asarray(result[0]).view(np.uint32), expected)
+
+
 def test_warp_factory_custom_ray_callback():
     primitive = Segments(2)
     original = primitive.intersect
@@ -295,6 +427,19 @@ def test_warp_factory_outward_bounds_and_invalid_geometry():
             Points().data(values)
     with pytest.raises(ValueError, match="index"):
         Triangles().data([[0., 0, 0]], [[0, 1, 2]])
+
+
+@pytest.mark.parametrize("primitive", [Points(2), Points(3), Segments(2), Segments(3)], ids=lambda p: f"{p.name}{p.dimension}")
+def test_warp_tree_splits_collinear_geometry(primitive):
+    for scale in (1., 1e-8):
+        a = np.zeros((48, primitive.dimension), np.float32)
+        a[:, -1] = np.arange(len(a))*scale
+        b = a.copy()
+        b[:, -1] += .25*scale
+        raw = primitive.data(a) if primitive.name == "points" else primitive.data(a, b)
+        tree, _ = build_tree(primitive, raw, Config(leaf_size_threshold=4))
+        assert np.max(tree.node_leaf_count) <= 4
+        np.testing.assert_array_equal(np.sort(tree.prim_ids), np.arange(len(a)))
 
 
 @wp.struct

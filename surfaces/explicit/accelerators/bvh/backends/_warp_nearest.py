@@ -84,7 +84,8 @@ def make_nearest(primitive, metric, *, predicate=None, stack_capacity=STACK_CAPA
     def resume(ctx: Context, tree: DeviceTree, node: int, lower: wp.vec3, upper: wp.vec3):
         return wp.static(ops.node_bound)(ctx.query, lower, upper)
 
-    walk = make_walk(Context, State, bounds, visit, stack_capacity=stack_capacity, resume=None if cache_bounds else resume)
+    walk = make_walk(Context, State, bounds, visit, stack_capacity=stack_capacity,
+                     packed_nodes=cache_bounds, resume=None if cache_bounds else resume)
 
     @wp.func
     def nearest(query: Query, cap: float, tree: DeviceTree, geometry: Geometry):

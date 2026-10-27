@@ -67,7 +67,7 @@ def build_tree(primitive, data, config=None):
         raise ValueError("primitive IDs must fit int32")
     if primitive.dimension == 2:
         lo, hi = (np.pad(v, ((0, 0), (0, 1))) for v in (lo, hi))
-    built = _build_payload(lo, hi, int(config.leaf_size_threshold))
+    built = _build_payload(lo, hi, int(config.leaf_size_threshold), dimension=primitive.dimension)
     _, depths, _ = _validate_tree(built, len(lo))
     if depths.max() > config.max_stack_depth:
         raise ValueError("tree exceeds configured stack depth")

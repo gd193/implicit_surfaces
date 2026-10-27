@@ -215,7 +215,8 @@ Warp's built-in `wp.jax_kernel` handles FFI, compilation and ownership. The
 [batching adapter](../surfaces/explicit/accelerators/bvh/backends/_warp_jax.py)
 flattens query axes without tiling geometry. Factories bind typed geometry and optional metadata through the same adapter;
 existing triangle backend methods delegate to them. SNCH cones enclose whole edges.
-Packed float4 nodes hold bounds and topology for ray/overlap/classification queries.
+Packed float4 nodes hold bounds and topology for cached nearest, ray, overlap and
+classification queries.
 Closest point caches node bounds in eight-byte stack entries; silhouette and Robin
 use four-byte indices/tags and recompute cheap bounds when popping. These choices
 specialize by query semantics, independently of primitives and metrics. FFI arrays are contiguous.
@@ -248,6 +249,10 @@ python -m scripts.bench.spatial_trees.warp_query_matrix --counts 8192 --primitiv
 [Matrix timings](benchmarks/warp_query_matrix.json) cover tree kernels only. Star
 radius shares silhouette traversal; its JAX cap composition is excluded. Timings stay
 outside the test suite; no hardware-dependent latency thresholds run in ordinary tests.
+
+[FCPW/cuBQL comparisons](benchmarks/query_references.md) cover 2D segment queries
+and 2D/3D point nearest. The [reference harness](../scripts/bench/spatial_trees/references/README.md)
+saves generated CUDA C++/PTX, samples, source/input hashes and kernel resources.
 
 The benchmark times warmed CUDA graphs with CUDA events, excluding build,
 compilation, transfers, readback and CPU dispatch. `--native-warp` adds Warp mesh

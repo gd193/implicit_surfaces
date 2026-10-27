@@ -47,9 +47,11 @@ _ISECT_COST = np.float32(1.0)
 # =====================================================================
 
 
-def _surface_area_np(lo: np.ndarray, hi: np.ndarray) -> float:
-    """Surface area of an axis-aligned box from (3,) lo/hi vectors."""
+def _surface_area_np(lo: np.ndarray, hi: np.ndarray, dimension: int = 3) -> float:
+    """Box area in 3D, perimeter in 2D (zero-padded bounds)."""
     e = np.maximum(hi - lo, 0.0)
+    if dimension == 2:
+        return float(2.0 * e.sum())
     return float(2.0 * (e[0] * e[1] + e[1] * e[2] + e[2] * e[0]))
 
 
@@ -60,7 +62,8 @@ class _BuildState:
     sequence (no duplication — FCPW BVH does object-only splits).
     """
 
-    def __init__(self, n_prims: int):
+    def __init__(self, n_prims: int, dimension: int = 3):
+        self.dimension = dimension
         cap = max(8, 2 * n_prims + 1)
         self.node_lower = np.zeros((cap, 3), dtype=np.float32)
         self.node_upper = np.zeros((cap, 3), dtype=np.float32)
@@ -97,7 +100,7 @@ def _compute_object_split(node_lo: np.ndarray, node_hi: np.ndarray,
                           centroid_lo: np.ndarray, centroid_hi: np.ndarray,
                           ref_lo: np.ndarray, ref_hi: np.ndarray,
                           ref_cent: np.ndarray,
-                          prim_idx: np.ndarray) -> Tuple[int, float, float]:
+                          prim_idx: np.ndarray, dimension: int = 3) -> Tuple[int, float, float]:
     """Bucket-SAH split selection over all 3 axes (Note step build:7-8;
     Source: bvh.inl:computeObjectSplit, lines 47-119).
 
@@ -107,7 +110,10 @@ def _compute_object_split(node_lo: np.ndarray, node_hi: np.ndarray,
     """
     n = prim_idx.shape[0]
     extent = node_hi - node_lo
-    total_sa = _surface_area_np(node_lo, node_hi)
+    total_sa = _surface_area_np(node_lo, node_hi, dimension)
+    if total_sa <= 0.0 and dimension == 3:
+        dimension = 2  # Length-based costs for collinear 3D geometry.
+        total_sa = _surface_area_np(node_lo, node_hi, dimension)
     if total_sa <= 0.0:
         return -1, 0.0, float(np.inf)
     inv_total_sa = 1.0 / total_sa
@@ -118,8 +124,8 @@ def _compute_object_split(node_lo: np.ndarray, node_hi: np.ndarray,
 
     for axis in range(_NDIM):
         ext_a = float(extent[axis])
-        if ext_a < 1e-6:
-            continue  # FCPW skips flat axes (bvh.inl:64).
+        if ext_a <= 0.0:
+            continue
         bucket_width = ext_a / _N_BUCKETS
         # Bin centroids; bucketIndex = clamp((c - pMin) / bw, 0, N-1).
         cent_a = ref_cent[prim_idx, axis]
@@ -160,8 +166,8 @@ def _compute_object_split(node_lo: np.ndarray, node_hi: np.ndarray,
             n_left += int(bucket_n[b - 1])
             n_right = int(right_n[b])
             if n_left > 0 and n_right > 0:
-                sa_l = _surface_area_np(left_lo, left_hi)
-                sa_r = _surface_area_np(right_lo[b], right_hi[b])
+                sa_l = _surface_area_np(left_lo, left_hi, dimension)
+                sa_r = _surface_area_np(right_lo[b], right_hi[b], dimension)
                 # SAH unit-cost form (Note: trav=1, isect=1).
                 cost = (float(_TRAV_COST)
                         + float(_ISECT_COST) * inv_total_sa
@@ -229,7 +235,7 @@ def _build_recursive(state: _BuildState, node_id: int,
     # Note step build:7-8 — bucket-SAH search.
     axis, coord, best_cost = _compute_object_split(
         node_lo, node_hi, cent_lo, cent_hi,
-        ref_lo, ref_hi, ref_cent, prim_idx)
+        ref_lo, ref_hi, ref_cent, prim_idx, state.dimension)
 
     # Longest-axis-centre fallback when no bucketed split was valid
     # (Source: bvh.inl:113-116).
@@ -272,7 +278,7 @@ def _build_recursive(state: _BuildState, node_id: int,
 
 
 def _build_payload(prim_lo_np: np.ndarray, prim_hi_np: np.ndarray,
-                   leaf_size: int) -> BVHPayload:
+                   leaf_size: int, *, dimension: int = 3) -> BVHPayload:
     """Host-side bucket-SAH BVH build (Note section "BVH build", FCPW
     bvh.inl 1-242). Returns a fully-populated shared `BVHPayload`.
     """
@@ -284,7 +290,7 @@ def _build_payload(prim_lo_np: np.ndarray, prim_hi_np: np.ndarray,
     ref_hi = prim_hi_np.astype(np.float32)
     ref_cent = (0.5 * (ref_lo + ref_hi)).astype(np.float32)
 
-    state = _BuildState(n)
+    state = _BuildState(n, dimension)
     root = state.alloc()
     assert root == 0
     prim_perm_out: list = []

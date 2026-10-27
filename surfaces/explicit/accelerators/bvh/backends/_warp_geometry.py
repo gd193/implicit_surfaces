@@ -91,32 +91,22 @@ _NATIVE_TRIANGLE_CLOSEST = _NATIVE_SEGMENT_CLOSEST + r"""
 
 _NATIVE_RAY_BOX_TEST = r"""
     const auto box_interval = [&](const wp::vec3& lower, const wp::vec3& upper,
-                           float tmin, float tmax, float& enter, bool conservative = false) {
+                           float tmin, float tmax, float& enter) {
         enter = tmin;
         float leave = tmax;
         const auto update = [&](float t0, float t1) {
             float near_t = wp::min(t0,t1), far_t = wp::max(t0,t1);
-            if (conservative) {
-                const float padding = 9.5367431640625e-7f
-                    * wp::max(wp::abs(t0),wp::abs(t1)) + 1.e-37f;
-                if (wp::isfinite(padding)) { near_t -= padding; far_t += padding; }
-                else { near_t = -INFINITY; far_t = INFINITY; }
-            }
             enter = wp::max(enter,near_t);
             leave = wp::min(leave,far_t);
         };
         if (fast_aabb) {
-            float t0 = (lower[0] - o[0]) * inv_dir[0];
-            float t1 = (upper[0] - o[0]) * inv_dir[0];
-            update(t0,t1);
-            t0 = (lower[1] - o[1]) * inv_dir[1];
-            t1 = (upper[1] - o[1]) * inv_dir[1];
-            update(t0,t1);
-            t0 = (lower[2] - o[2]) * inv_dir[2];
-            t1 = (upper[2] - o[2]) * inv_dir[2];
-            update(t0,t1);
+            for (int axis = 0; axis < dimension; ++axis) {
+                const float t0 = (lower[axis] - o[axis]) * inv_dir[axis];
+                const float t1 = (upper[axis] - o[axis]) * inv_dir[axis];
+                update(t0,t1);
+            }
         } else {
-            for (int axis = 0; axis < 3; ++axis) {
+            for (int axis = 0; axis < dimension; ++axis) {
                 const float component = d[axis];
                 const float origin_component = o[axis];
                 if (component == 0.0f) {
@@ -129,7 +119,15 @@ _NATIVE_RAY_BOX_TEST = r"""
                 }
             }
         }
-        return enter <= leave;
+        // Expand the reduced interval; narrow slabs can invert through rounding.
+        const float padding = 9.5367431640625e-7f
+            * wp::max(wp::abs(enter),wp::abs(leave)) + 1.e-37f;
+        if (wp::isfinite(padding)) {
+            enter -= padding;
+            return enter <= leave+padding;
+        }
+        enter = tmin;
+        return true;
     };
 """
 
