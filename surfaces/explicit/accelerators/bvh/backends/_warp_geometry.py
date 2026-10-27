@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import warp as wp
 
-from ._warp_specs import STACK_CAPACITY
 
 
 @wp.func
@@ -30,16 +29,7 @@ def finite3(v: wp.vec3) -> bool:
 
 
 # Native snippets share the query point p.
-_NATIVE_FINITE3 = r"""
-    const auto finite3 = [](const wp::vec3& v) {
-        const float limit = 3.4028234e38f;
-        return v[0] == v[0] && v[1] == v[1] && v[2] == v[2]
-            && wp::abs(v[0]) < limit && wp::abs(v[1]) < limit
-            && wp::abs(v[2]) < limit;
-    };
-"""
-
-_NATIVE_POINT_GEOMETRY = "const wp::vec3 p = query;\n" + _NATIVE_FINITE3 + r"""
+_NATIVE_POINT_GEOMETRY = "const wp::vec3 p = query;\n" + r"""
     const auto box_distance_sq = [&](const wp::vec3& lower,
                                      const wp::vec3& upper) {
         const float dx = wp::max(wp::max(lower[0] - p[0], 0.0f), p[0] - upper[0]);
@@ -99,87 +89,7 @@ _NATIVE_TRIANGLE_CLOSEST = _NATIVE_SEGMENT_CLOSEST + r"""
 """
 
 
-# Packed metadata adapted from NVIDIA Warp's bvh.h helpers.
-# Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES. Apache-2.0.
-_NATIVE_PACKED_TRAVERSAL = f"constexpr int stack_capacity = {STACK_CAPACITY};\n" + r"""
-    const auto load_vec4_nc = [](const wp::vec4* ptr, int index) {
-        wp::vec4 result;
-#if defined(__CUDA_ARCH__)
-        const float4 value = __ldg(reinterpret_cast<const float4*>(ptr + index));
-        result = wp::vec4(value.x, value.y, value.z, value.w);
-#else
-        result = ptr[index];
-#endif
-        return result;
-    };
-    const auto pack_node = [](const wp::vec4& lower, const wp::vec4& upper) {
-        uint32_t lower_bits;
-        uint32_t upper_bits;
-        memcpy(&lower_bits, &lower.c[3], sizeof(lower_bits));
-        memcpy(&upper_bits, &upper.c[3], sizeof(upper_bits));
-        const uint64_t leaf = uint64_t(lower_bits >> 31);
-        const uint64_t lower_payload = uint64_t(lower_bits & 0x7fffffffu);
-        const uint64_t upper_payload = uint64_t(upper_bits & 0x7fffffffu);
-        return (leaf << 62) | (upper_payload << 31) | lower_payload;
-    };
-    const auto lower_payload = [](uint64_t meta) {
-        return static_cast<int>(meta & 0x7fffffffull);
-    };
-    const auto upper_payload = [](uint64_t meta) {
-        return static_cast<int>((meta >> 31) & 0x7fffffffull);
-    };
-    const auto is_leaf = [](uint64_t meta) { return (meta >> 62) != 0; };
-
-    // Callbacks inline; visit returns 0 to continue, nonzero to stop.
-    const auto traverse = [&](auto&& bounds, auto&& visit,
-                               bool near_first = false, bool test_root = true) {
-        if (!node_count) return 0;
-        const wp::vec4* lower = node_ray_lower.data;
-        const wp::vec4* upper = node_ray_upper.data;
-        const wp::vec4 root_lo = load_vec4_nc(lower, 0), root_hi = load_vec4_nc(upper, 0);
-        float enter;
-        if (test_root && !bounds(root_lo, root_hi, enter)) return 0;
-        uint64_t current = pack_node(root_lo, root_hi);
-        uint64_t stack[stack_capacity];
-        int size = 0;
-        while (true) {
-            if (is_leaf(current)) {
-                for (int k = lower_payload(current); k < upper_payload(current); ++k) {
-                    const int result = visit(k);
-                    if (result) return result;
-                }
-            } else {
-                const int left = lower_payload(current), right = upper_payload(current);
-                const wp::vec4 ll = load_vec4_nc(lower, left), lu = load_vec4_nc(upper, left);
-                const wp::vec4 rl = load_vec4_nc(lower, right), ru = load_vec4_nc(upper, right);
-                const uint64_t left_node = pack_node(ll, lu), right_node = pack_node(rl, ru);
-                float tl, tr;
-                const bool l = bounds(ll, lu, tl), r = bounds(rl, ru, tr);
-                if (l && r) {
-                    if (size == stack_capacity) return -1;
-                    const bool swap = near_first && tr < tl;
-                    stack[size++] = swap ? left_node : right_node;
-                    current = swap ? right_node : left_node;
-                    continue;
-                }
-                if (l) { current = left_node; continue; }
-                if (r) { current = right_node; continue; }
-            }
-            if (!size) return 0;
-            current = stack[--size];
-        }
-    };
-"""
-
-
-_NATIVE_RAY_BOX = r"""
-    const bool fast_aabb = wp::abs(d[0]) >= 1.0e-20f
-        && wp::abs(d[1]) >= 1.0e-20f && wp::abs(d[2]) >= 1.0e-20f;
-    wp::vec3 inv_dir(0.0f);
-    if (fast_aabb) {
-        inv_dir = wp::vec3(1.0f / d[0], 1.0f / d[1], 1.0f / d[2]);
-    }
-
+_NATIVE_RAY_BOX_TEST = r"""
     const auto box_interval = [&](const wp::vec3& lower, const wp::vec3& upper,
                            float tmin, float tmax, float& enter, bool conservative = false) {
         enter = tmin;
@@ -239,4 +149,61 @@ _NATIVE_EDGE_PREDICATES = r"""
         const double dx = orientation*(bx-ax), dy = orientation*(by-ay);
         return dy > 0 || (dy == 0 && dx < 0);
     };
+"""
+
+
+_NATIVE_CONE_VISIBILITY = r"""
+    const auto cone_may_have_silhouette = [&](int node) {
+        const wp::vec2 angles = node_cone_sin_cos.data[node];
+        const float sin_alpha = angles[0];
+        const float cos_alpha = angles[1];
+        if (sin_alpha < 0.0f) return false;
+        if (cos_alpha <= 0.0f) return true;
+        const wp::vec3 lower = node_lower.data[node];
+        const wp::vec3 upper = node_upper.data[node];
+        const wp::vec3 view = 0.5f * (lower + upper) - p;
+        const wp::vec3 extent = 0.5f * (upper - lower);
+        const wp::vec3 axis = node_cone_axis.data[node];
+        const float projection = wp::dot(axis, view);
+        // Box support along the cone axis bounds every edge endpoint.
+        const float support = wp::abs(axis[0]) * extent[0]
+                            + wp::abs(axis[1]) * extent[1]
+                            + wp::abs(axis[2]) * extent[2];
+        const float gap = wp::abs(projection) - support;
+        if (gap <= 0.0f) return true;
+        const wp::vec3 perpendicular = view - projection * axis;
+        const float radius = node_cone_radius.data[node];
+        const float limit = sin_alpha * (wp::sqrt(wp::dot(perpendicular, perpendicular)) + radius);
+        const float slack = 2.0e-6f * (wp::sqrt(wp::dot(view, view)) + radius);
+        return gap * cos_alpha <= limit + slack;
+    };
+
+"""
+
+
+_NATIVE_TRIANGLE_RAY = r"""
+        const auto triangle_t = [&](const wp::vec3& a, const wp::vec3& e1,
+                                    const wp::vec3& e2, float tmin, float tmax,
+                                    float& result) {
+            const wp::vec3 pvec = wp::cross(d, e2);
+            const float det = wp::dot(e1, pvec);
+            const float scale = wp::sqrt(wp::dot(e1, e1) * wp::dot(e2, e2)
+                                         * wp::dot(d, d));
+            const float det_eps = 1.0e-7f * scale;
+            result = 0.0f;
+            if (wp::abs(det) > det_eps) {
+                const float inv_det = 1.0f / det;
+                const wp::vec3 tvec = o - a;
+                const float u = wp::dot(tvec, pvec) * inv_det;
+                const wp::vec3 qvec = wp::cross(tvec, e1);
+                const float v = wp::dot(d, qvec) * inv_det;
+                const float t = wp::dot(e2, qvec) * inv_det;
+                result = t;
+                const float slack = 1.0e-6f;
+                return u >= -slack && v >= -slack && u + v <= 1.0f + slack
+                    && t >= tmin && t <= tmax;
+            }
+            return false;
+        };
+
 """

@@ -1,32 +1,28 @@
-"""Half-open ray/line crossings with optional bounded hit output."""
-from __future__ import annotations
-
+"""Robust half-open triangle crossing predicate."""
 import warp as wp
 
-from ._warp_geometry import (
-    _NATIVE_EDGE_PREDICATES, _NATIVE_FINITE3, _NATIVE_PACKED_TRAVERSAL, _NATIVE_RAY_BOX,
-)
+from ._warp_domain import Ray
+from ._warp_geometry import _NATIVE_EDGE_PREDICATES
 
 
 _NATIVE_TRIANGLE_CROSSING = r"""
-        int kz = 0;
-        if (wp::abs(d[1]) > wp::abs(d[kz])) kz = 1;
-        if (wp::abs(d[2]) > wp::abs(d[kz])) kz = 2;
-        const int kx = (kz+1)%3, ky = (kz+2)%3;
+        const int kx=ray.axes[0], ky=ray.axes[1], kz=ray.axes[2];
         const auto triangle_t = [&](int slot, float& result) {
             const wp::vec3i ids = tri_indices.data[slot];
             // Reuse one predicate at both precisions. -1 asks for the double path.
             const auto solve = [&](auto zero) {
                 using S = decltype(zero);
                 S x[3], y[3], z[3], uncertainty[3];
-                const S sx = static_cast<S>(d[kx]) / static_cast<S>(d[kz]);
-                const S sy = static_cast<S>(d[ky]) / static_cast<S>(d[kz]);
+                const S sx = sizeof(S)==sizeof(float) ? static_cast<S>(ray.shear[0])
+                    : static_cast<S>(ray.frame_direction[0])/static_cast<S>(ray.frame_direction[2]);
+                const S sy = sizeof(S)==sizeof(float) ? static_cast<S>(ray.shear[1])
+                    : static_cast<S>(ray.frame_direction[1])/static_cast<S>(ray.frame_direction[2]);
                 constexpr float rounding = 8.0f * 1.1920928955078125e-7f;
                 for (int i = 0; i < 3; ++i) {
                     const wp::vec3 v = mesh_vertices.data[ids[i]];
-                    const S a = static_cast<S>(v[kx])-static_cast<S>(o[kx]);
-                    const S b = static_cast<S>(v[ky])-static_cast<S>(o[ky]);
-                    z[i] = static_cast<S>(v[kz])-static_cast<S>(o[kz]);
+                    const S a = static_cast<S>(v[kx])-static_cast<S>(ray.frame_origin[0]);
+                    const S b = static_cast<S>(v[ky])-static_cast<S>(ray.frame_origin[1]);
+                    z[i] = static_cast<S>(v[kz])-static_cast<S>(ray.frame_origin[2]);
                     x[i] = a - sx*z[i];
                     y[i] = b - sy*z[i];
                     uncertainty[i] = rounding * wp::max(wp::abs(a)+wp::abs(sx*z[i]),
@@ -56,13 +52,13 @@ _NATIVE_TRIANGLE_CROSSING = r"""
                 const S det = e[0]+e[1]+e[2];
                 if (det == 0) return 0; // Parallel/coplanar faces have no isolated crossing.
                 const S numerator = e[0]*z[0]+e[1]*z[1]+e[2]*z[2];
-                const S denominator = det*static_cast<S>(d[kz]);
+                const S denominator = det*static_cast<S>(ray.frame_direction[2]);
                 S t = numerator / denominator;
                 if constexpr (sizeof(S) == sizeof(float)) {
                     const S num_error = rounding*(wp::abs(e[0]*z[0])+wp::abs(e[1]*z[1])
                         + wp::abs(e[2]*z[2])) + error[0]*wp::abs(z[0])
                         + error[1]*wp::abs(z[1]) + error[2]*wp::abs(z[2]);
-                    const S den_error = wp::abs(d[kz])*(error[0]+error[1]+error[2])
+                    const S den_error = wp::abs(ray.frame_direction[2])*(error[0]+error[1]+error[2])
                         + rounding*wp::abs(denominator);
                     if (!(wp::abs(denominator) > den_error) || !wp::isfinite(t)) return -1;
                     const S t_error = (num_error+wp::abs(t)*den_error)
@@ -107,93 +103,14 @@ _NATIVE_TRIANGLE_CROSSING = r"""
 """
 
 
-_NATIVE_CROSSINGS = (
-    _NATIVE_FINITE3 + _NATIVE_PACKED_TRAVERSAL + _NATIVE_EDGE_PREDICATES + r"""
-    const auto run_query = [&](float* times, int* faces, int capacity,
-                               int* result_count, int* status) {
-        *result_count = -1;
-        *status = -1;
-        for (int i = 0; i < capacity; ++i) { times[i] = INFINITY; faces[i] = -1; }
-        const wp::vec3 o = origin, d = direction;
-        const float lo_t = min_t, hi_t = max_t;
-        const bool half_open = true, store_times = times != nullptr;
-        if (!finite3(o) || !finite3(d) || (d[0] == 0 && d[1] == 0 && d[2] == 0)
-            || lo_t != lo_t || hi_t != hi_t || lo_t > hi_t
-            || lo_t == INFINITY || hi_t == -INFINITY
-            || exclude_face < -1 || exclude_face >= prim_ids.shape[0]) return;
-        *result_count = 0;
-        *status = 0;
-        if (!node_count) return;
-""" + _NATIVE_RAY_BOX + _NATIVE_TRIANGLE_CROSSING + r"""
-        const auto overlaps = [&](const wp::vec4& lower, const wp::vec4& upper, float& enter) {
-            return box_interval(wp::vec3(lower[0],lower[1],lower[2]),
-                                wp::vec3(upper[0],upper[1],upper[2]), lo_t, hi_t, enter, true);
-        };
-        int count = 0;
-        const int traversal = traverse(overlaps, [&](int k) {
-            const int face = prim_ids.data[k];
-            if (face == exclude_face) return 0;
-            float t;
-            const int hit = triangle_t(k, t);
-            if (hit < 0) return -1;
-            if (hit) {
-                if (count < capacity) { times[count] = t; faces[count] = face; }
-                ++count;
-            }
-            return 0;
-        });
-        if (traversal < 0) {
-            *result_count = -1;
-            *status = -1;
-            for (int i = 0; i < capacity; ++i) { times[i] = INFINITY; faces[i] = -1; }
-        } else {
-            *result_count = count;
-            *status = count ? (times && count > capacity ? -2 : 1) : 0;
-        }
-    };
-""")
-
-
-@wp.func_native(_NATIVE_CROSSINGS + r"""
-    run_query(nullptr, nullptr, 0, out_count.data+qi, out_status.data+qi);
-""")
-def native_count_hits(
-    qi: int, origin: wp.vec3, direction: wp.vec3, min_t: float, max_t: float,
-    exclude_face: int, node_count: int,
-    node_ray_lower: wp.array(dtype=wp.vec4), node_ray_upper: wp.array(dtype=wp.vec4),
-    prim_ids: wp.array(dtype=wp.int32), mesh_vertices: wp.array(dtype=wp.vec3),
-    tri_indices: wp.array(dtype=wp.vec3i), out_count: wp.array(dtype=wp.int32),
-    out_status: wp.array(dtype=wp.int32),
-): ...
-
-
-@wp.func_native(_NATIVE_CROSSINGS + r"""
-    const int capacity = out_t.shape[1];
-    const uint64_t offset = uint64_t(qi)*uint64_t(capacity);
-    run_query(out_t.data+offset, out_face.data+offset, capacity,
-              out_count.data+qi, out_status.data+qi);
-""")
-def native_all_hits(
-    qi: int, origin: wp.vec3, direction: wp.vec3, min_t: float, max_t: float,
-    exclude_face: int, node_count: int,
-    node_ray_lower: wp.array(dtype=wp.vec4), node_ray_upper: wp.array(dtype=wp.vec4),
-    prim_ids: wp.array(dtype=wp.int32), mesh_vertices: wp.array(dtype=wp.vec3),
-    tri_indices: wp.array(dtype=wp.vec3i), out_t: wp.array2d(dtype=wp.float32),
-    out_face: wp.array2d(dtype=wp.int32), out_count: wp.array(dtype=wp.int32),
-    out_status: wp.array(dtype=wp.int32),
-): ...
-
-
 @wp.func_native(_NATIVE_EDGE_PREDICATES + r"""
-    const wp::vec3 o = origin, d = direction;
-    const float lo_t = min_t, hi_t = max_t;
+    const wp::vec3 o=ray.origin, d=ray.direction;
+    const float lo_t=min_t, hi_t=max_t;
 """ + _NATIVE_TRIANGLE_CROSSING + r"""
-    float t = 0;
-    const int hit = triangle_t(slot, t);
-    return wp::vec2(t, hit < 0 ? -1.f : static_cast<float>(hit));
+    float t=0;
+    const int hit=triangle_t(slot,t);
+    return wp::vec2(t,hit < 0 ? -1.f : static_cast<float>(hit));
 """)
-def native_triangle_crossing(
-    origin: wp.vec3, direction: wp.vec3, min_t: float, max_t: float, slot: int,
+def native_triangle_crossing(ray: Ray, min_t: float, max_t: float, slot: int,
     mesh_vertices: wp.array(dtype=wp.vec3), tri_indices: wp.array(dtype=wp.vec3i),
-    half_open: bool, store_times: bool,
-) -> wp.vec2: ...
+    half_open: bool, store_times: bool) -> wp.vec2: ...

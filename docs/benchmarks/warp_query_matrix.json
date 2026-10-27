@@ -1,0 +1,706 @@
+{
+  "gpu": "NVIDIA A40",
+  "cuda_visible_devices": "0",
+  "versions": {
+    "warp-lang": "1.17.0",
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "numpy": "2.4.3",
+    "trimesh": "4.12.1"
+  },
+  "metric": "cuda_event_graph_kernel_ms",
+  "launches_per_graph": 30,
+  "samples": 15,
+  "warmup_launches": 5,
+  "fixture": "Random points/segments; subdivided unit square/cube boundaries; Gaussian queries. Caps .75, except unbounded full-boundary sampling.",
+  "scope": "Resident tree kernel only; build, compile, transfers and dispatch excluded. Star reuses silhouette traversal; JAX cap composition excluded.",
+  "source_sha256": {
+    "surfaces/explicit/accelerators/bvh/backends/_warp_boundary.py": "5fae3914c686dfb33a09ff38c59c5af7776f99f4a745e5c7dd3cf4cf80976d04",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_boundary_queries.py": "407c2f37f11852d14c14da98916627e75db759efd2c679c9a2e9f16cd44d8ede",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_build.py": "5806b11affdeb2af8a9ae786a5dfa45e0f092b4e156726c1be0cfd7bf2b43546",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_crossings.py": "872dc46abe29c7b18b0674ed73fb2249ba4158b8fac3f4db0660e1697a786810",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_domain.py": "98ffff00cee6088f868bbffd70a45d3fd4c8469fc7e6f9353f778dce7f970ce3",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_factory.py": "7d0ef8dcf62d7ebd6631e397044bdab9392c014d6e92dee574f669c4640224d0",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_geometry.py": "bd49478901807ad9f7a4d11668b83a50e2ce610d6d53601656e4bb80ec62ffdc",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_inside.py": "5b9c99a06b10bfd03fd92cac03eda210f746a4043a22c8f50a1cca705d128190",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_jax.py": "ca8e3a368321d485a8858f10009c688aae3bbd896fd14c597cac1f9dfcb2b8e5",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_layout.py": "da546422a1313ccb4c51a0f1aa0bc4523037b0aff52f0f4f886bf192957d0722",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_metrics.py": "b4a653d53aa043108b2d65add51fc3ca47571bc4db2e3f18a0106f20d3ecab10",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_nearest.py": "b8e3bdf474e2692c0acf45b4bb50fb6f20ad6877b787406a86dcb568faa8a043",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_overlap.py": "16be3e2daf1186c2c459c9d3c97ef91a7fb24c5df35f883075d0dd31329daaf7",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_primitives.py": "b0f7a8d81138aa4c6509903b35d9dce2426f71459cec666bd908c7ebb353066c",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_rays.py": "f8a8097a09b4291213f10fdb78df2e248a41758f5ffdae28b30aa297b42ebd5a",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_robin.py": "ccad7426aa4e734eb85c0e08efab3fb344a7620dd2ff51413549b289ef1b53e4",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_silhouette.py": "836fea37fcc61f7613f70ea30d01f511241a131fe0088ca06161a3c241f6b45b",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_traversal.py": "5aaf9518c3e0fe76fe984cfba7c238ab16f035eb638d0a1073983d80cdca8be6",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_tree.py": "0010e7bfe2b73b005398e2e1048002c86abf221936de5e3a783b3c5c306ef1a0",
+    "surfaces/explicit/accelerators/bvh/backends/sah_warp.py": "ebcd1301846167c9ef6b4b14a92333ef62f88cdbcee02a20b9d3a3ad56bbf07b",
+    "surfaces/explicit/accelerators/bvh/backends/snch_warp.py": "a73e474727e288ed4d8cb5a90b3574c39f6a25751d2a5cb1e3e95e0340681738",
+    "scripts/bench/spatial_trees/warp_query_matrix.py": "248abba7740128d2ab6ced7cfc74f8e156d8b6abfe8d2192f8eea172f96e71e6",
+    "scripts/bench/spatial_trees/_warp_cases.py": "fffd0bea9c73fa1a4c5ade72090505558fb10563ea56cf26c5c4d98e3e33b917",
+    "scripts/bench/spatial_trees/_warp_timing.py": "e94395a7d7b66d03d360dc341a9db56f256dc21f375dba0ab1e13e249bf5fcfb"
+  },
+  "results": [
+    {
+      "case": "points2/nearest/euclidean",
+      "primitive": "points2",
+      "query": "nearest",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "dc68eef425b4466af950a0bd066beb9df6e7e666d1bdb84cc645fd01b7d8ec53",
+      "query_sha256": "62ff412404ee871c6c195c2a7c5ffec23202b7ab85be76e1eacd0f551559d584",
+      "device_p50_ms": 0.05396480162938436,
+      "samples_ms": [0.054169599215189615, 0.053998935222625735, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436, 0.05396480162938436],
+      "properties": {
+        "register_count": 37,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "points2/nearest/angular",
+      "primitive": "points2",
+      "query": "nearest",
+      "distance_metric": "angular",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "dc68eef425b4466af950a0bd066beb9df6e7e666d1bdb84cc645fd01b7d8ec53",
+      "query_sha256": "a1be0608ae4aaceb6bc983f710ac8cf0f9e12cca611be39fd681dea4c868d20a",
+      "device_p50_ms": 13.540556844075521,
+      "samples_ms": [13.541375732421875, 13.540556844075521, 13.541956583658854, 13.540556844075521, 13.540659586588541, 13.540284220377604, 13.539874267578124, 13.540181477864584, 13.541921997070313, 13.540659586588541, 13.541239420572916, 13.540249633789063, 13.540591430664062, 13.540181477864584, 13.540113321940105],
+      "properties": {
+        "register_count": 70,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "points3/nearest/euclidean",
+      "primitive": "points3",
+      "query": "nearest",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "c055a4fd372b4d6a77fd01aed2a0c4e3ff1fd80e0aebb448257355615517a835",
+      "query_sha256": "2b4925e3b465f94d44187d5c40fcde8cd14618c005392820572b638eb7075530",
+      "device_p50_ms": 0.04655786752700806,
+      "samples_ms": [0.04669440189997355, 0.04659200112024943, 0.04659200112024943, 0.04655786752700806, 0.04652373393376668, 0.04655786752700806, 0.04655786752700806, 0.04652373393376668, 0.04652373393376668, 0.04655786752700806, 0.04652373393376668, 0.04652373393376668, 0.04648960034052531, 0.04655786752700806, 0.04652373393376668],
+      "properties": {
+        "register_count": 40,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "points3/nearest/angular",
+      "primitive": "points3",
+      "query": "nearest",
+      "distance_metric": "angular",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "c055a4fd372b4d6a77fd01aed2a0c4e3ff1fd80e0aebb448257355615517a835",
+      "query_sha256": "e475fe1ab3ddb470b03eccc1c01f1987614fc633a3ef7b48947f3dceaa8b3ca9",
+      "device_p50_ms": 3.878741455078125,
+      "samples_ms": [3.878741455078125, 3.8786389668782553, 3.878741455078125, 3.8791849772135416, 3.8787071228027346, 3.8789461771647136, 3.8785364786783854, 3.879253387451172, 3.878912099202474, 3.878912099202474, 3.879150899251302, 3.8786389668782553, 3.8787755330403644, 3.878673044840495, 3.878468322753906],
+      "properties": {
+        "register_count": 76,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments2/nearest/euclidean",
+      "primitive": "segments2",
+      "query": "nearest",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "62ff412404ee871c6c195c2a7c5ffec23202b7ab85be76e1eacd0f551559d584",
+      "device_p50_ms": 0.23705600102742513,
+      "samples_ms": [0.2371583938598633, 0.23709012667338053, 0.23705600102742513, 0.23709012667338053, 0.23702185948689777, 0.23705600102742513, 0.23705600102742513, 0.23705600102742513, 0.23702185948689777, 0.23705600102742513, 0.23702185948689777, 0.23702185948689777, 0.23705600102742513, 0.23705600102742513, 0.23705600102742513],
+      "properties": {
+        "register_count": 39,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments2/nearest/angular",
+      "primitive": "segments2",
+      "query": "nearest",
+      "distance_metric": "angular",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "a1be0608ae4aaceb6bc983f710ac8cf0f9e12cca611be39fd681dea4c868d20a",
+      "device_p50_ms": 22.0519775390625,
+      "samples_ms": [22.053409830729166, 22.0512939453125, 22.051328531901042, 22.051806640625, 22.053035481770834, 22.05245361328125, 22.052044677734376, 22.0519775390625, 22.051566569010415, 22.051942952473958, 22.051942952473958, 22.053035481770834, 22.05293172200521, 22.052113850911457, 22.0519775390625],
+      "properties": {
+        "register_count": 70,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments3/nearest/euclidean",
+      "primitive": "segments3",
+      "query": "nearest",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "248efe3df57f0ca464457d08db9e38eb96583797e2dfafad6215d1666d4b5e92",
+      "query_sha256": "2b4925e3b465f94d44187d5c40fcde8cd14618c005392820572b638eb7075530",
+      "device_p50_ms": 0.10134186744689941,
+      "samples_ms": [0.10147840181986491, 0.10137600104014079, 0.10134186744689941, 0.10134186744689941, 0.10137600104014079, 0.10137600104014079, 0.10130773385365804, 0.10134186744689941, 0.10127360026041667, 0.10134186744689941, 0.10137600104014079, 0.10137600104014079, 0.10134186744689941, 0.10137600104014079, 0.10134186744689941],
+      "properties": {
+        "register_count": 44,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments3/nearest/angular",
+      "primitive": "segments3",
+      "query": "nearest",
+      "distance_metric": "angular",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "248efe3df57f0ca464457d08db9e38eb96583797e2dfafad6215d1666d4b5e92",
+      "query_sha256": "e475fe1ab3ddb470b03eccc1c01f1987614fc633a3ef7b48947f3dceaa8b3ca9",
+      "device_p50_ms": 12.131396484375,
+      "samples_ms": [12.131771850585938, 12.131430053710938, 12.131396484375, 12.13115743001302, 12.1312255859375, 12.131190999348958, 12.134877522786459, 12.130952962239583, 12.1310546875, 12.131669108072916, 12.13112284342448, 12.130850219726563, 12.131669108072916, 12.131498209635417, 12.131464640299479],
+      "properties": {
+        "register_count": 72,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "triangles/nearest/euclidean",
+      "primitive": "triangles",
+      "query": "nearest",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 64,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "2b4925e3b465f94d44187d5c40fcde8cd14618c005392820572b638eb7075530",
+      "device_p50_ms": 0.042871467272440594,
+      "samples_ms": [0.04293973445892334, 0.042871467272440594, 0.042871467272440594, 0.042871467272440594, 0.042837333679199216, 0.042871467272440594, 0.042871467272440594, 0.042837333679199216, 0.042871467272440594, 0.042871467272440594, 0.042871467272440594, 0.042837333679199216, 0.042871467272440594, 0.042871467272440594, 0.042837333679199216],
+      "properties": {
+        "register_count": 58,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "edges/nearest/euclidean",
+      "primitive": "edges",
+      "query": "nearest",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "81d853ed86e47f54bea661277ae7fc2167cf984da81d4328e88a6e9bbb0cb6c1",
+      "query_sha256": "2b4925e3b465f94d44187d5c40fcde8cd14618c005392820572b638eb7075530",
+      "device_p50_ms": 0.10004479885101318,
+      "samples_ms": [0.10018133322397868, 0.10007893244425456, 0.10004479885101318, 0.10001066525777182, 0.10001066525777182, 0.10007893244425456, 0.10004479885101318, 0.10001066525777182, 0.10004479885101318, 0.10001066525777182, 0.10004479885101318, 0.10001066525777182, 0.10004479885101318, 0.10004479885101318, 0.10004479885101318],
+      "properties": {
+        "register_count": 44,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "edges/nearest/angular",
+      "primitive": "edges",
+      "query": "nearest",
+      "distance_metric": "angular",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "81d853ed86e47f54bea661277ae7fc2167cf984da81d4328e88a6e9bbb0cb6c1",
+      "query_sha256": "e475fe1ab3ddb470b03eccc1c01f1987614fc633a3ef7b48947f3dceaa8b3ca9",
+      "device_p50_ms": 12.131260172526042,
+      "samples_ms": [12.131260172526042, 12.131260172526042, 12.130679321289062, 12.130850219726563, 12.131498209635417, 12.130713907877604, 12.131361897786459, 12.131430053710938, 12.130440266927083, 12.131260172526042, 12.13081563313802, 12.131089274088541, 12.131532796223958, 12.131361897786459, 12.1312255859375],
+      "properties": {
+        "register_count": 72,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "points2/overlap/none",
+      "primitive": "points2",
+      "query": "overlap",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 256,
+      "geometry_sha256": "dc68eef425b4466af950a0bd066beb9df6e7e666d1bdb84cc645fd01b7d8ec53",
+      "query_sha256": "9c7c4474849543483fe168b585eb44d0fedfe3eb27a44505ed93ae72dbe33bda",
+      "device_p50_ms": 0.009864532947540283,
+      "samples_ms": [0.010035199920336406, 0.009898666540781658, 0.009898666540781658, 0.009864532947540283, 0.009864532947540283, 0.009864532947540283, 0.009864532947540283, 0.009864532947540283, 0.009864532947540283, 0.009864532947540283, 0.009864532947540283, 0.009864532947540283, 0.009864532947540283, 0.009864532947540283, 0.009898666540781658],
+      "properties": {
+        "register_count": 30,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "points3/overlap/none",
+      "primitive": "points3",
+      "query": "overlap",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 256,
+      "geometry_sha256": "c055a4fd372b4d6a77fd01aed2a0c4e3ff1fd80e0aebb448257355615517a835",
+      "query_sha256": "9b99a57d3054f8bac44c38de5f7c8b69eb4cf59d9fbcee8252cd04884b61fa87",
+      "device_p50_ms": 0.012970667084058125,
+      "samples_ms": [0.013312000036239623, 0.013004799683888754, 0.012970667084058125, 0.012970667084058125, 0.012970667084058125, 0.013004799683888754, 0.012970667084058125, 0.013004799683888754, 0.012970667084058125, 0.012970667084058125, 0.012970667084058125, 0.012970667084058125, 0.012970667084058125, 0.012970667084058125, 0.012970667084058125],
+      "properties": {
+        "register_count": 32,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments2/overlap/none",
+      "primitive": "segments2",
+      "query": "overlap",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 256,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "9c7c4474849543483fe168b585eb44d0fedfe3eb27a44505ed93ae72dbe33bda",
+      "device_p50_ms": 0.040072532494862874,
+      "samples_ms": [0.040174933274586995, 0.040106666088104245, 0.040072532494862874, 0.040106666088104245, 0.040072532494862874, 0.040072532494862874, 0.040072532494862874, 0.040072532494862874, 0.0400383989016215, 0.040106666088104245, 0.040072532494862874, 0.040072532494862874, 0.0400383989016215, 0.040072532494862874, 0.040106666088104245],
+      "properties": {
+        "register_count": 30,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments3/overlap/none",
+      "primitive": "segments3",
+      "query": "overlap",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 256,
+      "geometry_sha256": "248efe3df57f0ca464457d08db9e38eb96583797e2dfafad6215d1666d4b5e92",
+      "query_sha256": "9b99a57d3054f8bac44c38de5f7c8b69eb4cf59d9fbcee8252cd04884b61fa87",
+      "device_p50_ms": 0.015871999661127727,
+      "samples_ms": [0.015974400440851848, 0.015940266847610473, 0.0159061332543691, 0.015871999661127727, 0.015837867061297098, 0.0159061332543691, 0.016008533040682473, 0.0159061332543691, 0.015837867061297098, 0.015871999661127727, 0.015871999661127727, 0.015871999661127727, 0.015837867061297098, 0.0159061332543691, 0.015871999661127727],
+      "properties": {
+        "register_count": 31,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "triangles/overlap/none",
+      "primitive": "triangles",
+      "query": "overlap",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 256,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "9b99a57d3054f8bac44c38de5f7c8b69eb4cf59d9fbcee8252cd04884b61fa87",
+      "device_p50_ms": 0.01911466717720032,
+      "samples_ms": [0.019217065970102944, 0.019182932376861573, 0.01914880077044169, 0.01911466717720032, 0.01911466717720032, 0.019080533583958944, 0.01911466717720032, 0.01911466717720032, 0.01914880077044169, 0.019080533583958944, 0.01911466717720032, 0.019080533583958944, 0.01911466717720032, 0.019080533583958944, 0.01911466717720032],
+      "properties": {
+        "register_count": 33,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "edges/overlap/none",
+      "primitive": "edges",
+      "query": "overlap",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 256,
+      "geometry_sha256": "81d853ed86e47f54bea661277ae7fc2167cf984da81d4328e88a6e9bbb0cb6c1",
+      "query_sha256": "9b99a57d3054f8bac44c38de5f7c8b69eb4cf59d9fbcee8252cd04884b61fa87",
+      "device_p50_ms": 0.015940266847610473,
+      "samples_ms": [0.016042666633923848, 0.015974400440851848, 0.015940266847610473, 0.015940266847610473, 0.015940266847610473, 0.015940266847610473, 0.015974400440851848, 0.015974400440851848, 0.015940266847610473, 0.015940266847610473, 0.015940266847610473, 0.015940266847610473, 0.015940266847610473, 0.015940266847610473, 0.016008533040682473],
+      "properties": {
+        "register_count": 31,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments2/first/none",
+      "primitive": "segments2",
+      "query": "first",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 128,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "ee9b62e7d29fa7d2790896b897a889d09326b21dfb1cab7739ca67cc55f89086",
+      "device_p50_ms": 2.802892812093099,
+      "samples_ms": [2.8028587341308593, 2.801629892985026, 2.802960968017578, 2.802551523844401, 2.802414957682292, 2.8031659444173176, 2.803302510579427, 2.8022783915201823, 2.8036778767903647, 2.80272216796875, 2.803336588541667, 2.8025856018066406, 2.802892812093099, 2.8032000223795572, 2.8030293782552085],
+      "properties": {
+        "register_count": 63,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments2/any/none",
+      "primitive": "segments2",
+      "query": "any",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 128,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "ee9b62e7d29fa7d2790896b897a889d09326b21dfb1cab7739ca67cc55f89086",
+      "device_p50_ms": 1.823266092936198,
+      "samples_ms": [1.823470942179362, 1.8223786671956381, 1.8237098693847655, 1.8234026590983072, 1.823095448811849, 1.8235392252604166, 1.8229588826497396, 1.823266092936198, 1.8235733032226562, 1.8230271657307944, 1.8231637318929037, 1.8233343760172527, 1.8230613708496093, 1.8226175944010417, 1.823470942179362],
+      "properties": {
+        "register_count": 62,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments2/count/none",
+      "primitive": "segments2",
+      "query": "count",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 128,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "1009531d82fcfe96f8f419c9bd2fa631b5596b0e49b265e6dc79d658e13ef54c",
+      "device_p50_ms": 3.3115819295247397,
+      "samples_ms": [3.3111722310384115, 3.31144536336263, 3.3114112854003905, 3.3112747192382814, 3.3116160074869794, 3.3115819295247397, 3.3116500854492186, 3.310967508951823, 3.312298583984375, 3.3115478515625, 3.3116160074869794, 3.3105918884277346, 3.3118548075358074, 3.3115819295247397, 3.3120938618977864],
+      "properties": {
+        "register_count": 77,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments2/all/none",
+      "primitive": "segments2",
+      "query": "all",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 128,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "1009531d82fcfe96f8f419c9bd2fa631b5596b0e49b265e6dc79d658e13ef54c",
+      "device_p50_ms": 3.3315498352050783,
+      "samples_ms": [3.3315498352050783, 3.332573954264323, 3.3318911234537762, 3.3314132690429688, 3.331720479329427, 3.3316523234049478, 3.3318911234537762, 3.3315498352050783, 3.33131103515625, 3.3311060587565104, 3.3329493204752603, 3.332505544026693, 3.3314473470052084, 3.3311744689941407, 3.33124262491862],
+      "properties": {
+        "register_count": 88,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "triangles/first/none",
+      "primitive": "triangles",
+      "query": "first",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 128,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "59cd28368295b6736bc20a529f90a21da326d1ff1361b06966d8678e3269da3e",
+      "device_p50_ms": 0.023381332556406658,
+      "samples_ms": [0.02348373333613078, 0.02341546614964803, 0.02341546614964803, 0.023381332556406658, 0.023381332556406658, 0.02341546614964803, 0.023381332556406658, 0.023347200949986775, 0.023347200949986775, 0.023381332556406658, 0.02341546614964803, 0.023381332556406658, 0.023381332556406658, 0.023381332556406658, 0.023381332556406658],
+      "properties": {
+        "register_count": 52,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "triangles/any/none",
+      "primitive": "triangles",
+      "query": "any",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 128,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "59cd28368295b6736bc20a529f90a21da326d1ff1361b06966d8678e3269da3e",
+      "device_p50_ms": 0.02078719933827718,
+      "samples_ms": [0.02085546652475993, 0.020821332931518555, 0.020821332931518555, 0.02078719933827718, 0.02078719933827718, 0.02078719933827718, 0.02078719933827718, 0.02078719933827718, 0.02078719933827718, 0.02078719933827718, 0.02078719933827718, 0.02078719933827718, 0.02078719933827718, 0.02078719933827718, 0.02078719933827718],
+      "properties": {
+        "register_count": 48,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "triangles/count/none",
+      "primitive": "triangles",
+      "query": "count",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 128,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "1b8f358d0110ceb5478ac1a28c1680f24fc79e26746244fb0b0a4b977e849c86",
+      "device_p50_ms": 0.04102826515833537,
+      "samples_ms": [0.04113066593805949, 0.04109653234481812, 0.04106239875157674, 0.04102826515833537, 0.04102826515833537, 0.04102826515833537, 0.04102826515833537, 0.04102826515833537, 0.04102826515833537, 0.04102826515833537, 0.04102826515833537, 0.04102826515833537, 0.04102826515833537, 0.04102826515833537, 0.04106239875157674],
+      "properties": {
+        "register_count": 94,
+        "local_memory_size": 528
+      }
+    },
+    {
+      "case": "triangles/all/none",
+      "primitive": "triangles",
+      "query": "all",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 128,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "1b8f358d0110ceb5478ac1a28c1680f24fc79e26746244fb0b0a4b977e849c86",
+      "device_p50_ms": 0.042393600940704344,
+      "samples_ms": [0.042496001720428465, 0.04242773453394572, 0.042393600940704344, 0.04242773453394572, 0.042393600940704344, 0.042393600940704344, 0.042393600940704344, 0.042393600940704344, 0.042393600940704344, 0.042393600940704344, 0.04235946734746297, 0.04235946734746297, 0.042393600940704344, 0.042393600940704344, 0.04235946734746297],
+      "properties": {
+        "register_count": 96,
+        "local_memory_size": 528
+      }
+    },
+    {
+      "case": "segments2/silhouette/euclidean",
+      "primitive": "segments2",
+      "query": "silhouette",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "62ff412404ee871c6c195c2a7c5ffec23202b7ab85be76e1eacd0f551559d584",
+      "device_p50_ms": 0.15977813402811686,
+      "samples_ms": [0.159880526860555, 0.15977813402811686, 0.15981225967407225, 0.15984640121459961, 0.15974399248758953, 0.1597098668416341, 0.1597098668416341, 0.15981225967407225, 0.1596757411956787, 0.15981225967407225, 0.15964159965515137, 0.1597098668416341, 0.15981225967407225, 0.15977813402811686, 0.15960747400919598],
+      "properties": {
+        "register_count": 48,
+        "local_memory_size": 256
+      }
+    },
+    {
+      "case": "segments2/silhouette/angular",
+      "primitive": "segments2",
+      "query": "silhouette",
+      "distance_metric": "angular",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "a1be0608ae4aaceb6bc983f710ac8cf0f9e12cca611be39fd681dea4c868d20a",
+      "device_p50_ms": 0.7859541575113932,
+      "samples_ms": [0.7863637288411458, 0.7859541575113932, 0.7862613042195638, 0.7860565185546875, 0.7859200159708659, 0.7860223770141601, 0.7858175913492839, 0.7859882354736328, 0.7859541575113932, 0.7855445226033528, 0.7859200159708659, 0.7860223770141601, 0.7859200159708659, 0.7862954457600911, 0.7858517328898112],
+      "properties": {
+        "register_count": 76,
+        "local_memory_size": 256
+      }
+    },
+    {
+      "case": "triangles/silhouette/euclidean",
+      "primitive": "triangles",
+      "query": "silhouette",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 64,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "2b4925e3b465f94d44187d5c40fcde8cd14618c005392820572b638eb7075530",
+      "device_p50_ms": 0.3648853302001953,
+      "samples_ms": [0.364680544535319, 0.36495361328125, 0.3647487958272298, 0.3650218645731608, 0.3647487958272298, 0.36495361328125, 0.36495361328125, 0.36491947174072265, 0.36498772303263344, 0.364680544535319, 0.364851188659668, 0.3650901476542155, 0.3648853302001953, 0.3647829373677572, 0.3646464029947917],
+      "properties": {
+        "register_count": 47,
+        "local_memory_size": 256
+      }
+    },
+    {
+      "case": "triangles/silhouette/angular",
+      "primitive": "triangles",
+      "query": "silhouette",
+      "distance_metric": "angular",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 64,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "e475fe1ab3ddb470b03eccc1c01f1987614fc633a3ef7b48947f3dceaa8b3ca9",
+      "device_p50_ms": 7.4570068359375,
+      "samples_ms": [7.457074991861979, 7.4564264933268225, 7.456119283040365, 7.457074991861979, 7.4570068359375, 7.456529235839843, 7.4573822021484375, 7.455948893229166, 7.457894388834635, 7.456085205078125, 7.456153361002604, 7.457211812337239, 7.456495157877604, 7.457484944661458, 7.4573822021484375],
+      "properties": {
+        "register_count": 76,
+        "local_memory_size": 256
+      }
+    },
+    {
+      "case": "segments2/star/euclidean",
+      "primitive": "segments2",
+      "query": "star",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "62ff412404ee871c6c195c2a7c5ffec23202b7ab85be76e1eacd0f551559d584",
+      "device_p50_ms": 0.15947093963623046,
+      "samples_ms": [0.15960747400919598, 0.15947093963623046, 0.15943679809570313, 0.15957333246866862, 0.15984640121459961, 0.15950506528218586, 0.15947093963623046, 0.15943679809570313, 0.15943679809570313, 0.15943679809570313, 0.15950506528218586, 0.15947093963623046, 0.15943679809570313, 0.15947093963623046, 0.15957333246866862],
+      "properties": {
+        "register_count": 48,
+        "local_memory_size": 256
+      }
+    },
+    {
+      "case": "segments2/robin/euclidean",
+      "primitive": "segments2",
+      "query": "robin",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 64,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "62ff412404ee871c6c195c2a7c5ffec23202b7ab85be76e1eacd0f551559d584",
+      "device_p50_ms": 1.308194096883138,
+      "samples_ms": [1.3082283020019532, 1.3082623799641928, 1.3080917358398438, 1.3082283020019532, 1.3081258138020833, 1.3082623799641928, 1.3081600189208984, 1.3081600189208984, 1.3081600189208984, 1.308194096883138, 1.3082623799641928, 1.3082283020019532, 1.3080917358398438, 1.308194096883138, 1.3082283020019532],
+      "properties": {
+        "register_count": 56,
+        "local_memory_size": 256
+      }
+    },
+    {
+      "case": "segments2/classify/none",
+      "primitive": "segments2",
+      "query": "classify",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 128,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "ec940afe54ce4ac2ac7d01edc5419a2244ae0dda82a146e7bb595d3a9df5538d",
+      "device_p50_ms": 1.268872578938802,
+      "samples_ms": [1.2692479451497396, 1.2692479451497396, 1.2686677296956381, 1.2689066569010417, 1.2694868723551431, 1.2685653686523437, 1.2681556701660157, 1.268872578938802, 1.2684288024902344, 1.2689408620198568, 1.2688383738199869, 1.2689408620198568, 1.269418716430664, 1.268872578938802, 1.2685653686523437],
+      "properties": {
+        "register_count": 39,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "case": "segments2/sample/none",
+      "primitive": "segments2",
+      "query": "sample",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 1024,
+      "block_dim": 256,
+      "geometry_sha256": "73f2a5b604629847c1cb8bfa98b0551c44ff977d4587a669efc89f89ef4ea371",
+      "query_sha256": "1895ccc653582a2821332ca89698a27ac7366006ae9771fe94a63183151cffc6",
+      "device_p50_ms": 0.09970346291859945,
+      "samples_ms": [0.09980586369832357, 0.09970346291859945, 0.09966933727264404, 0.09966933727264404, 0.09973759651184082, 0.09970346291859945, 0.09973759651184082, 0.09973759651184082, 0.09973759651184082, 0.09963520367940266, 0.09966933727264404, 0.09966933727264404, 0.09970346291859945, 0.09973759651184082, 0.09966933727264404],
+      "properties": {
+        "register_count": 48,
+        "local_memory_size": 0
+      }
+    },
+    {
+      "case": "triangles/star/euclidean",
+      "primitive": "triangles",
+      "query": "star",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 64,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "2b4925e3b465f94d44187d5c40fcde8cd14618c005392820572b638eb7075530",
+      "device_p50_ms": 0.36498772303263344,
+      "samples_ms": [0.3650218645731608, 0.36505600611368816, 0.36491947174072265, 0.3648853302001953, 0.36512425740559895, 0.3648170789082845, 0.3648853302001953, 0.365226682027181, 0.3648853302001953, 0.36526079177856446, 0.36491947174072265, 0.3650218645731608, 0.36498772303263344, 0.3650901476542155, 0.3648170789082845],
+      "properties": {
+        "register_count": 47,
+        "local_memory_size": 256
+      }
+    },
+    {
+      "case": "triangles/robin/euclidean",
+      "primitive": "triangles",
+      "query": "robin",
+      "distance_metric": "euclidean",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 64,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "2b4925e3b465f94d44187d5c40fcde8cd14618c005392820572b638eb7075530",
+      "device_p50_ms": 0.7200768152872722,
+      "samples_ms": [0.7205205281575521, 0.7200085322062174, 0.7201791763305664, 0.7200426737467448, 0.7200085322062174, 0.7203840255737305, 0.720247459411621, 0.7200768152872722, 0.7200768152872722, 0.7200426737467448, 0.7199061075846355, 0.7203498840332031, 0.7202133178710938, 0.7201450983683269, 0.7198720296223958],
+      "properties": {
+        "register_count": 56,
+        "local_memory_size": 256
+      }
+    },
+    {
+      "case": "triangles/classify/none",
+      "primitive": "triangles",
+      "query": "classify",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 128,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "032ba2f54017a91f839f9e667390fc5ec9f713cd7b7eb62ec4fa99662a22d42e",
+      "device_p50_ms": 0.022562134265899658,
+      "samples_ms": [0.022664533058802287, 0.022562134265899658, 0.022562134265899658, 0.022528000672658286, 0.02259626587231954, 0.022562134265899658, 0.022562134265899658, 0.022562134265899658, 0.022562134265899658, 0.02259626587231954, 0.022528000672658286, 0.022528000672658286, 0.022562134265899658, 0.022562134265899658, 0.022528000672658286],
+      "properties": {
+        "register_count": 50,
+        "local_memory_size": 584
+      }
+    },
+    {
+      "case": "triangles/sample/none",
+      "primitive": "triangles",
+      "query": "sample",
+      "distance_metric": "none",
+      "n_queries": 8192,
+      "n_primitives": 3072,
+      "block_dim": 256,
+      "geometry_sha256": "62bf7e8d676d665615651ef7ea552b88258d7ee1aa99381593a34b15622faa31",
+      "query_sha256": "bf906a5ff745bb1f9a8d911f589257f4114f303c42cbf960846f989569a7678d",
+      "device_p50_ms": 0.020070399840672812,
+      "samples_ms": [0.020172800620396933, 0.020104533433914183, 0.020104533433914183, 0.020036266247431437, 0.020070399840672812, 0.020104533433914183, 0.020104533433914183, 0.020036266247431437, 0.020036266247431437, 0.020036266247431437, 0.020036266247431437, 0.020002132654190062, 0.020070399840672812, 0.020070399840672812, 0.020070399840672812],
+      "properties": {
+        "register_count": 56,
+        "local_memory_size": 0
+      }
+    }
+  ],
+  "date": "2026-10-27",
+  "validation": {
+    "targeted_cpu": {
+      "passed": 93,
+      "seconds": 28.86,
+      "paths": [
+        "tests/spatial_trees/test_warp_matrix.py",
+        "tests/spatial_trees/test_warp_factories.py",
+        "tests/spatial_trees/test_warp_boundary_factories.py"
+      ]
+    },
+    "full_suite_gpu": {
+      "passed": 426,
+      "seconds": 202.6,
+      "path": "tests",
+      "cuda_visible_devices": "0"
+    },
+    "builtin_combinations": 37,
+    "kernel_identity_combinations": 37,
+    "native_timer_smoke": {
+      "custom_queries": 10,
+      "native_references": 5
+    },
+    "oracles": "Float64 geometry, numerical angular/Robin minimization, analytic square/cube intersections and classification, primitive/feature membership, full-boundary density.",
+    "unsupported": "Unsupported builtin combinations explicitly raise TypeError.",
+    "test_source_sha256": {
+      "tests/spatial_trees/test_warp_matrix.py": "d81b23cb96687f9749f39714d9ccec01ae6c62200f8b483c8ccd5363a89fca8b",
+      "tests/spatial_trees/_robin_oracle.py": "785b9b92392535c3a02562e72a039cf398d9b3334cc2b054a8a8891c2826767c",
+      "tests/spatial_trees/test_warp_factories.py": "4810da8c4c92c2115048456b8c2e04ec7345d0e2912a85225019ad5c7c0bb601",
+      "tests/spatial_trees/test_warp_boundary_factories.py": "3ac3bcba6e20cdce7927fa102eaba9154f726a472242cac4f23f19a3d538e060"
+    }
+  }
+}

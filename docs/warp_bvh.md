@@ -1,4 +1,4 @@
-# Triangle queries with Warp and JAX
+# GPU BVH queries with Warp and JAX
 
 `bvh.sah.warp` builds static binary SAH trees on the CPU and queries them on
 the GPU. `bvh.snch.warp` adds normal cones, silhouette queries and boundary
@@ -70,27 +70,76 @@ times, segments, count, status = all_hits(tree, data, origins, directions, max_h
 
 Float32 builtins: `Points(2|3)`, `Segments(2|3)`, `Triangles()` and
 `SilhouetteEdges()`. Euclidean nearest queries support all four. `Angular()`
-supports 3D segments/edges; queries end in `(2,3)` with viewpoint and direction
-as rows, and distances/caps are radians. For view-dependent edges, supply
+supports 2D/3D points and segments; queries end in `(2, dimension)` with viewpoint
+and direction as rows, and distances/caps are radians. For view-dependent edges, supply
 `SilhouetteEdges().data(a,b,n0,n1)` and `predicate=Silhouette()`.
 
 Implement `PrimitiveSpec` and `MetricSpec.bind(primitive)` to extend the factory.
 Primitive specifications provide an array-only Warp struct, device load/bounds
-functions, and host bounds/packing. Metrics return `NearestOps`: query type/shape,
+functions, and host bounds/packing. Host bounds use the primitive dimension;
+device bounds use `vec3`, with zero z in 2D. Metrics return `NearestOps`: query type/shape,
 validity, box bound, primitive minimizer, cap/score conversions and culling slack.
+Silhouette metrics also supply an explicit `viewpoint` callback.
 Callbacks are `@wp.func` or `@wp.func_native`. Bounds and minimizers must use the
 same score units; bounds must be conservative. Optional `node_bound_with_data`
 receives `(query, tree, data, node)` for additional node arrays.
 
 Specifications are immutable and hashable; geometry and queries remain dynamic
-array pytrees. Kernels are cached per specialization and exposed as `.kernel`.
-Triangle defaults retain native fast specializations; caller-defined policies
-use shared Warp traversal. Existing backend methods use the same factories.
+array pytrees. Leaf query kernels are cached per specialization and exposed as `.kernel`.
+Star radius composes silhouette distance with clipping.
+Depth-first queries share one walker and node layout. Static callbacks supply
+primitive/metric math; backend methods use the same factories. Equivalent policies
+reuse the exact kernel. Boundary sampling has one CDF descent implementation.
 
 Ray modes are `first`, `any`, `count` and `all`. Triangles and 2D segments support
 rays; points and 3D segments have no ray operation. First/any accept nonnegative
 intervals; count/all also support signed lines. Use `exclude=True` when creating
 first/any queries that need face exclusion. Count/all always support exclusion.
+
+### Indexed boundaries
+
+Boundary queries use indexed segments in 2D or indexed triangles in 3D:
+
+```python
+from surfaces.explicit.accelerators.bvh.warp import (
+    Segments, build_boundary, make_classify, make_silhouette,
+    prepare_boundary_sample, make_boundary_sample, prepare_robin, make_robin_radius,
+)
+
+primitive = Segments(2)
+tree, data, boundary = build_boundary(primitive, primitive.indexed(vertices, segments))
+sign, status = make_classify(primitive)(tree, data, boundary, points)
+point, distance, feature, status = make_silhouette(primitive)(tree, data, boundary, points)
+sampling = prepare_boundary_sample(tree, boundary)
+sample = make_boundary_sample(primitive)(tree, data, sampling, points, radii, randoms)
+robin = prepare_robin(tree, boundary, minimum=1.0)
+radius, status = make_robin_radius(primitive)(tree, data, robin, points, radii)
+```
+
+`build_boundary(..., silhouettes=False)` skips optional feature/cone construction.
+2D silhouettes are vertices; 3D silhouettes are edges. Indexed connectivity is
+explicit; loose endpoints are never welded. Original primitive/feature IDs persist.
+Classification requires closed, non-degenerate connectivity and detects exact
+contact separately from parity crossings. A geometric tangent hit need not cross.
+
+Custom `BoundaryAdapter` objects supply topology, feature construction, visibility,
+leaf predicates and classification operations. `MeasureOps` supplies local samples,
+normals and densities, plus optional selection weights; use the same policy with
+`prepare_boundary_sample` and `make_boundary_sample`. `RegionOps` separates
+conservative overlap from exact sample membership. PDFs include path, primitive
+selection and local density factors; rejected samples remain null events.
+
+`RobinOps` supplies conservative primitive/node/feature bounds, with optional typed
+metadata and data-aware callbacks. Built-in Euclidean bounds use different 2D and
+3D formulas. Other metrics require explicit valid radius policies.
+
+`make_star_radius` caps Euclidean silhouette distance for Neumann boundaries.
+`make_overlap` tests primitive AABBs. `ClassificationOps` supplies closure validity
+and per-primitive miss/crossing/contact/failure events. Custom multi-hit primitives
+use `RayOps(state_type=..., next_hit=...)`; its zero-initialized state enumerates
+all eligible hits once, returning updated state, parameter and hit/done/failure
+flag. Callbacks receive a prepared `Ray` with origin, direction and projection
+frame; setup runs once per query.
 
 ## Query contracts
 
@@ -108,7 +157,8 @@ first/any queries that need face exclusion. Count/all always support exclusion.
 | `robin_radius_with_status(points, cap)` | Robin star-radius bound, status |
 | `sample_boundary(points, radii, randoms)` | Point, normal, area PDF, original face ID, status |
 
-Silhouette, star-radius, Robin and sampling queries require SNCH.
+The triangle backend silhouette, star-radius, Robin and sampling methods require SNCH.
+Factories also support the indexed 2D boundary path and explicit custom policies.
 Status **1** means a valid result, **0** means a valid
 miss/empty geometry, and **-1** means invalid input or failure. Equal computed
 distances or ray parameters choose the smaller original ID. Closest point
@@ -163,10 +213,13 @@ automatic differentiation are not supported.
 
 Warp's built-in `wp.jax_kernel` handles FFI, compilation and ownership. The
 [batching adapter](../surfaces/explicit/accelerators/bvh/backends/_warp_jax.py)
-flattens query axes without tiling geometry. Add a kernel, a
-[query specification](../surfaces/explicit/accelerators/bvh/backends/_warp_specs.py)
-and a backend method to extend the interface. SNCH cones enclose whole edges;
-ray and closest-point queries use separate traversal data.
+flattens query axes without tiling geometry. Factories bind typed geometry and optional metadata through the same adapter;
+existing triangle backend methods delegate to them. SNCH cones enclose whole edges.
+Packed float4 nodes hold bounds and topology for ray/overlap/classification queries.
+Closest point caches node bounds in eight-byte stack entries; silhouette and Robin
+use four-byte indices/tags and recompute cheap bounds when popping. These choices
+specialize by query semantics, independently of primitives and metrics. FFI arrays are contiguous.
+Rebuild the tree when changing bounds or topology.
 
 Adapted ray helpers retain Warp's
 [Apache-2.0 license](../surfaces/explicit/accelerators/bvh/backends/licenses/warp-LICENSE.txt).
@@ -174,24 +227,36 @@ Adapted ray helpers retain Warp's
 ## Validation and timing
 
 ```sh
-python -m pytest -q tests/spatial_trees/test_warp_bvh.py \
-    tests/spatial_trees/test_backend_discovery.py \
-    tests/spatial_trees/test_warp_payload.py \
-    tests/spatial_trees/test_warp_robin.py \
-    tests/spatial_trees/test_warp_inside.py \
-    tests/spatial_trees/test_warp_crossings.py
+python -m pytest -q tests
 
 python -m scripts.bench.spatial_trees.warp_bvh_device \
     --backend bvh.snch.warp --queries closest_silhouette \
     --mesh torus --point-distribution shell --radius .5
 ```
 
+The shared [case catalog](../scripts/bench/spatial_trees/_warp_cases.py) covers all
+37 supported builtin primitive/metric/query combinations. Parametrized tests check
+independent geometry oracles, equivalent-policy kernel identity and benchmark input
+packing. Unsupported combinations fail explicitly; custom policies have focused tests.
+
+```sh
+python -m pytest -q tests/spatial_trees/test_warp_matrix.py
+JAX_PLATFORMS=cpu python -m pytest -q tests/spatial_trees/test_warp_matrix.py
+python -m scripts.bench.spatial_trees.warp_query_matrix --counts 8192 --primitives 1024
+```
+
+[Matrix timings](benchmarks/warp_query_matrix.json) cover tree kernels only. Star
+radius shares silhouette traversal; its JAX cap composition is excluded. Timings stay
+outside the test suite; no hardware-dependent latency thresholds run in ordinary tests.
+
 The benchmark times warmed CUDA graphs with CUDA events, excluding build,
-compilation, transfers, readback and CPU dispatch. Results go to
+compilation, transfers, readback and CPU dispatch. `--native-warp` adds Warp mesh
+references. Results go to
 `assets/benchmark_results/`.
 
 Recorded [ray](benchmarks/warp_bvh_device.json),
 [factory](benchmarks/warp_factories.json),
+[generalization](benchmarks/warp_generalization.json),
 [crossing](benchmarks/ray_crossings.json),
 [closest-point](benchmarks/closest_point.json),
 [silhouette](benchmarks/closest_silhouette.json),

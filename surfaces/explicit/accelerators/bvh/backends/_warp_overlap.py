@@ -1,92 +1,68 @@
-"""Triangle-AABB overlap traversal."""
-from __future__ import annotations
+"""Primitive-AABB overlap queries."""
+from functools import lru_cache
 
 import warp as wp
 
-from ._warp_geometry import boxes_overlap, finite3
-from ._warp_specs import STACK_CAPACITY
+from ._warp_factory import BoundQuery, bind_query
+from ._warp_geometry import boxes_overlap
+from ._warp_jax import _flatten_vec_queries
+from ._warp_primitives import _struct
+from ._warp_traversal import make_walk
+from ._warp_tree import DeviceTree, STACK_CAPACITY
 
 
-_STACK64 = wp.types.vector(length=STACK_CAPACITY, dtype=wp.int32)
-_STACK_LIMIT = wp.constant(STACK_CAPACITY)
+class OverlapQuery(BoundQuery):
+    def __call__(self, tree, geometry, lower, upper):
+        lower, shape = _flatten_vec_queries(lower, self.primitive.dimension)
+        upper, upper_shape = _flatten_vec_queries(upper, self.primitive.dimension)
+        if shape != upper_shape:
+            raise ValueError("box lower and upper batch shapes must match")
+        hit, status = self.launch(tree, geometry, shape, lower, upper)
+        return hit.astype(bool), status
 
 
-@wp.kernel
-def aabb_overlap_kernel(
-    query_lower: wp.array(dtype=wp.vec3),
-    query_upper: wp.array(dtype=wp.vec3),
-    node_lower: wp.array(dtype=wp.vec3),
-    node_upper: wp.array(dtype=wp.vec3),
-    node_left: wp.array(dtype=wp.int32),
-    node_right: wp.array(dtype=wp.int32),
-    node_leaf_offset: wp.array(dtype=wp.int32),
-    node_leaf_count: wp.array(dtype=wp.int32),
-    tri_v0: wp.array(dtype=wp.vec3),
-    tri_e1: wp.array(dtype=wp.vec3),
-    tri_e2: wp.array(dtype=wp.vec3),
-    out_overlap: wp.array(dtype=wp.int32),
-    out_status: wp.array(dtype=wp.int32),
-):
-    qi = wp.tid()
-    qlo = query_lower[qi]
-    qhi = query_upper[qi]
-    out_overlap[qi] = wp.int32(0)
-    out_status[qi] = wp.int32(0)
-    if (not finite3(qlo) or not finite3(qhi)
-            or qlo[0] > qhi[0] or qlo[1] > qhi[1] or qlo[2] > qhi[2]):
-        out_status[qi] = wp.int32(-1)
+@lru_cache(maxsize=None)
+def make_overlap(primitive, *, stack_capacity=STACK_CAPACITY, block_dim=256):
+    if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
+        raise ValueError("invalid stack capacity or block dimension")
+    Vec, Geometry = primitive.point_type, primitive.data_type
+    Context = _struct("OverlapContext", {"lower": wp.vec3, "upper": wp.vec3, "geometry": Geometry})
+    State = _struct("OverlapState", {"limit": float, "failed": bool, "stop": bool, "hit": int})
+
+    @wp.func
+    def bounds(ctx: Context, lo: wp.vec3, hi: wp.vec3, state: wp.ref[State]):
+        return 0.0, boxes_overlap(ctx.lower, ctx.upper, lo, hi), False
+
+    @wp.func
+    def visit(ctx: Context, tree: DeviceTree, begin: int, end: int, state: wp.ref[State]):
+        for slot in range(begin, end):
+            item = wp.static(primitive.load)(ctx.geometry, slot)
+            lo, hi = wp.static(primitive.bounds_of_item)(item)
+            if boxes_overlap(ctx.lower, ctx.upper, lo, hi):
+                state.hit = 1
+                state.stop = True
+                return
         return
-    if wp.len(node_left) == 0:
-        return
-    if not boxes_overlap(qlo, qhi, node_lower[0], node_upper[0]):
-        return
 
-    stack = _STACK64()
-    sp = wp.int32(0)
-    node = wp.int32(0)
-    found = wp.bool(False)
-    failed = wp.bool(False)
-    while (node >= 0 or sp > 0) and not found and not failed:
-        if node < 0:
-            sp = sp - 1
-            node = stack[sp]
-        if boxes_overlap(qlo, qhi, node_lower[node], node_upper[node]):
-            count = node_leaf_count[node]
-            if count > 0:
-                offset = node_leaf_offset[node]
-                for j in range(count):
-                    k = offset + j
-                    a = tri_v0[k]
-                    b = a + tri_e1[k]
-                    c = a + tri_e2[k]
-                    tri_lo = wp.min(a, wp.min(b, c))
-                    tri_hi = wp.max(a, wp.max(b, c))
-                    if boxes_overlap(qlo, qhi, tri_lo, tri_hi):
-                        found = True
-                node = wp.int32(-1)
-            else:
-                left = node_left[node]
-                right = node_right[node]
-                hl = boxes_overlap(qlo, qhi, node_lower[left], node_upper[left])
-                hr = boxes_overlap(qlo, qhi, node_lower[right], node_upper[right])
-                if hl and hr:
-                    if sp >= _STACK_LIMIT:
-                        failed = True
-                    else:
-                        stack[sp] = right
-                        sp = sp + 1
-                        node = left
-                elif hl:
-                    node = left
-                elif hr:
-                    node = right
-                else:
-                    node = wp.int32(-1)
-        else:
-            node = wp.int32(-1)
+    walk = make_walk(Context, State, bounds, visit, stack_capacity=stack_capacity, near_first=False, packed=True)
 
-    if failed:
-        out_status[qi] = wp.int32(-1)
-    elif found:
-        out_overlap[qi] = wp.int32(1)
-        out_status[qi] = wp.int32(1)
+    @wp.func
+    def overlaps(lower: Vec, upper: Vec, tree: DeviceTree, geometry: Geometry):
+        if not wp.isfinite(lower) or not wp.isfinite(upper) or wp.max(lower-upper) > 0.0:
+            return 0, -1
+        lo, hi = wp.vec3(lower[0], lower[1], 0.0), wp.vec3(upper[0], upper[1], 0.0)
+        if wp.static(primitive.dimension == 3):
+            lo = wp.vec3(lower[0], lower[1], lower[2])
+            hi = wp.vec3(upper[0], upper[1], upper[2])
+        state = State()
+        wp.static(walk)(tree, Context(lo, hi, geometry), state)
+        if state.failed:
+            return 0, -1
+        return state.hit, state.hit
+
+    inputs = [("lower", wp.array(dtype=Vec)), ("upper", wp.array(dtype=Vec))]
+    outputs = [("out_overlap", wp.array(dtype=wp.int32)), ("out_status", wp.array(dtype=wp.int32))]
+    body = ["hit, status = wp.static(overlaps)(load_array(lower, i), load_array(upper, i), tree, geometry)",
+            "store_array(out_overlap, i, hit)", "store_array(out_status, i, status)"]
+    return bind_query(OverlapQuery, "overlap_kernel", primitive, inputs, outputs, body,
+                      {"overlaps": overlaps}, block_dim)

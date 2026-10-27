@@ -9,8 +9,10 @@ import warp as wp
 
 from surfaces.explicit.accelerators.protocol import Config
 from ._warp_layout import _pack_ray_nodes, _validate_tree
-from ._warp_specs import STACK_CAPACITY
 from .sah_jax import _build_payload
+
+
+STACK_CAPACITY = 64
 
 
 @wp.struct
@@ -69,11 +71,9 @@ def build_tree(primitive, data, config=None):
     _, depths, _ = _validate_tree(built, len(lo))
     if depths.max() > config.max_stack_depth:
         raise ValueError("tree exceeds configured stack depth")
-    packed = (np.empty((0, 4), np.float32),)*2
-    if getattr(primitive, "intersect", None) is not None:
-        packed = _pack_ray_nodes(np.asarray(built.node_lower), np.asarray(built.node_upper),
-                                np.asarray(built.node_left), np.asarray(built.node_right),
-                                np.asarray(built.node_leaf_offset), np.asarray(built.node_leaf_count))
+    packed = _pack_ray_nodes(np.asarray(built.node_lower), np.asarray(built.node_upper),
+                             np.asarray(built.node_left), np.asarray(built.node_right),
+                             np.asarray(built.node_leaf_offset), np.asarray(built.node_leaf_count))
     tree = TreeData(*(getattr(built, name) for name in TreeData._fields[:7]),
                     *(jnp.asarray(a) for a in packed))
     return tree, primitive.pack(data, tree.prim_ids)

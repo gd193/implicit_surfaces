@@ -35,3 +35,6 @@ scripts/bench/*
 scripts/bench/spatial_trees/*
 !scripts/bench/spatial_trees/_warp_fixtures.py
 !scripts/bench/spatial_trees/warp_bvh_device.py
+!scripts/bench/spatial_trees/_warp_cases.py
+!scripts/bench/spatial_trees/warp_query_matrix.py
+!scripts/bench/spatial_trees/_warp_timing.py
