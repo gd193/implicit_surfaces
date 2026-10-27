@@ -39,6 +39,14 @@ class SurfaceHit(NamedTuple):
     status: jax.Array  # HIT, EXIT (clear segment), or explicit failure
 
 
+class NeumannBoundarySample(NamedTuple):
+    """Boundary sample weighted by the positive ball Laplace Green function.    """
+
+    position: jax.Array
+    normal: jax.Array
+    green_weight: jax.Array
+
+
 class RayQuery:
     """Adapt a backend's query and chosen TR policy once, outside JIT.
 
