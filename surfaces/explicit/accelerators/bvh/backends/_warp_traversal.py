@@ -74,12 +74,17 @@ def load_node(values: wp.array(dtype=wp.vec4), index: int) -> wp.vec4: ...
 @wp.func_native(r"""
     uint32_t a,b;
     memcpy(&a,&lower.c[3],4); memcpy(&b,&upper.c[3],4);
-    return (uint64_t(a>>31)<<62) | (uint64_t(b & 0x7fffffffu)<<31) | (a & 0x7fffffffu);
+    return uint64_t(a) | (uint64_t(b)<<32);
 """)
 def pack_node(lower: wp.vec4, upper: wp.vec4) -> wp.uint64: ...
 
 
-@wp.func_native("return (node >> 62) != 0;")
+@wp.func
+def load_metadata(lower: wp.array(dtype=wp.vec4), upper: wp.array(dtype=wp.vec4), index: int):
+    return pack_node(load_array(lower, index), load_array(upper, index))
+
+
+@wp.func_native("return (node & 0x80000000ull) != 0;")
 def node_is_leaf(node: wp.uint64) -> bool: ...
 
 
@@ -87,7 +92,7 @@ def node_is_leaf(node: wp.uint64) -> bool: ...
 def node_lower(node: wp.uint64) -> int: ...
 
 
-@wp.func_native("return static_cast<int>((node >> 31) & 0x7fffffffull);")
+@wp.func_native("return static_cast<int>((node >> 32) & 0x7fffffffull);")
 def node_upper(node: wp.uint64) -> int: ...
 
 
@@ -113,15 +118,16 @@ def entry_score(entry: wp.uint64) -> float: ...
 
 @lru_cache(maxsize=None)
 def make_walk(Context, State, bounds, visit, *, stack_capacity=STACK_CAPACITY,
-              near_first=True, packed=False, test_root=True, resume=None):
+              near_first=True, packed=False, packed_nodes=False, test_root=True, resume=None):
     """Packed queries visit ranges; indexed queries also receive node metadata."""
     if not 1 <= stack_capacity <= STACK_CAPACITY:
         raise ValueError("invalid stack capacity")
+    packed_nodes = packed or packed_nodes
     Stack, push, pop = stack_functions(stack_capacity, packed or resume is None)
 
     @wp.func
     def read_node(tree: DeviceTree, node: int):
-        if wp.static(packed):
+        if wp.static(packed_nodes):
             lo, hi = load_node(tree.node_ray_lower, node), load_node(tree.node_ray_upper, node)
             return wp.vec3(lo[0], lo[1], lo[2]), wp.vec3(hi[0], hi[1], hi[2]), pack_node(lo, hi)
         else:
@@ -153,22 +159,25 @@ def make_walk(Context, State, bounds, visit, *, stack_capacity=STACK_CAPACITY,
         stack = Stack()
         while True:
             leaf = bool(False)
-            if wp.static(packed):
+            if wp.static(packed_nodes):
                 leaf = node_is_leaf(current)
             else:
                 leaf = load_array(tree.node_left, node) < 0
             if leaf:
-                if wp.static(packed):
-                    wp.static(visit)(ctx, tree, node_lower(current), node_upper(current), state)
+                if wp.static(packed_nodes):
+                    begin, end = node_lower(current), node_upper(current)
                 else:
                     begin = load_array(tree.node_leaf_offset, node)
                     end = begin+load_array(tree.node_leaf_count, node)
+                if wp.static(packed):
+                    wp.static(visit)(ctx, tree, begin, end, state)
+                else:
                     wp.static(visit)(ctx, tree, node, begin, end, tag, state)
                 if state.failed or state.stop:
                     return
             else:
                 left, right = int(0), int(0)
-                if wp.static(packed):
+                if wp.static(packed_nodes):
                     left, right = node_lower(current), node_upper(current)
                 else:
                     left, right = load_array(tree.node_left, node), load_array(tree.node_right, node)
@@ -232,6 +241,8 @@ def make_walk(Context, State, bounds, visit, *, stack_capacity=STACK_CAPACITY,
                             state.failed = True
                             return
                     if score <= state.limit:
+                        if wp.static(packed_nodes and resume is None):
+                            current = load_metadata(tree.node_ray_lower, tree.node_ray_upper, node)
                         found = True
                         break
                 if not found:

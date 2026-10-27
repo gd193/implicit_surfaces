@@ -18,13 +18,16 @@ class Ray:
 
 
 @wp.func
-def prepare_ray(origin: wp.vec3, direction: wp.vec3):
+def prepare_ray(origin: wp.vec3, direction: wp.vec3, dimension: int):
     ray = Ray()
     ray.origin = origin
     ray.direction = direction
-    ray.fast = wp.min(wp.abs(direction)) >= 1.e-20
+    components = direction
+    if dimension == 2:
+        components[2] = 1.0
+    ray.fast = wp.min(wp.abs(components)) >= 1.e-20
     if ray.fast:
-        ray.inverse = wp.cw_div(wp.vec3(1.0), direction)
+        ray.inverse = wp.cw_div(wp.vec3(1.0), components)
     kz = int(0)
     if wp.abs(direction[1]) > wp.abs(direction[kz]):
         kz = 1

@@ -62,7 +62,7 @@ class Scene(NamedTuple):
 
 
 @lru_cache(maxsize=None)
-def scene(name, size=16):
+def scene(name, size=16, leaf_size=4):
     primitive = PRIMITIVES[name]
     rng = np.random.default_rng(73)
     if name == "triangles":
@@ -84,9 +84,9 @@ def scene(name, size=16):
             raw = (primitive.data(a, b, rng.normal(size=a.shape), rng.normal(size=a.shape))
                    if name == "edges" else primitive.data(a, b))
     if name in BOUNDARIES:
-        tree, geometry, boundary = build_boundary(primitive, raw, Config(leaf_size_threshold=4))
+        tree, geometry, boundary = build_boundary(primitive, raw, Config(leaf_size_threshold=leaf_size))
     else:
-        tree, geometry = build_tree(primitive, raw, Config(leaf_size_threshold=4))
+        tree, geometry = build_tree(primitive, raw, Config(leaf_size_threshold=leaf_size))
         boundary = None
     return Scene(tree, geometry, boundary, raw)
 

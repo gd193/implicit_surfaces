@@ -38,3 +38,6 @@ scripts/bench/spatial_trees/*
 !scripts/bench/spatial_trees/_warp_cases.py
 !scripts/bench/spatial_trees/warp_query_matrix.py
 !scripts/bench/spatial_trees/_warp_timing.py
+!scripts/bench/spatial_trees/build_references.py
+!scripts/bench/spatial_trees/warp_reference_queries.py
+!scripts/bench/spatial_trees/references/

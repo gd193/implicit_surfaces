@@ -50,11 +50,11 @@ class RayQuery(BoundQuery):
     const bool fast_aabb=ray.fast;
 """ + _NATIVE_RAY_BOX_TEST + r"""
     float enter;
-    const bool hit=box_interval(lower,upper,minimum,maximum,enter,conservative);
+    const bool hit=box_interval(lower,upper,minimum,maximum,enter);
     return wp::vec2(enter,hit ? 1.f : 0.f);
 """)
 def ray_box(ray: Ray, lower: wp.vec3, upper: wp.vec3,
-            minimum: float, maximum: float, conservative: bool) -> wp.vec2: ...
+            minimum: float, maximum: float, dimension: int) -> wp.vec2: ...
 
 
 @wp.func_native(r"""
@@ -97,7 +97,8 @@ def make_ray_query(primitive, mode="first", *, ops=None, exclude=False,
 
     @wp.func
     def bounds(ctx: Context, lower: wp.vec3, upper: wp.vec3, state: wp.ref[State]):
-        hit = ray_box(ctx.ray, lower, upper, ctx.minimum, state.limit, wp.static(half_open))
+        hit = ray_box(ctx.ray, lower, upper, ctx.minimum, state.limit,
+                      wp.static(primitive.dimension))
         return hit[0], hit[1] > 0.0, False
 
     @wp.func
@@ -172,7 +173,7 @@ def make_ray_query(primitive, mode="first", *, ops=None, exclude=False,
             if wp.static(primitive.dimension == 3):
                 o[2] = origin[2]
                 d[2] = direction[2]
-            ctx.ray = prepare_ray(o, d)
+            ctx.ray = prepare_ray(o, d, wp.static(primitive.dimension))
             ctx.minimum = minimum
             ctx.excluded = excluded
             ctx.geometry = geometry
