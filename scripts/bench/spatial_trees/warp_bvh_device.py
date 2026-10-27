@@ -25,12 +25,21 @@ from scripts.bench.spatial_trees._warp_fixtures import _mesh, _queries
 from scripts.bench.spatial_trees._warp_timing import _array_digest, _make_case, _measure as measure
 from surfaces.explicit.accelerators import BVHAccelerator
 from surfaces.explicit.accelerators.protocol import Config
-from surfaces.explicit.accelerators.bvh.backends._warp_geometry import finite3
+
 _BLOCK_DIMS = {
     "first_hit": 128, "any_hit": 128, "count_hits": 128, "all_hits": 128,
     "closest_point": 64, "classify_point": 128, "aabb_overlap": 256,
     "closest_silhouette": 64, "sample_boundary": 256, "robin_radius": 64,
 }
+
+
+@wp.func
+def finite3(v: wp.vec3) -> bool:
+    return (v[0] == v[0] and v[1] == v[1] and v[2] == v[2]
+            and wp.abs(v[0]) < wp.float32(3.4028234e38)
+            and wp.abs(v[1]) < wp.float32(3.4028234e38)
+            and wp.abs(v[2]) < wp.float32(3.4028234e38))
+
 
 @wp.func
 def _valid_ray(o: wp.vec3, d: wp.vec3, lo: float, hi: float) -> bool:

@@ -77,12 +77,13 @@ def test_warp_factory_batching_dynamic_data_and_cpu():
 
 
 @pytest.mark.parametrize("dimension", [2, 3])
-def test_warp_factory_caps_ties_empty_and_invalid(dimension):
+@pytest.mark.parametrize("cache_bounds", [False, True])
+def test_warp_factory_caps_ties_empty_and_invalid(dimension, cache_bounds):
     primitive = Points(dimension)
     points = np.zeros((2, dimension), np.float32)
     points[:, 0] = [-1., 1.]
-    tree, geometry = build_tree(primitive, primitive.data(points))
-    nearest = make_nearest(primitive, Euclidean())
+    tree, geometry = build_tree(primitive, primitive.data(points), Config(leaf_size_threshold=1))
+    nearest = make_nearest(primitive, Euclidean(), cache_bounds=cache_bounds)
     queries = jnp.zeros((7, dimension)).at[4, 0].set(jnp.nan)
     caps = jnp.array([0., .5, 1., jnp.inf, 1., -1., jnp.nan])
     _, distance, ids, status = jax.jit(nearest)(tree, geometry, queries, caps)

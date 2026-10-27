@@ -45,6 +45,7 @@ class Primitive:
     intersect: Any = None
     segment_endpoints: Any = None
     normal_sides: Any = None
+    point_bounds: bool = False
 
     def data(self, *arrays):
         if self.name == "triangles":
@@ -294,7 +295,7 @@ def _primitive(kind, dimension):
 
     return Primitive(kind, dimension, Vec, Data, Payload, load, item_bounds, closest, intersect,
                      endpoints if kind != "triangles" else None,
-                     normal_sides if kind == "silhouette_edges" else None)
+                     normal_sides if kind == "silhouette_edges" else None, kind == "points")
 
 
 def Points(dimension=3):
