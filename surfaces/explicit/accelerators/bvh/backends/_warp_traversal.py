@@ -118,7 +118,7 @@ def entry_score(entry: wp.uint64) -> float: ...
 
 @lru_cache(maxsize=None)
 def make_walk(Context, State, bounds, visit, *, stack_capacity=STACK_CAPACITY,
-              near_first=True, packed=False, packed_nodes=False, test_root=True, resume=None):
+              near_first=True, packed=False, packed_nodes=False, test_root=True, resume=None, group_leaves=False):
     """Packed queries visit ranges; indexed queries also receive node metadata."""
     if not 1 <= stack_capacity <= STACK_CAPACITY:
         raise ValueError("invalid stack capacity")
@@ -141,6 +141,37 @@ def make_walk(Context, State, bounds, visit, *, stack_capacity=STACK_CAPACITY,
             return wp.static(bounds)(ctx, tree, node, lower, upper, state)
 
     @wp.func
+    def children(tree: DeviceTree, ctx: Context, state: wp.ref[State], node: int, current: wp.uint64):
+        left, right = int(0), int(0)
+        if wp.static(packed_nodes):
+            left, right = node_lower(current), node_upper(current)
+        else:
+            left, right = load_array(tree.node_left, node), load_array(tree.node_right, node)
+        # Issue both child loads before callback arithmetic.
+        ll, lu, lmeta = read_node(tree, left)
+        rl, ru, rmeta = read_node(tree, right)
+        a, accept_a, tag_a = test(ctx, tree, left, ll, lu, state)
+        b, accept_b, tag_b = test(ctx, tree, right, rl, ru, state)
+        if wp.static(not packed):
+            if a != a or b != b:
+                state.failed = True
+            accept_a = accept_a and a <= state.limit
+            accept_b = accept_b and b <= state.limit
+        return left, right, lmeta, rmeta, a, b, accept_a, accept_b, tag_a, tag_b
+
+    @wp.func
+    def store_deferred(stack: wp.ref[Stack], size: int, swap: bool, left: int, right: int,
+                       lmeta: wp.uint64, rmeta: wp.uint64, a: float, b: float, tag_a: bool, tag_b: bool):
+        if wp.static(packed):
+            wp.static(push)(stack, size, wp.where(swap, lmeta, rmeta))
+        else:
+            deferred = wp.where(swap, pack_entry(left, tag_a), pack_entry(right, tag_b))
+            if wp.static(resume is None):
+                wp.static(push)(stack, size, cache_entry(deferred, wp.where(swap, a, b)))
+            else:
+                wp.static(push)(stack, size, deferred)
+
+    @wp.func
     def walk(tree: DeviceTree, ctx: Context, state: wp.ref[State]):
         if tree.node_ray_lower.shape[0] == 0:
             return
@@ -158,6 +189,34 @@ def make_walk(Context, State, bounds, visit, *, stack_capacity=STACK_CAPACITY,
                 return
         stack = Stack()
         while True:
+            if wp.static(group_leaves):
+                while True:
+                    if wp.static(packed_nodes):
+                        if node_is_leaf(current):
+                            break
+                    else:
+                        if load_array(tree.node_left, node) < 0:
+                            break
+                    left, right, lmeta, rmeta, a, b, accept_a, accept_b, tag_a, tag_b = children(tree, ctx, state, node, current)
+                    if wp.static(not packed):
+                        if state.stop:
+                            return
+                    if not (accept_a or accept_b):
+                        if wp.static(packed_nodes):
+                            # Clear dead ends so CUDA reconverges descent before visiting leaves.
+                            current = wp.uint64(0)
+                        break
+                    swap = not accept_a
+                    if wp.static(near_first):
+                        swap = swap or (accept_b and b < a)
+                    if accept_a and accept_b:
+                        if size == wp.static(stack_capacity):
+                            state.failed = True
+                            return
+                        store_deferred(stack, size, swap, left, right, lmeta, rmeta, a, b, tag_a, tag_b)
+                        size += 1
+                    current = wp.where(swap, rmeta, lmeta)
+                    node, tag = wp.where(swap, right, left), wp.where(swap, tag_b, tag_a)
             leaf = bool(False)
             if wp.static(packed_nodes):
                 leaf = node_is_leaf(current)
@@ -175,24 +234,11 @@ def make_walk(Context, State, bounds, visit, *, stack_capacity=STACK_CAPACITY,
                     wp.static(visit)(ctx, tree, node, begin, end, tag, state)
                 if state.failed or state.stop:
                     return
-            else:
-                left, right = int(0), int(0)
-                if wp.static(packed_nodes):
-                    left, right = node_lower(current), node_upper(current)
-                else:
-                    left, right = load_array(tree.node_left, node), load_array(tree.node_right, node)
-                # Issue both child loads before callback arithmetic.
-                ll, lu, lmeta = read_node(tree, left)
-                rl, ru, rmeta = read_node(tree, right)
-                a, accept_a, tag_a = test(ctx, tree, left, ll, lu, state)
-                b, accept_b, tag_b = test(ctx, tree, right, rl, ru, state)
+            elif wp.static(not group_leaves):
+                left, right, lmeta, rmeta, a, b, accept_a, accept_b, tag_a, tag_b = children(tree, ctx, state, node, current)
                 if wp.static(not packed):
-                    if a != a or b != b:
-                        state.failed = True
                     if state.stop:
                         return
-                    accept_a = accept_a and a <= state.limit
-                    accept_b = accept_b and b <= state.limit
                 if accept_a and accept_b:
                     if size == wp.static(stack_capacity):
                         state.failed = True
@@ -200,14 +246,7 @@ def make_walk(Context, State, bounds, visit, *, stack_capacity=STACK_CAPACITY,
                     swap = bool(False)
                     if wp.static(near_first):
                         swap = b < a
-                    if wp.static(packed):
-                        wp.static(push)(stack, size, wp.where(swap, lmeta, rmeta))
-                    else:
-                        deferred = wp.where(swap, pack_entry(left, tag_a), pack_entry(right, tag_b))
-                        if wp.static(resume is None):
-                            wp.static(push)(stack, size, cache_entry(deferred, wp.where(swap, a, b)))
-                        else:
-                            wp.static(push)(stack, size, deferred)
+                    store_deferred(stack, size, swap, left, right, lmeta, rmeta, a, b, tag_a, tag_b)
                     size += 1
                     current = wp.where(swap, rmeta, lmeta)
                     node, tag = wp.where(swap, right, left), wp.where(swap, tag_b, tag_a)

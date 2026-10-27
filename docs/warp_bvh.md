@@ -80,6 +80,8 @@ functions, and host bounds/packing. Host bounds use the primitive dimension;
 device bounds use `vec3`, with zero z in 2D. Metrics return `NearestOps`: query type/shape,
 validity, box bound, primitive minimizer, cap/score conversions and culling slack.
 Silhouette metrics also supply an explicit `viewpoint` callback.
+`NearestOps.group_leaves` selects static traversal scheduling; Euclidean point
+queries enable it when bounds are cached. Other queries retain flat traversal.
 Callbacks are `@wp.func` or `@wp.func_native`. Bounds and minimizers must use the
 same score units; bounds must be conservative. Optional `node_bound_with_data`
 receives `(query, tree, data, node)` for additional node arrays.

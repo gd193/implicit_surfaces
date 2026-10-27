@@ -5,8 +5,6 @@ from typing import Any, Protocol, TypeVar
 
 import warp as wp
 
-from ._warp_geometry import _NATIVE_POINT_GEOMETRY
-
 
 @dataclass(frozen=True)
 class NearestOps:
@@ -22,6 +20,7 @@ class NearestOps:
     viewpoint: Any = None
     cull_items: bool = True
     node_filter: Any = None
+    group_leaves: bool = False
 
 
 PrimitiveT = TypeVar("PrimitiveT", contravariant=True)
@@ -44,15 +43,15 @@ class Euclidean:
         def valid(query: Vec):
             return wp.isfinite(query)
 
-        if dimension == 3:
-            @wp.func_native(_NATIVE_POINT_GEOMETRY + "return box_distance_sq(lower, upper);")
-            def bound(query: Vec, lower: wp.vec3, upper: wp.vec3) -> float: ...
-        else:
-            @wp.func
-            def bound(query: Vec, lower: wp.vec3, upper: wp.vec3):
-                x = wp.max(wp.max(lower[0]-query[0], 0.0), query[0]-upper[0])
-                y = wp.max(wp.max(lower[1]-query[1], 0.0), query[1]-upper[1])
-                return x*x+y*y
+        @wp.func
+        def bound(query: Vec, lower: wp.vec3, upper: wp.vec3):
+            x = wp.min(wp.max(query[0], lower[0]), upper[0])-query[0]
+            y = wp.min(wp.max(query[1], lower[1]), upper[1])-query[1]
+            score = x*x+y*y
+            if wp.static(dimension == 3):
+                z = wp.min(wp.max(query[2], lower[2]), upper[2])-query[2]
+                score = score+z*z
+            return score
 
         @wp.func
         def closest(query: Vec, item: Any):
@@ -81,7 +80,7 @@ class Euclidean:
                 return query
 
         return NearestOps(Vec, (dimension,), valid, bound, closest, to_score, to_distance,
-                          cull_limit, viewpoint=viewpoint)
+                          cull_limit, viewpoint=viewpoint, group_leaves=getattr(primitive, "point_bounds", False))
 
 
 _ANGLE = r"""

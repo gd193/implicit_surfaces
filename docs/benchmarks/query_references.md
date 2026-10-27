@@ -1,13 +1,11 @@
 # GPU query comparisons
 
-**Ray parity is reached on the tuned square/circle fixtures; point-nearest parity
-is incomplete.** NVIDIA A40, GPU 0, resident CUDA kernels only. Medians use
+**Initial tuning snapshot.** The [current cuBQL comparison](cubql_diagnosis.md)
+reaches point-nearest parity on all six measured fixtures. NVIDIA A40, GPU 0,
+resident CUDA kernels only. Medians use
 30 launches per graph and 15 samples. Build, JIT, copies and host dispatch are
 excluded. [Harness](../../scripts/bench/spatial_trees/references/README.md),
 [samples, settings and provenance](query_references.json).
-
-This is the initial tuning snapshot. The subsequent
-[cuBQL diagnosis and leaf-range fix](cubql_diagnosis.md) improves nearest queries.
 
 Times below are **ours / reference, in µs**. Small: 1,024 primitives and 8,192
 queries. Large: 8,192 primitives and 65,536 queries.
