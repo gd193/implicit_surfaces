@@ -26,22 +26,3 @@ assets/meshes/*.zip
 algo_paper/
 scripts/*
 assets/
-
-# WoSt geometry, gradient, and mixed-boundary regressions
-!scripts/test_star_walker.py
-!scripts/test_star_vector_source.py
-!scripts/test_star_neumann_flux.py
-!scripts/test_pressure_projection.py
-!scripts/test_fluid_torus_obstacle.py
-!scripts/test_boundary_pressure.py
-!scripts/test_warp_pressure_gather.py
-!scripts/test_warp_pressure_direct.py
-
-!scripts/test_integrator_refill_rounds.py
-!scripts/test_warp_pressure_scalar_gather.py
-!scripts/test_warp_volume_preparation.py
-!scripts/test_buoyancy_checkpoint.py
-!scripts/test_twisted_torus_boundary.py
-!scripts/test_shared_vector_potential.py
-!scripts/test_temporal_vector_potential.py
-!scripts/test_dirichlet_fluid.py

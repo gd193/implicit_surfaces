@@ -26,7 +26,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.scipy.ndimage import map_coordinates
 
-from common import load_volume, out_dir, plot_bc, volume_path, volume_stages
+from examples.wos.common import load_volume, out_dir, plot_bc, volume_path, volume_stages
 from sphereWalker.integrator import WoSGradientIntegrator
 from surfaces.implicit.lipschitz import lipschitzImplicit
 
@@ -77,10 +77,16 @@ class BoundaryLayer(NamedTuple):
     label = "inlet: wall layers u_x = U tanh((h - |y|)/d)"
 
 
-def make_transport(points, solid, inlet, lo, hi, nx, ny, dt):
+def make_transport(points, solid, inlet, lo, hi, nx, ny, dt, *, fluid_fn=None, inflow_only=False):
     """(sample, advect) on an (ny, nx) grid. sample: bilinear lookup clamped at
     the edges. advect: semi-Lagrangian step with an RK2 backtrace; the inlet
-    column is reset to `inlet` (it lies on the domain edge, so after masking)."""
+    column is reset to `inlet` (it lies on the domain edge, so after masking).
+    With inflow_only=True, prescribe inlet data only where the left velocity
+    points into the domain. Outflow and stagnation retain the transported field.
+    Optional fluid_fn(x) clips a segment with a solid endpoint to its last fluid
+    point by bisection. This is a grid transport guard, not a certified ray query:
+    a thin obstacle between two fluid endpoints can still be missed.
+    """
     def sample(grid, x):
         col = (x[0] - lo[0]) / (hi[0] - lo[0]) * (nx - 1)
         row = (x[1] - lo[1]) / (hi[1] - lo[1]) * (ny - 1)
@@ -88,12 +94,34 @@ def make_transport(points, solid, inlet, lo, hi, nx, ny, dt):
 
     @jax.jit
     def advect(omega, vel):
+        def clip_segment(start, end):
+            if fluid_fn is None:
+                return end
+
+            def bisect(_, bracket):
+                low, high = bracket
+                middle = .5*(low+high)
+                inside = fluid_fn(start + middle*(end-start))
+                return jnp.where(inside, middle, low), jnp.where(inside, high, middle)
+
+            low, _ = jax.lax.fori_loop(0, 12, bisect, (0., 1.))
+            fraction = jnp.where(fluid_fn(end), 1., low)
+            return start + fraction*(end-start)
+
         def back(x):
             u = jnp.stack([sample(vel[..., 0], x), sample(vel[..., 1], x)])
-            mid = x - .5 * dt * u
-            return x - dt * jnp.stack([sample(vel[..., 0], mid), sample(vel[..., 1], mid)])
+            raw_mid = x - .5 * dt * u
+            mid = clip_segment(x, raw_mid)
+            foot = x - dt * jnp.stack([sample(vel[..., 0], mid), sample(vel[..., 1], mid)])
+            foot = clip_segment(mid, foot)
+            if fluid_fn is not None:
+                foot = jnp.where(fluid_fn(raw_mid), foot, mid)
+            return foot
         new = jax.vmap(lambda x: sample(omega, back(x)))(points).reshape(ny, nx)
-        return jnp.where(solid, 0., new).at[:, 0].set(inlet)
+        new = jnp.where(solid, 0., new)
+        incoming = (vel[:, 0, 0] > 0) if inflow_only else jnp.ones(ny, dtype=bool)
+        left = jnp.where(incoming, inlet, new[:, 0])
+        return new.at[:, 0].set(jnp.where(solid[:, 0], 0., left))
 
     return sample, advect
 
@@ -227,3 +255,31 @@ def run(name, domain, geometry, psi_boundary, inflow, lo, hi, *, nx, ny, title, 
         simulate()
     if render_now:
         render()
+
+
+def main():
+    from surfaces.implicit.primitives import bbox_sdf, star2d_sdf, subtraction
+
+    LO, HI = (-1.5, -1.), (2.5, 1.)
+    jet = Jet(U=.3, J=1.2, delta=.07, halfwidth=1.)
+    geometry = {"box": {"min_corner": jnp.array(LO), "max_corner": jnp.array(HI)},
+                "star": {"center": jnp.array([-.4, 0.]), "radius": jnp.asarray(.35),
+                         "m": jnp.asarray(3.)}}
+
+
+    def domain(params, x):
+        return subtraction(bbox_sdf(params["box"], x), star2d_sdf(params["star"], x))
+
+
+    def psi_boundary(x):
+        """0 on the star, the inflow stream function on the channel walls."""
+        on_star = jnp.abs(star2d_sdf(geometry["star"], x)) < jnp.abs(bbox_sdf(geometry["box"], x))
+        return jnp.where(on_star, 0., jet.psi(x[1]))
+
+
+    run("fluid_2d", domain, geometry, psi_boundary, jet, LO, HI, nx=320, ny=160, title="jet past a star",
+        info=["Dirichlet psi = U y + J d tanh(y/d) on the channel, 0 on the star"])
+
+
+if __name__ == '__main__':
+    main()

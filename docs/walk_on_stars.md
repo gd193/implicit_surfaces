@@ -194,7 +194,7 @@ field uses 512 walks per grid point by default. A separate radial profile uses
 the finite-epsilon or floating-point bias. All walks must complete before a
 plot is produced.
 
-## Gradients and the mixed-boundary channel
+## Gradients
 
 `WoStGradientIntegrator` lives beside `WoStIntegrator` in `star_integrator.py`
 and accepts the same arguments plus optional `control_fn(x)`. It returns
@@ -213,49 +213,9 @@ pilot must be fixed independently of the current gradient samples. It reduces
 solution-offset variance; random source/path variance can still grow strongly
 as the first radius shrinks.
 
-```sh
-python examples/wos/fluid_neumann.py
-```
-
-This solves inviscid 2D vorticity transport in `[0, 4] x [-1, 1]` using the
-existing `make_transport` and `open_boundaries` functions from `fluid.py`.
-The streamfunction is Dirichlet on the inlet and horizontal walls, and has
-homogeneous Neumann data on the outlet. The box is constructed with
-`sdfImplicit(fn=bbox_sdf, dim=2)`; a three-side clearance callback supplies
-the Dirichlet query. Dirichlet termination takes precedence on shared faces.
-
-The exact steady solution is `psi = y + 0.08 sin(pi y)`,
-`u = (1 + 0.08 pi cos(pi y), 0)`, and `omega = 0.08 pi^2 sin(pi y)`.
-The example first solves this full Poisson problem at 39 interior points,
-including points near the outlet, using independent batches for sampling
-intervals. In the time-dependent run it solves for the departure from this
-known background, with zero Dirichlet data and source `omega - omega_base`,
-and adds back the analytical velocity. An eight-step stationary check tests
-this decomposition and transport. A Gaussian vortex perturbation is then
-advected down the channel.
-
-A sparse finite-difference mixed-boundary Poisson solve provides a comparison,
-with a separate manufactured-solution grid-refinement check. Both simulations
-use the same semi-Lagrangian transport, grid, and boundary reconstruction.
-At walls the normal velocity is zero and residual tangential velocity is
-copied from the adjacent row; the outlet has zero transverse velocity and
-horizontal velocity copied from the adjacent column. These are grid boundary
-approximations, separate from the interior WoSt gradient estimator. No-slip
-vorticity generation and viscosity are not enabled. This Neumann outlet is an
-approximation; the example does not establish independence from outlet location.
-
-Outputs in `assets/renders/wos/fluid_neumann/` include analytical validation,
-side-by-side vortex snapshots, MP4/GIF animation, raw arrays, termination
-counts, steady drift, and errors against the finite-difference reference.
-Use `--output`, `--nx`, `--ny`, `--walks`, `--steps`, and `--dt` to vary the run;
-`--render-only` redraws saved data. The example rejects incomplete walks.
-Sampling intervals do not include epsilon, transport, or grid bias. Independent
-Monte Carlo gradient estimates are not exactly divergence-free on the grid;
-the metrics include the initial interior discrete-divergence RMS for both solvers.
-
 ## Circle-wave walls with open Neumann ends
 
-The existing `examples/wos/fluid_circle_wave.py` now uses constant Dirichlet
+The existing `examples/fluids/curved_channel.py` now uses constant Dirichlet
 streamfunction `+Q/2` on the top wave and `-Q/2` on the bottom wave. Only the
 wave field supplies Dirichlet clearance; `bbox_sdf` supplies the Neumann
 geometry. In this channel the horizontal box edges are outside the fluid,
@@ -264,8 +224,8 @@ impose zero transverse velocity, with horizontal velocity determined by the
 solution rather than a prescribed inlet profile.
 
 ```sh
-JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false python examples/wos/fluid_circle_wave.py --solve
-python examples/wos/fluid_circle_wave.py --render
+JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false python -m examples.fluids.curved_channel --solve
+python -m examples.fluids.curved_channel --render
 ```
 
 A cached harmonic WoSt gradient solve establishes the baseline flow. A

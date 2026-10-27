@@ -20,7 +20,7 @@ import numpy as np
 import pyvista as pv
 from scipy import ndimage
 
-from common import ROOT, out_dir, volume_path
+from examples.wos.common import ROOT, out_dir, volume_path
 
 pv.OFF_SCREEN = True
 HEAD = pv.Arrow(tip_length=0.28, tip_radius=0.07, shaft_radius=0.025)
@@ -181,11 +181,13 @@ def volume_samples(grid, n=500, seed=0):
 
 # ---------------------------------------------------------------------- orbit
 def orbit(example, name, title, layer, *, normal, extent_points, static=None,
-          camera=(2.2, -2.6, 1.6), frames=600, sweeps=2, still=True, on_frame=None, still_t=0.):
+          camera=(2.2, -2.6, 1.6), frames=600, sweeps=2, still=True, on_frame=None, still_t=0.,
+          rotate_camera=True, view_up=(0., 0., 1.)):
     """Shared video mechanism for every view.
 
     The camera makes one full turn at its radius and height over `frames`
-    frames at 30 fps (default 20 s). The plane x . normal = s starts beyond
+    frames at 30 fps (default 20 s); rotate_camera=False fixes the viewpoint.
+    The plane x . normal = s starts beyond
     the shape (nothing clipped) and sweeps back and forth `sweeps` times down
     to the 10% depth quantile of `extent_points`. Writes <example>/<name>_orbit.mp4 and,
     if still, <example>/<name>.png with the plane through the origin.
@@ -203,7 +205,7 @@ def orbit(example, name, title, layer, *, normal, extent_points, static=None,
     p = plotter(title)
     if static is not None:
         static(p)
-    up = (0., 0., 1.)
+    up = view_up
     actors = []
     if still:
         if on_frame is not None:
@@ -223,7 +225,7 @@ def orbit(example, name, title, layer, *, normal, extent_points, static=None,
         if on_frame is not None:
             on_frame(t)
         actors = layer(p, normal, s * normal)
-        a = start + 2 * np.pi * t
+        a = start + 2 * np.pi * t if rotate_camera else start
         p.camera_position = [(radius * np.cos(a), radius * np.sin(a), height), (0., 0., 0.), up]
         p.write_frame()
     p.close()
