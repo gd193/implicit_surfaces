@@ -10,7 +10,6 @@ from surfaces.explicit.accelerators.registry import register_backend
 from surfaces.explicit.primitives import Primitives
 
 from ._warp_build import finite_primitive_bounds, validate_warp_mesh_and_config
-from ._warp_jax import query as _warp_query, _flatten_vec_queries, _restore
 from ._warp_layout import (WarpBVHPayload, empty_warp_payload,
                            make_warp_payload)
 from .sah_jax import _build_payload
@@ -24,6 +23,18 @@ def _factory_data(payload):
     geometry = primitive.payload_type(payload.tri_v0, payload.tri_e1, payload.tri_e2,
                                        payload.mesh_vertices, payload.tri_indices)
     return primitive, TreeData.from_payload(payload), geometry
+
+
+def _factory_boundary(payload):
+    from ._warp_boundary import BoundaryCoreData, BoundaryData, SilhouetteData
+
+    core = BoundaryCoreData(payload.mesh_vertices, payload.tri_indices, payload.mesh_closed,
+                            payload.tri_normal, payload.tri_area)
+    features = SilhouetteData(payload.silhouette_v0, payload.silhouette_v1,
+        payload.silhouette_n0, payload.silhouette_n1, payload.silhouette_refs,
+        payload.node_silhouette_offset, payload.node_silhouette_count,
+        payload.node_cone_axis, payload.node_cone_sin_cos, payload.node_cone_radius)
+    return BoundaryData(core, features)
 
 
 def _ray_query(payload, mode, *args, **kwargs):
@@ -79,9 +90,10 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
         return self.classify_point_with_status(payload, x)[0]
 
     def classify_point_with_status(self, payload: WarpBVHPayload, x: jnp.ndarray):
-        q, shape = _flatten_vec_queries(x)
-        sign, status = _warp_query("classify_point_kernel", payload, q)
-        return _restore(sign, shape), _restore(status, shape)
+        from ._warp_inside import make_classify
+
+        primitive, tree, geometry = _factory_data(payload)
+        return make_classify(primitive)(tree, geometry, _factory_boundary(payload), x)
 
     def first_hit(self, payload: WarpBVHPayload, ray_origin: jnp.ndarray,
                   ray_direction: jnp.ndarray, max_t: jnp.ndarray,
@@ -134,11 +146,7 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
 
     def aabb_overlap_with_status(self, payload: WarpBVHPayload,
                                  lower: jnp.ndarray, upper: jnp.ndarray):
-        lo, shape = _flatten_vec_queries(lower)
-        hi, hshape = _flatten_vec_queries(upper)
-        if shape != hshape:
-            raise ValueError("lower and upper batch shapes must match")
-        result, status = _warp_query(
-            "aabb_overlap_kernel", payload, lo, hi)
-        return (_restore(result.astype(jnp.bool_), shape),
-                _restore(status, shape))
+        from ._warp_overlap import make_overlap
+
+        primitive, tree, geometry = _factory_data(payload)
+        return make_overlap(primitive)(tree, geometry, lower, upper)

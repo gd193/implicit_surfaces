@@ -1,17 +1,19 @@
-"""Ray traversal specialized by primitive and result accumulation."""
+"""Ray queries using the shared BVH walker."""
 from dataclasses import dataclass
 from functools import lru_cache
 from operator import index
 from typing import Any
 
-import warp as wp
 import jax.numpy as jnp
+import warp as wp
 
-from ._warp_factory import BoundQuery, bind_query, is_native_triangle
-from ._warp_geometry import _NATIVE_RAY_BOX
-from ._warp_specs import STACK_CAPACITY
-from ._warp_tree import DeviceTree
+from ._warp_domain import Ray, RayOps, prepare_ray
+from ._warp_factory import BoundQuery, bind_query
+from ._warp_geometry import _NATIVE_RAY_BOX_TEST
 from ._warp_jax import _crossing_args
+from ._warp_primitives import _struct
+from ._warp_traversal import load_array, store_array, make_walk
+from ._warp_tree import DeviceTree, STACK_CAPACITY
 
 
 @dataclass(frozen=True)
@@ -43,142 +45,167 @@ class RayQuery(BoundQuery):
         return result
 
 
+@wp.func_native(r"""
+    const auto o=ray.origin, d=ray.direction, inv_dir=ray.inverse;
+    const bool fast_aabb=ray.fast;
+""" + _NATIVE_RAY_BOX_TEST + r"""
+    float enter;
+    const bool hit=box_interval(lower,upper,minimum,maximum,enter,conservative);
+    return wp::vec2(enter,hit ? 1.f : 0.f);
+""")
+def ray_box(ray: Ray, lower: wp.vec3, upper: wp.vec3,
+            minimum: float, maximum: float, conservative: bool) -> wp.vec2: ...
+
+
+@wp.func_native(r"""
+    for (float v : origin.c) if (!(v == v && wp::abs(v) < 3.4028234e38f)) return false;
+    bool nonzero = false;
+    for (float v : direction.c) {
+        if (!(v == v && wp::abs(v) < 3.4028234e38f)) return false;
+        nonzero |= v != 0.f;
+    }
+    if (!(minimum <= maximum) || minimum == INFINITY || maximum == -INFINITY) return false;
+    if (exclusion && (excluded < -1 || excluded >= count)) return false;
+    return line ? nonzero : minimum >= 0.f && wp::dot(direction, direction) > 1.e-30f;
+""")
+def valid_ray(origin: Any, direction: Any, minimum: float, maximum: float,
+              excluded: int, count: int, line: bool, exclusion: bool):
+    return bool(False)  # Generic native return-type inference.
+
+
 @lru_cache(maxsize=None)
-def make_ray_query(primitive, mode="first", *, exclude=False,
+def make_ray_query(primitive, mode="first", *, ops=None, exclude=False,
                    stack_capacity=STACK_CAPACITY, block_dim=128):
     if mode not in ("first", "any", "count", "all"):
         raise ValueError("ray mode must be first, any, count, or all")
     if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
         raise ValueError("invalid stack capacity or block dimension")
-    intersect = getattr(primitive, "intersect", None)
-    if intersect is None:
+    ops = ops or getattr(primitive, "ray_ops", None) or RayOps(intersect=getattr(primitive, "intersect", None))
+    if ops.intersect is None and ops.next_hit is None:
         raise TypeError("primitive has no ray intersection operation")
-    exclusion = exclude or mode in ("count", "all")
-    Vec, Geometry, dimension = primitive.point_type, primitive.data_type, primitive.dimension
-    Stack = wp.types.vector(stack_capacity, wp.int32)
-    half_open, store_times = mode in ("count", "all"), mode in ("first", "all")
-
-    @wp.func_native(r"""
-        wp::vec3 o(origin[0],origin[1],0.f),d(direction[0],direction[1],0.f);
-    """ + ("o[2]=origin[2]; d[2]=direction[2];\n" if dimension == 3 else "")
-        + _NATIVE_RAY_BOX + r"""
-        float enter;
-        const bool hit=box_interval(lower,upper,minimum,maximum,enter,true);
-        return wp::vec2(enter,hit ? 1.f : 0.f);
-    """)
-    def ray_box(origin: Vec, direction: Vec, lower: wp.vec3, upper: wp.vec3,
-                minimum: float, maximum: float) -> wp.vec2: ...
+    multiple = ops.next_hit is not None and (mode in ("count", "all") or ops.intersect is None)
+    Iterator = ops.state_type
+    exclusion, half_open = exclude or mode in ("count", "all"), mode in ("count", "all")
+    store_times = mode in ("first", "all")
+    Vec, Geometry = primitive.point_type, primitive.data_type
+    fields = {"ray": Ray, "minimum": wp.float32, "excluded": wp.int32, "geometry": Geometry, "qi": wp.int32}
+    if mode == "all":
+        fields.update(times=wp.array2d(dtype=wp.float32), faces=wp.array2d(dtype=wp.int32))
+    Context = _struct("RayContext", fields)
+    State = _struct("RayState", {"limit": wp.float32, "failed": wp.bool, "stop": wp.bool,
+                                 "count": wp.int32, "index": wp.int32})
 
     @wp.func
-    def ray(qi: int, origin: Vec, direction: Vec, minimum: float, maximum: float,
-            excluded: int, tree: DeviceTree, geometry: Geometry,
-            times: Any, faces: Any, out_count: Any, out_status: Any):
-        out_count[qi] = 0
-        out_status[qi] = 0
+    def bounds(ctx: Context, lower: wp.vec3, upper: wp.vec3, state: wp.ref[State]):
+        hit = ray_box(ctx.ray, lower, upper, ctx.minimum, state.limit, wp.static(half_open))
+        return hit[0], hit[1] > 0.0, False
+
+    @wp.func
+    def visit(ctx: Context, tree: DeviceTree, begin: int, end: int, state: wp.ref[State]):
+        for slot in range(begin, end):
+            face = load_array(tree.prim_ids, slot)
+            if wp.static(exclusion):
+                if face == ctx.excluded:
+                    continue
+            if wp.static(multiple):
+                if wp.static(wp.types.type_is_scalar(Iterator)):
+                    iterator = Iterator(0)
+                else:
+                    iterator = Iterator()
+            while True:
+                hit = wp.vec2(0.0)
+                if wp.static(multiple):
+                    iterator, t, flag = wp.static(ops.next_hit)(ctx.ray, ctx.minimum, state.limit,
+                        ctx.geometry, slot, iterator, wp.static(half_open), wp.static(store_times))
+                    if flag == 0:
+                        break
+                    hit = wp.vec2(t, wp.float32(flag))
+                else:
+                    hit = wp.static(ops.intersect)(ctx.ray, ctx.minimum, state.limit, ctx.geometry,
+                                                   slot, wp.static(half_open), wp.static(store_times))
+                if hit[1] < 0.0:
+                    state.failed = True
+                    return
+                if hit[1] > 0.0:
+                    if wp.static(mode == "any"):
+                        state.count = 1
+                        state.stop = True
+                        return
+                    elif wp.static(mode == "first"):
+                        if hit[0] < state.limit or state.index < 0 or (hit[0] == state.limit and face < state.index):
+                            state.limit = hit[0]
+                            state.index = face
+                    else:
+                        if wp.static(mode == "all"):
+                            if state.count < ctx.times.shape[1]:
+                                store_array(ctx.times, wp.int64(ctx.qi)*wp.int64(ctx.times.shape[1])+wp.int64(state.count), hit[0])
+                                store_array(ctx.faces, wp.int64(ctx.qi)*wp.int64(ctx.faces.shape[1])+wp.int64(state.count), face)
+                        state.count += 1
+                if wp.static(not multiple):
+                    break
+        return
+
+    walk = make_walk(Context, State, bounds, visit, stack_capacity=stack_capacity,
+                     near_first=mode in ("first", "any"), packed=True, test_root=half_open)
+
+    @wp.func
+    def ray_query(qi: int, origin: Vec, direction: Vec, minimum: float, maximum: float,
+                  excluded: int, tree: DeviceTree, geometry: Geometry,
+                  times: Any, faces: Any, out_count: Any, out_status: Any):
+        store_array(out_count, qi, 0)
+        store_array(out_status, qi, 0)
         if wp.static(mode == "first"):
-            times[qi] = maximum
-            faces[qi] = -1
+            store_array(times, qi, maximum)
+            store_array(faces, qi, -1)
         if wp.static(mode == "all"):
             for j in range(times.shape[1]):
-                times[qi, j] = wp.inf
-                faces[qi, j] = -1
-        valid = (wp.isfinite(origin) and wp.isfinite(direction) and wp.max(wp.abs(direction)) > 0.0
-                 and not wp.isnan(minimum) and not wp.isnan(maximum)
-                 and minimum <= maximum and minimum != wp.inf and maximum != -wp.inf
-                 and excluded >= -1 and excluded < tree.prim_ids.shape[0])
-        if wp.static(mode in ("first", "any")):
-            valid = valid and minimum >= 0.0 and wp.dot(direction, direction) > 1.e-30
-        if not valid:
-            out_status[qi] = -1
+                store_array(times, wp.int64(qi)*wp.int64(times.shape[1])+wp.int64(j), wp.inf)
+                store_array(faces, wp.int64(qi)*wp.int64(faces.shape[1])+wp.int64(j), -1)
+        valid = valid_ray(origin, direction, minimum, maximum, excluded,
+                          tree.prim_ids.shape[0], wp.static(half_open), wp.static(exclusion))
+        state = State()
+        state.limit = maximum
+        state.index = -1
+        if valid:
+            ctx = Context()
+            o, d = wp.vec3(origin[0], origin[1], 0.0), wp.vec3(direction[0], direction[1], 0.0)
+            if wp.static(primitive.dimension == 3):
+                o[2] = origin[2]
+                d[2] = direction[2]
+            ctx.ray = prepare_ray(o, d)
+            ctx.minimum = minimum
+            ctx.excluded = excluded
+            ctx.geometry = geometry
+            ctx.qi = qi
+            if wp.static(mode == "all"):
+                ctx.times = times
+                ctx.faces = faces
+            wp.static(walk)(tree, ctx, state)
+        else:
+            state.failed = True
+        if state.failed:
+            store_array(out_status, qi, -1)
             if wp.static(half_open):
-                out_count[qi] = -1
-            return
-        if tree.node_left.shape[0] == 0:
-            return
-        root = ray_box(origin, direction, tree.node_lower[0], tree.node_upper[0], minimum, maximum)
-        if root[1] == 0.0:
-            return
-        node, size, count, best_id = int(0), int(0), int(0), int(-1)
-        best = float(maximum)
-        failed = bool(False)
-        stack = Stack()
-        while True:
-            if tree.node_leaf_count[node] > 0:
-                offset = tree.node_leaf_offset[node]
-                for j in range(tree.node_leaf_count[node]):
-                    slot = offset+j
-                    face = tree.prim_ids[slot]+0
-                    if wp.static(exclusion):
-                        if face == excluded:
-                            continue
-                    hit = wp.static(intersect)(origin, direction, minimum, best, geometry,
-                                                slot, wp.static(half_open), wp.static(store_times))
-                    if hit[1] < 0.0:
-                        failed = True
-                        break
-                    if hit[1] > 0.0:
-                        if wp.static(mode == "any"):
-                            out_count[qi] = 1
-                            out_status[qi] = 1
-                            return
-                        elif wp.static(mode == "first"):
-                            if hit[0] < best or best_id < 0 or (hit[0] == best and face < best_id):
-                                best, best_id = hit[0]+0.0, face
-                        else:
-                            if wp.static(mode == "all"):
-                                if count < times.shape[1]:
-                                    times[qi, count] = hit[0]
-                                    faces[qi, count] = face
-                            count += 1
-                if failed:
-                    break
-            else:
-                left, right = tree.node_left[node]+0, tree.node_right[node]+0
-                a = ray_box(origin, direction, tree.node_lower[left], tree.node_upper[left], minimum, best)
-                b = ray_box(origin, direction, tree.node_lower[right], tree.node_upper[right], minimum, best)
-                if a[1] > 0.0 and b[1] > 0.0:
-                    if size == wp.static(stack_capacity):
-                        failed = True
-                        break
-                    near, far = left, right
-                    if wp.static(mode in ("first", "any")):
-                        if b[0] < a[0]:
-                            near, far = right, left
-                    stack[size] = far
-                    size += 1
-                    node = near
-                    continue
-                if a[1] > 0.0 or b[1] > 0.0:
-                    node = wp.where(a[1] > 0.0, left, right)
-                    continue
-            if size == 0:
-                break
-            size -= 1
-            node = stack[size]+0
-        if failed:
-            out_status[qi] = -1
-            if wp.static(half_open):
-                out_count[qi] = -1
+                store_array(out_count, qi, -1)
             if wp.static(mode == "all"):
                 for j in range(times.shape[1]):
-                    times[qi, j] = wp.inf
-                    faces[qi, j] = -1
-        elif wp.static(mode == "first"):
-            if best_id >= 0:
-                times[qi] = best
-                faces[qi] = best_id
-                out_count[qi] = 1
-                out_status[qi] = 1
+                    store_array(times, wp.int64(qi)*wp.int64(times.shape[1])+wp.int64(j), wp.inf)
+                    store_array(faces, wp.int64(qi)*wp.int64(faces.shape[1])+wp.int64(j), -1)
         else:
-            out_count[qi] = count
-            out_status[qi] = wp.int32(count > 0)
+            if wp.static(mode == "first"):
+                if state.index >= 0:
+                    store_array(times, qi, state.limit)
+                    store_array(faces, qi, state.index)
+                    state.count = 1
+            store_array(out_count, qi, state.count)
+            store_array(out_status, qi, wp.int32(state.count > 0))
             if wp.static(mode == "all"):
-                if count > times.shape[1]:
-                    out_status[qi] = -2
+                if state.count > times.shape[1]:
+                    store_array(out_status, qi, -2)
 
     outputs = [("out_count", wp.array(dtype=wp.int32)), ("out_status", wp.array(dtype=wp.int32))]
     times, faces = "out_count", "out_status"
-    if mode in ("first", "all"):
+    if store_times:
         array = wp.array2d if mode == "all" else wp.array
         outputs = [("out_t", array(dtype=wp.float32)), ("out_face", array(dtype=wp.int32)), *outputs]
         times, faces = "out_t", "out_face"
@@ -186,16 +213,8 @@ def make_ray_query(primitive, mode="first", *, exclude=False,
               ("minimum", wp.array(dtype=wp.float32)), ("maximum", wp.array(dtype=wp.float32))]
     if exclusion:
         inputs.append(("excluded", wp.array(dtype=wp.int32)))
-    excluded = "excluded[i]" if exclusion else "-1"
-    body = [f"wp.static(ray)(i, origins[i], directions[i], minimum[i], maximum[i], {excluded}, "
+    excluded = "load_array(excluded, i)" if exclusion else "-1"
+    body = [f"wp.static(ray_query)(i, load_array(origins, i), load_array(directions, i), load_array(minimum, i), load_array(maximum, i), {excluded}, "
             f"tree, geometry, {times}, {faces}, out_count, out_status)"]
-    native = None
-    if is_native_triangle(primitive, stack_capacity) and (half_open or not exclusion):
-        if half_open:
-            from ._warp_crossings import native_all_hits, native_count_hits
-            native = native_all_hits if mode == "all" else native_count_hits
-        else:
-            from ._warp_ray import native_any_hit, native_first_hit
-            native = native_first_hit if mode == "first" else native_any_hit
-    return bind_query(RayQuery, "ray_kernel", primitive, inputs, outputs, body, {"ray": ray}, block_dim,
-                       native=native, id_field="out_face", excluded=excluded, mode=mode, exclusion=exclusion)
+    return bind_query(RayQuery, "ray_kernel", primitive, inputs, outputs, body,
+                      {"ray_query": ray_query}, block_dim, mode=mode, exclusion=exclusion)

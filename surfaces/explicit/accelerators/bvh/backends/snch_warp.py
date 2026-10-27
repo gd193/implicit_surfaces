@@ -9,9 +9,8 @@ from surfaces.explicit.accelerators.registry import register_backend
 from surfaces.explicit.primitives import Primitives
 
 from ._warp_build import finite_primitive_bounds, validate_warp_mesh_and_config
-from ._warp_jax import query as _warp_query
 from ._warp_layout import empty_warp_payload, make_warp_payload, with_robin_coefficients
-from .sah_warp import BVHSahWarpBackend, _flatten_vec_queries, _restore
+from .sah_warp import BVHSahWarpBackend, _factory_data, _factory_boundary
 from .snch_jax import _build_payload_snch
 
 
@@ -70,39 +69,26 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
 
     def closest_silhouette_with_status(self, payload, x,
                                        max_distance=jnp.inf):
-        q, shape = _flatten_vec_queries(x)
-        cap = jnp.broadcast_to(jnp.asarray(max_distance, jnp.float32), shape).reshape((-1,))
-        cp, dist, edge, status = _warp_query("closest_silhouette_kernel", payload, q, cap)
-        return (_restore(cp, shape),
-                _restore(dist, shape),
-                _restore(edge, shape),
-                _restore(status, shape))
+        from ._warp_silhouette import make_silhouette
+
+        primitive, tree, geometry = _factory_data(payload)
+        return make_silhouette(primitive)(tree, geometry, _factory_boundary(payload), x, max_distance)
 
     def sample_boundary(self, payload, points, radii, randoms):
-        """(point, normal, area_pdf, face, status); retain null trials (status 0)."""
-        q, shape = _flatten_vec_queries(points)
-        rad = jnp.broadcast_to(jnp.asarray(radii, jnp.float32), shape).reshape((-1,))
-        rnd = jnp.asarray(randoms, jnp.float32)
-        if rnd.shape[-1:] != (3,):
-            raise ValueError("randoms must have shape (..., 3)")
-        rnd = jnp.broadcast_to(rnd, shape + (3,)).reshape((-1, 3))
-        point, normal, pdf, prim, status = _warp_query(
-            "sample_boundary_kernel", payload, q, rad, rnd)
-        return (_restore(point, shape), _restore(normal, shape),
-                _restore(pdf, shape), _restore(prim, shape),
-                _restore(status, shape))
+        from ._warp_boundary_queries import SamplingData, make_boundary_sample
+
+        primitive, tree, geometry = _factory_data(payload)
+        data = SamplingData(payload.tri_area, payload.node_area)
+        return make_boundary_sample(primitive)(tree, geometry, data, points, radii, randoms)
 
     def star_radius(self, payload, points, cap):
         return self.star_radius_with_status(payload, points, cap)[0]
 
     def star_radius_with_status(self, payload, points, cap):
-        _, distance, _, status = self.closest_silhouette_with_status(
-            payload, points, max_distance=cap)
-        cap = jnp.asarray(cap, jnp.float32)
-        valid = (status >= 0) & (cap >= 0.0) & ~jnp.isnan(cap)
-        radius = jnp.minimum(cap, distance)
-        return (jnp.where(valid, radius, jnp.nan),
-                jnp.where(valid, 1, -1).astype(jnp.int32))
+        from ._warp_silhouette import make_star_radius
+
+        primitive, tree, geometry = _factory_data(payload)
+        return make_star_radius(primitive)(tree, geometry, _factory_boundary(payload), points, cap)
 
     def with_robin_coefficients(self, payload, minimum, maximum=None):
         return with_robin_coefficients(payload, minimum, maximum)
@@ -111,9 +97,12 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
         return self.robin_radius_with_status(payload, points, cap)[0]
 
     def robin_radius_with_status(self, payload, points, cap):
+        from ._warp_boundary_queries import CoefficientData, RobinData, make_robin_radius
+
         if payload.node_robin_bounds.shape != (payload.node_left.shape[0], 2):
             raise ValueError("configure Robin coefficients with with_robin_coefficients first")
-        q, shape = _flatten_vec_queries(points)
-        caps = jnp.broadcast_to(jnp.asarray(cap, jnp.float32), shape).reshape((-1,))
-        radius, status = _warp_query("robin_radius_kernel", payload, q, caps)
-        return _restore(radius, shape), _restore(status, shape)
+        primitive, tree, geometry = _factory_data(payload)
+        boundary = _factory_boundary(payload)
+        data = RobinData(boundary.core, boundary.silhouette,
+                         CoefficientData(payload.tri_robin_bounds, payload.node_robin_bounds))
+        return make_robin_radius(primitive)(tree, geometry, data, points, cap)

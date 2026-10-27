@@ -7,7 +7,7 @@ import numpy as np
 from surfaces.explicit.accelerators.protocol import Config
 from surfaces.explicit.primitives import Primitives, TriMeshPrimitives
 
-from ._warp_specs import STACK_CAPACITY
+from ._warp_tree import STACK_CAPACITY
 
 
 def validate_warp_mesh_and_config(

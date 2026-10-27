@@ -19,6 +19,9 @@ class NearestOps:
     to_distance: Any
     cull_limit: Any
     node_bound_with_data: Any = None
+    viewpoint: Any = None
+    cull_items: bool = True
+    node_filter: Any = None
 
 
 PrimitiveT = TypeVar("PrimitiveT", contravariant=True)
@@ -56,7 +59,7 @@ class Euclidean:
             point = wp.static(closest_primitive)(query, item)
             delta = query-point
             score = wp.dot(delta, delta)
-            return point, wp.where(wp.isfinite(score), score, wp.nan)
+            return point, wp.where(score < wp.inf, score, wp.nan)
 
         @wp.func
         def to_score(distance: float):
@@ -70,10 +73,16 @@ class Euclidean:
         def cull_limit(query: Vec, score: float):
             return score*1.000002 + 1.e-12*wp.dot(query, query)
 
-        return NearestOps(Vec, (dimension,), valid, bound, closest, to_score, to_distance, cull_limit)
+        @wp.func
+        def viewpoint(query: Vec):
+            if wp.static(dimension == 2):
+                return wp.vec3(query[0], query[1], 0.0)
+            else:
+                return query
 
+        return NearestOps(Vec, (dimension,), valid, bound, closest, to_score, to_distance,
+                          cull_limit, viewpoint=viewpoint)
 
-AngularQuery = wp.types.matrix((2, 3), wp.float32)
 
 _ANGLE = r"""
     using V = wp::vec_t<3,double>;
@@ -90,75 +99,92 @@ _ANGLE = r"""
 class Angular:
     @lru_cache(maxsize=None)
     def bind(self, primitive):
-        if getattr(primitive, "name", None) not in ("segments", "silhouette_edges") or primitive.dimension != 3:
-            raise TypeError("Angular supports 3D segments")
+        endpoints = getattr(primitive, "segment_endpoints", None)
+        if endpoints is None:
+            raise TypeError("Angular requires a point or segment endpoint operation")
+        dimension, Vec = primitive.dimension, primitive.point_type
+        Query = wp.types.matrix((2, dimension), wp.float32)
+        source = _ANGLE
+        if dimension == 2:
+            source = source.replace("query.data[0][2]", "0.0").replace("query.data[1][2]", "0.0")
+        def coordinates(name):
+            return f"V({name}[0],{name}[1],"+(f"{name}[2])" if dimension == 3 else "0.0)")
         @wp.func
-        def valid(query: AngularQuery):
+        def valid(query: Query):
             return wp.isfinite(query) and wp.max(wp.abs(query[1])) > 0.0
 
-        @wp.func_native(_ANGLE + r"""
+        @wp.func_native(source + r"""
             const V view=.5*(V(lower)+V(upper))-origin, extent=.5*(V(upper)-V(lower));
             const double length2=wp::dot(view,view), radius2=wp::dot(extent,extent);
             if (length2 <= radius2) return 0.f;
             const double lower_angle=angle(view)-asin(sqrt(radius2/length2));
             return static_cast<float>(wp::max(0.0,lower_angle-4.e-7));
         """)
-        def bound(query: AngularQuery, lower: wp.vec3, upper: wp.vec3) -> float: ...
+        def bound(query: Query, lower: wp.vec3, upper: wp.vec3) -> float: ...
 
-        @wp.func_native(_ANGLE + r"""
-            wp::vec3 best = a;
-            float score = static_cast<float>(angle(V(a)-origin));
-            float other = static_cast<float>(angle(V(b)-origin));
-            if (other < score) { best=b; score=other; }
-            const V view=V(a)-origin, edge=V(b)-V(a);
+        @wp.func_native(source + r"""
+            const V va=VERTEX_A, vb=VERTEX_B;
+            wp::vec3 best(va);
+            float score = static_cast<float>(angle(va-origin));
+            float other = static_cast<float>(angle(vb-origin));
+            if (other < score) { best=wp::vec3(vb); score=other; }
+            const V view=va-origin, edge=vb-va;
             const double alpha=wp::dot(direction,view), beta=wp::dot(direction,edge);
             const double c=wp::dot(view,view), d=wp::dot(view,edge), f=wp::dot(edge,edge);
             const double denominator=beta*d-alpha*f;
             if (denominator != 0) {
                 const double t=(alpha*d-beta*c)/denominator;
                 if (t > 0 && t < 1) {
-                    const wp::vec3 point(V(a)+t*edge);
+                    const wp::vec3 point(va+t*edge);
                     other=static_cast<float>(angle(V(point)-origin));
                     if (other < score) { best=point; score=other; }
                 }
             }
             return wp::vec4(best[0],best[1],best[2],score);
-        """)
-        def segment(query: AngularQuery, a: wp.vec3, b: wp.vec3) -> wp.vec4: ...
+        """.replace("VERTEX_A", coordinates("a")).replace("VERTEX_B", coordinates("b")))
+        def segment(query: Query, a: Vec, b: Vec) -> wp.vec4: ...
 
         @wp.func
-        def closest(query: AngularQuery, item: Any):
-            result = segment(query, item.a, item.b)
-            return wp.vec3(result[0], result[1], result[2]), result[3]
+        def closest(query: Query, item: Any):
+            a, b = wp.static(endpoints)(item)
+            result = segment(query, a, b)
+            if wp.static(dimension == 2):
+                return wp.vec2(result[0], result[1]), result[3]
+            else:
+                return wp.vec3(result[0], result[1], result[2]), result[3]
 
         @wp.func
         def identity(value: float):
             return value
 
         @wp.func
-        def cull_limit(query: AngularQuery, score: float):
+        def cull_limit(query: Query, score: float):
             return score + 4.e-7
 
-        return NearestOps(AngularQuery, (2, 3), valid, bound, closest,
-                          identity, identity, cull_limit)
+        @wp.func
+        def viewpoint(query: Query):
+            if wp.static(dimension == 2):
+                return wp.vec3(query[0, 0], query[0, 1], 0.0)
+            else:
+                return wp.vec3(query[0, 0], query[0, 1], query[0, 2])
+
+        return NearestOps(Query, (2, dimension), valid, bound, closest,
+                          identity, identity, cull_limit, viewpoint=viewpoint)
 
 
 @dataclass(frozen=True)
 class Silhouette:
     def bind(self, primitive, ops):
-        if getattr(primitive, "name", None) != "silhouette_edges":
-            raise TypeError("Silhouette requires edge endpoints and adjacent normals")
-        Query = ops.query_type
-        angular = ops.query_shape == (2, 3)
+        normal_sides = getattr(primitive, "normal_sides", None)
+        if normal_sides is None or ops.viewpoint is None:
+            raise TypeError("Silhouette requires adjacent normals and a metric viewpoint")
+        Query, viewpoint = ops.query_type, ops.viewpoint
 
         @wp.func
         def accepts(query: Query, item: Any):
-            if wp.static(angular):
-                origin = wp.vec3(query[0, 0], query[0, 1], query[0, 2])
-            else:
-                origin = query
-            view = origin-item.a
-            a, b = wp.dot(view, item.n0), wp.dot(view, item.n1)
+            anchor, n0, n1 = wp.static(normal_sides)(item)
+            view = wp.static(viewpoint)(query)-anchor
+            a, b = wp.dot(view, n0), wp.dot(view, n1)
             return (a <= 0.0 and b >= 0.0) or (a >= 0.0 and b <= 0.0)
 
         return accepts

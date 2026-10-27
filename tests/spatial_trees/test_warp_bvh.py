@@ -9,7 +9,6 @@ import trimesh
 
 from surfaces.explicit.accelerators import BVHAccelerator
 from surfaces.explicit.accelerators.protocol import Config
-from surfaces.explicit.accelerators.bvh.backends._warp_specs import query_spec
 
 
 from ._warp_helpers import (WARP_BVHS, SAH_WARP, _mesh, _sphere, _build,
@@ -297,22 +296,23 @@ def test_warp_payload_reuse_nested_vmap_jit_and_lax_loop(backend_name):
     probe = jax.make_jaxpr(jax.vmap(
         lambda payload, q: backend.closest_point(payload, q),
         in_axes=(None, 0)))(accel.payload, jnp.zeros((batch, 3), jnp.float32))
-    source_shapes = [tuple(x.shape) for x in query_spec(
-        "closest_point_kernel").payload_arguments(accel.payload)]
-    traced_shapes = set()
-    jaxpr = probe.jaxpr
-    traced_vars = list(jaxpr.constvars) + list(jaxpr.invars) + list(jaxpr.outvars)
-    for eqn in jaxpr.eqns:
-        traced_vars.extend(eqn.invars)
-        traced_vars.extend(eqn.outvars)
-    for var in traced_vars:
-        aval = getattr(var, "aval", None)
-        if aval is not None and hasattr(aval, "shape"):
-            traced_shapes.add(tuple(aval.shape))
-    tiled_shapes = {(batch,) + shape for shape in source_shapes}
-    assert not (traced_shapes & tiled_shapes), (
-        "vmap physically tiled one or more BVH payload arrays: "
-        f"{sorted(traced_shapes & tiled_shapes)}")
+    from surfaces.explicit.accelerators.bvh.backends.sah_warp import _factory_data
+    _, source_tree, source_geometry = _factory_data(accel.payload)
+    source_shapes = [tuple(x.shape) for x in (*source_tree, *source_geometry)]
+    def ffi_inputs(jaxpr):
+        calls = []
+        for eqn in jaxpr.eqns:
+            if eqn.primitive.name == "ffi_call":
+                calls.append([tuple(var.aval.shape) for var in eqn.invars])
+            for value in eqn.params.values():
+                nested = getattr(value, "jaxpr", value)
+                if hasattr(nested, "eqns"):
+                    calls.extend(ffi_inputs(nested))
+        return calls
+
+    calls = ffi_inputs(probe.jaxpr)
+    assert len(calls) == 1
+    assert calls[0][-len(source_shapes):] == source_shapes
 
     def loop(payload, points):
         out = jnp.zeros_like(points)

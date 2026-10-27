@@ -5,14 +5,12 @@ from __future__ import annotations
 # ruff: noqa: E402
 
 import argparse
-from dataclasses import dataclass, field
 import hashlib
 import importlib.metadata
 import json
 import os
 from pathlib import Path
 import sys
-from typing import Any
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 ROOT = Path(__file__).resolve().parents[3]
@@ -24,13 +22,15 @@ import numpy as np
 import warp as wp
 
 from scripts.bench.spatial_trees._warp_fixtures import _mesh, _queries
+from scripts.bench.spatial_trees._warp_timing import _array_digest, _make_case, _measure as measure
 from surfaces.explicit.accelerators import BVHAccelerator
 from surfaces.explicit.accelerators.protocol import Config
 from surfaces.explicit.accelerators.bvh.backends._warp_geometry import finite3
-from surfaces.explicit.accelerators.bvh.backends._warp_specs import (
-    QUERY_SPECS, query_kernel, query_spec,
-)
-
+_BLOCK_DIMS = {
+    "first_hit": 128, "any_hit": 128, "count_hits": 128, "all_hits": 128,
+    "closest_point": 64, "classify_point": 128, "aabb_overlap": 256,
+    "closest_silhouette": 64, "sample_boundary": 256, "robin_radius": 64,
+}
 
 @wp.func
 def _valid_ray(o: wp.vec3, d: wp.vec3, lo: float, hi: float) -> bool:
@@ -158,100 +158,101 @@ def _native_any_hit(
         out_status[i] = 1
 
 
-def _array_digest(values) -> str:
-    digest = hashlib.sha256()
-    for value in values:
-        array = np.asarray(value)
-        digest.update(str(array.shape).encode())
-        digest.update(array.dtype.str.encode())
-        digest.update(array.tobytes(order="C"))
-    return digest.hexdigest()
-
-
-@dataclass
-class _Case:
-    query: str
-    implementation: str
-    kernel: Any
-    inputs: list[Any]
-    outputs: list[Any]
-    block_dim: int
-    graph: Any = None
-    samples_ms: list[float] = field(default_factory=list)
-
-
-def _make_case(query, implementation, kernel, inputs, n, device, block_dim, output_shapes=None):
-    spec = query_spec(query+"_kernel")
-    shapes = output_shapes or ((n,),) * spec.num_outputs
-    outputs = [wp.empty(shape, dtype=parameter.type.dtype, device=device)
-               for shape, parameter in zip(shapes, kernel.adj.args[-spec.num_outputs:], strict=True)]
-    converted = [wp.from_jax(value, dtype=parameter.type.dtype)
-                 if isinstance(value, jax.Array) else value
-                 for value, parameter in zip(inputs, kernel.adj.args, strict=False)]
-    return _Case(query, implementation, kernel, converted, outputs, block_dim)
+def _validate_case(case, got, reference):
+    if case.query == "closest_point":
+        found = got[3] == 1
+        distance = np.linalg.norm(got[0][found]-case.inputs[0].numpy()[found], axis=1)
+        np.testing.assert_allclose(got[1][found], distance, atol=3e-5, rtol=3e-5)
+        assert np.all(got[2][found] >= 0)
+    if case.query == "all_hits":
+        count = got[2]
+        slots = np.arange(got[0].shape[1])[None, :] < count[:, None]
+        assert np.all(got[3] >= 0), "increase --max-hits to avoid output overflow"
+        assert np.all(np.isfinite(got[0][slots])) and np.all(got[1][slots] >= 0)
+        np.testing.assert_array_equal(got[1][~slots], -1)
+        order = np.argsort(got[1], axis=-1)
+        got = (np.take_along_axis(got[0], order, axis=-1),
+               np.take_along_axis(got[1], order, axis=-1), *got[2:])
+    if case.implementation == "custom":
+        reference[case.query] = got
+    elif case.query == "first_hit":
+        np.testing.assert_allclose(got[0], reference[case.query][0], atol=3e-5, rtol=3e-5)
+        for actual, expected in zip(got[1:], reference[case.query][1:], strict=True):
+            np.testing.assert_array_equal(actual, expected)
+    elif case.query == "closest_point":
+        # Native Warp uses different tie and sliver rules.
+        np.testing.assert_allclose(got[1], reference[case.query][1], atol=3e-5, rtol=3e-5)
+        np.testing.assert_array_equal(got[3], reference[case.query][3])
+    else:
+        for actual, expected in zip(got, reference[case.query], strict=True):
+            if np.issubdtype(actual.dtype, np.floating):
+                np.testing.assert_allclose(actual, expected, atol=3e-5, rtol=3e-5)
+            else:
+                np.testing.assert_array_equal(actual, expected)
 
 
 def _measure(cases, n, device, launches, repeats):
-    # Keep input owners alive for captured graphs.
-    def launch(case):
-        wp.launch(case.kernel, n, inputs=case.inputs, outputs=case.outputs,
-                  device=device, block_dim=case.block_dim)
+    reference = {}
+    measure(cases, n, device, launches, repeats,
+            validate=lambda case, got: _validate_case(case, got, reference))
+    if "count_hits" in reference and "all_hits" in reference:
+        np.testing.assert_array_equal(reference["count_hits"][0], reference["all_hits"][2])
+        np.testing.assert_array_equal(reference["count_hits"][1], reference["all_hits"][3])
 
-    with wp.ScopedDevice(device):
-        reference = {}
-        for case in cases:
-            for _ in range(5):
-                launch(case)
-            got = tuple(array.numpy() for array in case.outputs)
-            if case.query == "closest_point":
-                found = got[3] == 1
-                distance = np.linalg.norm(got[0][found]-case.inputs[0].numpy()[found], axis=1)
-                np.testing.assert_allclose(got[1][found], distance, atol=3e-5, rtol=3e-5)
-                assert np.all(got[2][found] >= 0)
-            if case.query == "all_hits":
-                count = got[2]
-                slots = np.arange(got[0].shape[1])[None, :] < count[:, None]
-                assert np.all(got[3] >= 0), "increase --max-hits to avoid output overflow"
-                assert np.all(np.isfinite(got[0][slots])) and np.all(got[1][slots] >= 0)
-                np.testing.assert_array_equal(got[1][~slots], -1)
-            if case.implementation == "custom":
-                reference[case.query] = got
-            elif case.query == "first_hit":
-                np.testing.assert_allclose(got[0], reference[case.query][0], atol=3e-5, rtol=3e-5)
-                for actual, expected in zip(got[1:], reference[case.query][1:], strict=True):
-                    np.testing.assert_array_equal(actual, expected)
-            elif case.query == "closest_point":
-                # Native Warp uses different tie and sliver rules.
-                np.testing.assert_allclose(got[1], reference[case.query][1], atol=3e-5, rtol=3e-5)
-                np.testing.assert_array_equal(got[3], reference[case.query][3])
-            else:
-                for actual, expected in zip(got, reference[case.query], strict=True):
-                    np.testing.assert_array_equal(actual, expected)
-            with wp.ScopedCapture(device=device) as capture:
-                for _ in range(launches):
-                    launch(case)
-            case.graph = capture.graph
-            wp.capture_launch(case.graph)
-            wp.synchronize_device(device)
 
-        if "count_hits" in reference and "all_hits" in reference:
-            np.testing.assert_array_equal(reference["count_hits"][0], reference["all_hits"][2])
-            np.testing.assert_array_equal(reference["count_hits"][1], reference["all_hits"][3])
-        start, stop = wp.Event(enable_timing=True), wp.Event(enable_timing=True)
-        for repeat in range(repeats):
-            for index in np.random.default_rng(404+repeat).permutation(len(cases)):
-                case = cases[index]
-                wp.record_event(start)
-                wp.capture_launch(case.graph)
-                wp.record_event(stop)
-                case.samples_ms.append(wp.get_event_elapsed_time(start, stop)/launches)
+def _factory_case(query, primitive, tree, geometry, payload, query_args, n, block_dim):
+    from surfaces.explicit.accelerators.bvh.warp import (
+        Euclidean, make_nearest, make_ray_query, make_classify, make_overlap,
+        make_silhouette, make_boundary_sample, make_robin_radius,
+    )
+    from surfaces.explicit.accelerators.bvh.backends.sah_warp import _factory_boundary
+    from surfaces.explicit.accelerators.bvh.backends._warp_boundary_queries import (
+        SamplingData, CoefficientData, RobinData,
+    )
+
+
+    capacity, metadata = 64, []
+    if query == "closest_point":
+        call = make_nearest(primitive, Euclidean(),
+                            stack_capacity=capacity, block_dim=block_dim)
+        args = [query_args[0], jnp.full((n,), jnp.inf)]
+    elif query in ("first_hit", "any_hit", "count_hits", "all_hits"):
+        mode = {"first_hit": "first", "any_hit": "any", "count_hits": "count", "all_hits": "all"}[query]
+        call = make_ray_query(primitive, mode, stack_capacity=capacity, block_dim=block_dim)
+        args = query_args
+    elif query == "aabb_overlap":
+        call = make_overlap(primitive,
+                            stack_capacity=capacity, block_dim=block_dim)
+        args = query_args
+    else:
+        boundary = _factory_boundary(payload)
+        args = query_args
+        if query == "classify_point":
+            call = make_classify(primitive, stack_capacity=capacity, block_dim=block_dim)
+            metadata = [boundary.core]
+        elif query == "closest_silhouette":
+            call = make_silhouette(primitive, stack_capacity=capacity, block_dim=block_dim).query
+            geometry = boundary.silhouette
+            tree = tree._replace(node_leaf_offset=geometry.node_feature_offset,
+                node_leaf_count=geometry.node_feature_count, prim_ids=geometry.feature_refs)
+        elif query == "sample_boundary":
+            call = make_boundary_sample(primitive,
+                                        block_dim=block_dim)
+            metadata = [SamplingData(payload.tri_area, payload.node_area)]
+        elif query == "robin_radius":
+            call = make_robin_radius(primitive,
+                                    stack_capacity=capacity, block_dim=block_dim)
+            data = RobinData(boundary.core, boundary.silhouette,
+                             CoefficientData(payload.tri_robin_bounds, payload.node_robin_bounds))
+            metadata = [data.core, data.silhouette, data.coefficients]
+    return call.kernel, [*args, *tree, *geometry, *(a for group in metadata for a in group)]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=("bvh.sah.warp", "bvh.snch.warp"), default="bvh.sah.warp")
     parser.add_argument("--queries", nargs="+", default=["first_hit", "any_hit"],
-                        choices=[name.removesuffix("_kernel") for name in QUERY_SPECS])
+                        choices=list(_BLOCK_DIMS))
     parser.add_argument("--counts", nargs="+", type=int, default=[65536])
     parser.add_argument("--mesh", choices=("sphere", "torus", "open_torus"), default="sphere")
     parser.add_argument("--subdivisions", type=int, default=5, help="Icosphere subdivisions.")
@@ -266,7 +267,6 @@ def main():
     parser.add_argument("--max-hits", type=int, default=8, help="Per-query all-hit output capacity.")
     parser.add_argument("--line", action="store_true", help="Count/all-hit queries use the full line.")
     parser.add_argument("--native-warp", action="store_true", help="Check and time native mesh query references.")
-    parser.add_argument("--factory", action="store_true", help="Compare caller-specialized nearest/ray kernels.")
     parser.add_argument("--output", type=Path, default=ROOT/"assets/benchmark_results/warp_bvh_device.jsonl")
     args = parser.parse_args()
     if min(*args.counts, args.leaf_size, args.launches, args.repeats, args.max_hits) < 1:
@@ -289,7 +289,7 @@ def main():
     warp_device = wp.device_from_jax(device)
     backend_dir = ROOT/"surfaces/explicit/accelerators/bvh/backends"
     source_paths = sorted(backend_dir.glob("*warp*.py"))
-    source_paths += [backend_dir/"snch_jax.py", backend_dir/"sah_jax.py", Path(__file__), Path(__file__).with_name("_warp_fixtures.py")]
+    source_paths += [backend_dir/"snch_jax.py", backend_dir/"sah_jax.py", Path(__file__), Path(__file__).with_name("_warp_fixtures.py"), Path(__file__).with_name("_warp_timing.py")]
     source_paths.append(backend_dir.parent/"warp.py")
     sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths}
     versions = {name: importlib.metadata.version(name) for name in ("jax", "jaxlib", "warp-lang", "trimesh", "numpy")}
@@ -299,11 +299,9 @@ def main():
         tree = BVHAccelerator.build(primitives, args.backend, Config(leaf_size_threshold=args.leaf_size))
         if "robin_radius" in args.queries:
             tree = tree.with_robin_coefficients(args.robin_coefficient)
-        if args.factory:
-            from surfaces.explicit.accelerators.bvh.warp import Euclidean, make_nearest, make_ray_query
-            from surfaces.explicit.accelerators.bvh.backends.sah_warp import _factory_data
+        from surfaces.explicit.accelerators.bvh.backends.sah_warp import _factory_data
 
-            primitive, factory_tree, geometry = _factory_data(tree.payload)
+        primitive, factory_tree, geometry = _factory_data(tree.payload)
         mesh = None
         if args.native_warp:
             mesh = wp.Mesh(points=wp.from_jax(primitives.mesh.vertices, dtype=wp.vec3),
@@ -329,24 +327,12 @@ def main():
             }
             cases = []
             for query in args.queries:
-                name = query+"_kernel"
-                spec = query_spec(name)
-                block_dim = args.block_dim or spec.block_dim
-                inputs = [*query_inputs[query], *spec.payload_arguments(tree.payload)]
+                block_dim = args.block_dim or _BLOCK_DIMS[query]
                 shapes = (((n, args.max_hits), (n, args.max_hits), (n,), (n,))
                           if query == "all_hits" else None)
-                cases.append(_make_case(query, "custom", query_kernel(name), inputs,
-                                        n, warp_device, block_dim, shapes))
-                if args.factory and query in ("closest_point", "first_hit", "any_hit", "count_hits", "all_hits"):
-                    if query == "closest_point":
-                        specialized = make_nearest(primitive, Euclidean(), block_dim=block_dim)
-                        factory_args = [points, jnp.full((n,), jnp.inf)]
-                    else:
-                        mode = {"first_hit": "first", "any_hit": "any", "count_hits": "count", "all_hits": "all"}[query]
-                        specialized = make_ray_query(primitive, mode, block_dim=block_dim)
-                        factory_args = list(query_inputs[query])
-                    cases.append(_make_case(query, "factory", specialized.kernel,
-                        [*factory_args, *factory_tree, *geometry], n, warp_device, block_dim, shapes))
+                kernel, inputs = _factory_case(query, primitive, factory_tree, geometry,
+                    tree.payload, query_inputs[query], n, block_dim)
+                cases.append(_make_case(query, "custom", kernel, inputs, n, warp_device, block_dim, shapes))
                 native_kernel = {"count_hits": _native_count_hits, "classify_point": _native_classify_point,
                                  "closest_point": _native_closest_point,
                                  "first_hit": _native_first_hit, "any_hit": _native_any_hit}.get(query)
@@ -354,6 +340,8 @@ def main():
                     cases.append(_make_case(query, "native_mesh", native_kernel,
                                             [*query_inputs[query], mesh.id], n, warp_device, block_dim))
             _measure(cases, n, warp_device, args.launches, args.repeats)
+            if any(hashlib.sha256((ROOT/p).read_bytes()).hexdigest() != digest for p, digest in sources.items()):
+                raise RuntimeError("benchmark sources changed during measurement")
             for case in cases:
                 record = dict(
                     query=case.query, implementation=case.implementation,
@@ -364,7 +352,7 @@ def main():
                     radius=args.radius, gpu=warp_device.name, versions=versions,
                     geometry_sha256=geometry_hash, query_sha256=_array_digest(query_inputs[case.query]),
                     source_sha256=sources, metric="cuda_event_graph_kernel_ms",
-                    launches_per_graph=args.launches, repeats=args.repeats,
+                    launches_per_graph=args.launches, repeats=args.repeats, stack_capacity=64,
                     device_p50_ms=float(np.median(case.samples_ms)), device_samples_ms=case.samples_ms,
                     properties=wp.get_cuda_kernel_properties(case.kernel, device=warp_device, block_dim=case.block_dim),
                     result_count=int(np.count_nonzero(case.outputs[-1].numpy() == 1)),

@@ -141,12 +141,11 @@ def test_robin_empty_geometry_zero_cap_and_dynamic_cap():
     robin = tree.with_robin_coefficients(1.)
     points = jnp.asarray([[0., 0., 0.], [1., 2., 3.]], dtype=jnp.float32)
     query = jax.jit(jax.vmap(robin.robin_radius_with_status))
-    r0, s0 = query(points, jnp.asarray([0., 2.]))
-    np.testing.assert_array_equal(r0, [0., 2.])
-    np.testing.assert_array_equal(s0, [1, 1])
-    r1, s1 = query(points, jnp.asarray([1., 0.]))
-    np.testing.assert_array_equal(r1, [1., 0.])
-    np.testing.assert_array_equal(s1, [1, 1])
+    for caps in ([0., 2.], [1., 0.], [1.e-30, jnp.inf]):
+        caps = jnp.asarray(caps, jnp.float32)
+        radius, status = query(points, caps)
+        np.testing.assert_array_equal(radius, caps)
+        np.testing.assert_array_equal(status, [1, 1])
 
 
 @pytest.mark.parametrize("shape", ["sphere", "torus"])
