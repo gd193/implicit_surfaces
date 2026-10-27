@@ -123,20 +123,22 @@ def sample_uniform_1sphere(key: jax.Array, dtype: jnp.dtype) -> jnp.ndarray:
     return jnp.array([jnp.cos(theta), jnp.sin(theta)])
 
 
-def sample_uniform_2sphere(key: jax.Array, dtype: jnp.dtype) -> jnp.ndarray:
+def sample_uniform_2sphere(key: jax.Array, dtype: jnp.dtype, shape=()) -> jnp.ndarray:
     """
     Sample a point uniformly on the surface of a unit 2-sphere (sphere in 3D).
     Taken from Mitsuba https://github.com/mitsuba-renderer/mitsuba3/blob/master/include/mitsuba/core/warp.h square_to_uniform_sphere
     Args:
         key: jax.random.PRNGKey
+        dtype: floating-point dtype
+        shape: leading batch dimensions
     Returns:
-        jnp.ndarray of shape (3,) sampled point on the unit sphere
+        jnp.ndarray of shape (*shape, 3) sampled points on the unit sphere
     """
-    uv = jr.uniform(key, shape=(2,), minval=0.0, maxval=1.0, dtype=dtype)
-    z = 2.0 * uv[0] - 1.0
+    uv = jr.uniform(key, shape=(*shape, 2), minval=0.0, maxval=1.0, dtype=dtype)
+    z = 2.0 * uv[..., 0] - 1.0
     r = jnp.sqrt(jnp.maximum(0.0, 1.0 - z * z))
-    phi = 2.0 * jnp.pi * uv[1]
-    return jnp.array([r * jnp.cos(phi), r * jnp.sin(phi), z])
+    phi = 2.0 * jnp.pi * uv[..., 1]
+    return jnp.stack([r * jnp.cos(phi), r * jnp.sin(phi), z], axis=-1)
 
 
 def unit_interval(key: jax.Array, dtype: jnp.dtype) -> jnp.ndarray:
@@ -220,3 +222,32 @@ def weighted_greens_fn_2ball(r: jnp.ndarray, R: jnp.ndarray) -> jnp.ndarray:
     green_fn_val = 1 / (4.0 * jnp.pi) * (R - r) / safe_denom
     green_fn_val = jnp.where(safe, green_fn_val, 0.0)
     return green_fn_val * ball_volume
+
+
+def sample_green_radius(key, dim, dtype):
+    """Normalized radial density proportional to the ball Green function.
+
+    2D: 4t log(1/t), sampled as sqrt(U V).
+    3D: 6t(1-t), sampled as the median of three uniforms (Beta(2,2)).
+    Its integral over the ball is R^2/(2*dim).
+    """
+    keys = jr.split(key, 3)
+    u = jax.vmap(lambda k: unit_interval(k, dtype))(keys)
+    if dim == 2:
+        return jnp.sqrt(u[0] * u[1])
+    if dim == 3:
+        a, b, c = u
+        return jnp.maximum(jnp.minimum(a, b), jnp.minimum(jnp.maximum(a, b), c))
+    raise ValueError("Green sampling supports dimensions 2 and 3")
+
+
+def sample_green_1ball(key, dtype):
+    """Green-weighted sample in the unit disk."""
+    kr, kd = jr.split(key)
+    return sample_green_radius(kr, 2, dtype), sample_uniform_1sphere(kd, dtype)
+
+
+def sample_green_2ball(key, dtype):
+    """Green-weighted sample in the unit ball."""
+    kr, kd = jr.split(key)
+    return sample_green_radius(kr, 3, dtype), sample_uniform_2sphere(kd, dtype)

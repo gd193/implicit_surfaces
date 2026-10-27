@@ -78,6 +78,11 @@ class sdfImplicit(lipschitzImplicit):
             return sdfnd.box_inward_direction(params, position, direction, normal)
         return super().inward_direction(params, position, direction, normal)
 
+    def sample_neumann_boundary(self, params, position, radius, key):
+        if self.fn is sdfnd.bbox_sdf:
+            return sdfnd.box_sample_neumann_boundary(params, position, radius, key)
+        return super().sample_neumann_boundary(params, position, radius, key)
+
     def star_radius(self, params, position, radius_cap, *, on_boundary=False, normal=None):
         if self.fn is sdfnd.bbox_sdf:
             return sdfnd.box_star_radius(params, position, radius_cap,

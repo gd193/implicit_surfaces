@@ -49,6 +49,10 @@ class SurfaceSampler:
     epsilon is a function-value tolerance. After a hit, the minimum world-space
     advance is epsilon / lipschitz_bound. Supply a surface carrying that bound,
     an explicit bound, or a continuation callback. No unit bound is assumed.
+    crossings_only=True records sign changes, resolving distinct crossings
+    within one hit band, with a 0.01*epsilon sign hysteresis. Tangencies and
+    excursions smaller than that threshold are then omitted.
+    Finite hit-band continuation can still miss features thinner than its step.
     Incomplete sampling raises unless return_details or allow_incomplete is set.
     Prefer from_surface() for the surface-semantic interface. The old level_set
     constructor argument is ignored; callbacks already return shifted residuals.
@@ -64,7 +68,8 @@ class SurfaceSampler:
                  lipschitz_bound: float | None = None,
                  continuation: Callable | None = None,
                  query: RayQuery | None = None,
-                 update_tr_fn: Callable | None = None):
+                 update_tr_fn: Callable | None = None,
+                 crossings_only: bool = False):
         if dim not in (2, 3) or max_step < 1 or max_hits < 1:
             raise ValueError('dim must be 2 or 3; max_step and max_hits must be positive')
         if not math.isfinite(epsilon) or epsilon <= 0:
@@ -77,6 +82,7 @@ class SurfaceSampler:
         self.dim = dim
         self.max_step = max_step
         self.max_hits = max_hits
+        self.crossings_only = crossings_only
         self.epsilon = epsilon
         if lipschitz_bound is None and continuation is None:
             surface = getattr(ray_march_fn, '__self__', None)
@@ -103,10 +109,18 @@ class SurfaceSampler:
     def from_surface(cls, surface, *, max_step=256, epsilon=1e-4,
                      max_hits=16, init_trust_region_size=0.5,
                      update_tr_fn=None, **kwargs):
+        query = RayQuery.from_surface(surface, update_tr=update_tr_fn)
+        if kwargs.get('crossings_only', False):
+            # Use the same field as contains()/boundary labels. A fused bound
+            # may round its centre coefficient differently at a box seam.
+            def crossing_step(params, x, direction, trust_region):
+                _, distance, flag = surface.ray_step(params, x, direction, trust_region)
+                return surface.signed_value(params, x), distance, flag
+            query = RayQuery(crossing_step, update_tr=query.update_tr)
         return cls(surface.ray_step, level_set=0., dim=surface.dim,
                    max_step=max_step, epsilon=epsilon, max_hits=max_hits,
                    init_trust_region_size=init_trust_region_size,
-                   query=RayQuery.from_surface(surface, update_tr=update_tr_fn), **kwargs)
+                   query=query, **kwargs)
 
     def sample_rays_batched(self, key: jax.Array, 
                             bbox_mins: jnp.ndarray, 
@@ -183,11 +197,25 @@ class SurfaceSampler:
         query = self.query(params, position, state.ray_direction, state.trust_region_size)
         in_band = jnp.abs(query.residual) < self.epsilon
         valid = jnp.isfinite(query.residual) & jnp.isfinite(query.distance) & (query.distance >= 0)
-        record = in_band & ~state.in_hit_band & ~state.done_flag & valid
+        event = in_band & ~state.in_hit_band
+        hit_t = state.t
+        significant = query.residual != 0
+        if self.crossings_only:
+            # Hit bands can merge around near-tangent, closely spaced roots.
+            # Keep the previous nonzero sign so an entire band is not mistaken
+            # for one crossing. Exact zeros alone do not establish a crossing.
+            # Suppress float32 sign flicker within a small fraction of the
+            # requested field tolerance; it must not create extra crossings.
+            significant = ((jnp.abs(query.residual) > .01*self.epsilon)
+                           | (state.niter == 0) | (state.t >= state.t_max))
+            event = significant & (query.residual * state.last_value < 0)
+            fraction = state.last_value / (state.last_value - query.residual)
+            hit_t = state.last_t + fraction * (state.t - state.last_t)
+        record = event & ~state.done_flag & valid
         room = state.hit_counts < self.max_hits
         record = record & room
         slot = jnp.minimum(state.hit_counts, self.max_hits - 1)
-        hits = jnp.where(record, state.t_hits.at[slot].set(state.t), state.t_hits)
+        hits = jnp.where(record, state.t_hits.at[slot].set(hit_t), state.t_hits)
         count = state.hit_counts + record.astype(state.hit_counts.dtype)
         # The continuation is algorithm-owned and never replaces a zero safe
         # step outside the hit band. Crossing either sign is intentional.
@@ -195,7 +223,7 @@ class SurfaceSampler:
         advance = jnp.where(in_band, jnp.maximum(query.distance, escape), query.distance)
         niter = state.niter + 1
         at_exit = state.t >= state.t_max
-        overflow = in_band & ~state.in_hit_band & ~room
+        overflow = event & ~room
         capacity = count >= self.max_hits
         continuing = ~at_exit & ~capacity & (niter < self.max_step)
         valid = valid & (~continuing | (jnp.isfinite(advance) & (advance >= 0)
@@ -209,6 +237,8 @@ class SurfaceSampler:
         updated = state._replace(
             niter=niter, t=jnp.where(done, state.t, jnp.minimum(state.t + advance, state.t_max)),
             t_hits=hits, hit_counts=count, in_hit_band=in_band,
+            last_value=jnp.where(significant, query.residual, state.last_value),
+            last_t=jnp.where(significant, state.t, state.last_t),
             trust_region_size=jnp.where(done, state.trust_region_size, query.next_trust_region),
             done_flag=done, status=status,
         )
@@ -247,6 +277,7 @@ class SurfaceSampler:
             niter=jnp.zeros(n, jnp.int32), t=jnp.zeros(n, origins.dtype),
             t_hits=jnp.zeros((n, self.max_hits), origins.dtype), t_max=ends,
             hit_counts=jnp.zeros(n, jnp.int32), in_hit_band=jnp.zeros(n, bool),
+            last_value=jnp.zeros(n, origins.dtype), last_t=jnp.zeros(n, origins.dtype),
             ray_origin=origins, ray_direction=directions,
             trust_region_size=jnp.full(n, self.init_trust_region_size, origins.dtype),
             done_flag=~valid, status=status,
