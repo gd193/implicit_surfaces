@@ -12,7 +12,7 @@ Install alongside JAX, NumPy and trimesh:
 python -m pip install -r requirements-warp.txt
 ```
 
-Validated with JAX/JAXLIB 0.10.2 and Warp 1.17.0. Warp is optional; imports
+Validated with JAX/JAXLIB 0.10.2 and Warp 1.18.0. Warp is optional; imports
 and backend discovery do not initialize CUDA. Set `CUDA_VISIBLE_DEVICES`
 before starting Python. Use `JAX_PLATFORMS=cpu` for CPU execution and
 `XLA_PYTHON_CLIENT_PREALLOCATE=false` to disable JAX's GPU memory reservation.
