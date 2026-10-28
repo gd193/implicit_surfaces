@@ -9,7 +9,6 @@ import warp as wp
 
 from ._warp_domain import Ray, RayOps, prepare_ray
 from ._warp_factory import BoundQuery, bind_query
-from ._warp_geometry import _NATIVE_RAY_BOX_TEST
 from ._warp_jax import _crossing_args
 from ._warp_primitives import _struct
 from ._warp_traversal import load_array, store_array, make_walk
@@ -45,29 +44,12 @@ class RayQuery(BoundQuery):
         return result
 
 
-@wp.func_native(r"""
-    const auto o=ray.origin, d=ray.direction, inv_dir=ray.inverse;
-    const bool fast_aabb=ray.fast;
-""" + _NATIVE_RAY_BOX_TEST + r"""
-    float enter;
-    const bool hit=box_interval(lower,upper,minimum,maximum,enter);
-    return wp::vec2(enter,hit ? 1.f : 0.f);
-""")
+@wp.func_native("return bvh::ray_box(ray, lower, upper, minimum, maximum, dimension);")
 def ray_box(ray: Ray, lower: wp.vec3, upper: wp.vec3,
             minimum: float, maximum: float, dimension: int) -> wp.vec2: ...
 
 
-@wp.func_native(r"""
-    for (float v : origin.c) if (!(v == v && wp::abs(v) < 3.4028234e38f)) return false;
-    bool nonzero = false;
-    for (float v : direction.c) {
-        if (!(v == v && wp::abs(v) < 3.4028234e38f)) return false;
-        nonzero |= v != 0.f;
-    }
-    if (!(minimum <= maximum) || minimum == INFINITY || maximum == -INFINITY) return false;
-    if (exclusion && (excluded < -1 || excluded >= count)) return false;
-    return line ? nonzero : minimum >= 0.f && wp::dot(direction, direction) > 1.e-30f;
-""")
+@wp.func_native("return bvh::valid_ray(origin, direction, minimum, maximum, excluded, count, line, exclusion);")
 def valid_ray(origin: Any, direction: Any, minimum: float, maximum: float,
               excluded: int, count: int, line: bool, exclusion: bool):
     return bool(False)  # Generic native return-type inference.

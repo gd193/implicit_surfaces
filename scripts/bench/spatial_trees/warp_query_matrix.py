@@ -62,6 +62,7 @@ def main():
         parser.error("CUDA-event timings require a GPU")
     device = wp.device_from_jax(jax.devices()[0])
     paths = [*sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends").glob("*warp*.py")),
+             *sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends/native").glob("*.h")),
              ROOT/"surfaces/explicit/accelerators/bvh/backends/sah_jax.py",
              Path(__file__), Path(__file__).with_name("_warp_cases.py"), Path(__file__).with_name("_warp_timing.py")]
     sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}

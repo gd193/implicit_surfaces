@@ -305,33 +305,11 @@ def _euclidean_robin(primitive):
         return wp.static(nearest.node_bound)(query, lower, upper)
 
     if dimension == 3:
-        from ._warp_geometry import _NATIVE_POINT_GEOMETRY, _NATIVE_TRIANGLE_CLOSEST
-        from ._warp_robin import _NATIVE_ROBIN_NODE, _NATIVE_ROBIN_RADIUS_SQUARED, _NATIVE_ROBIN_TRIANGLE
-
-        @wp.func_native(_NATIVE_POINT_GEOMETRY + _NATIVE_TRIANGLE_CLOSEST
-            + _NATIVE_ROBIN_RADIUS_SQUARED + r"""
-            const auto& tri_v0 = geometry.a;
-            const auto& tri_e1 = geometry.e1;
-            const auto& tri_e2 = geometry.e2;
-            const auto& tri_normal = core.primitive_normal;
-            const auto& tri_robin_bounds = coefficients.primitive_bounds;
-            float best2 = best;
-            bool failed = false;
-            for (int k = offset; k < offset + count; ++k) {
-        """ + _NATIVE_ROBIN_TRIANGLE + r"""
-            }
-            return failed ? NAN : best2;
-        """)
+        @wp.func_native("return bvh::robin_leaf(query, geometry, core, coefficients, offset, count, best);")
         def leaf_with_data(query: Vec, geometry: Geometry, core: BoundaryCore,
                            coefficients: CoefficientMeta, offset: int, count: int, best: float) -> float: ...
 
-        @wp.func_native(_NATIVE_POINT_GEOMETRY + _NATIVE_ROBIN_RADIUS_SQUARED + r"""
-            const auto& node_robin_bounds = meta.node_bounds;
-            const auto& node_cone_axis = feature.node_cone_axis;
-            const auto& node_cone_sin_cos = feature.node_cone_sin_cos;
-            const auto& node_cone_radius = feature.node_cone_radius;
-            float best2 = best;
-        """ + _NATIVE_ROBIN_NODE)
+        @wp.func_native("bvh::robin_node(query, feature, meta, node, lower, upper, best, score, bound, skip, accepted);")
         def visit_values(query: Vec, tree: DeviceTree, geometry: Geometry, core: BoundaryCore,
                          feature: SilhouetteMeta, meta: CoefficientMeta, node: int,
                          lower: wp.vec3, upper: wp.vec3, best: float, score: wp.ref[float], bound: wp.ref[float],
