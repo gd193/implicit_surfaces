@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.ndimage import map_coordinates
 
-from sphereWalker.grid_velocity import sample_vector_grid
+from examples.fluids.grid import sample_vector_grid
 
 
 def make_vortex_stretch(sample_velocity, clearance_fn, spacing, dt):

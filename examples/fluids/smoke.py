@@ -9,9 +9,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from examples.fluids.vorticity import ring_vorticity, run3d
-from sphereWalker.grid_velocity import sample_vector_grid, sample_vector_grid_nested
+from examples.fluids.grid import sample_vector_grid, sample_vector_grid_nested
 from sphereWalker.star_integrator import antithetic_source_samples
-from sphereWalker.vector_potential import make_dirichlet_gradient_solve
+from examples.fluids.dirichlet import make_dirichlet_gradient_solve
 from surfaces.implicit.lipschitz import sdfImplicit
 from surfaces.implicit.primitives import bbox_sdf, torus_sdf
 from examples.fluids.transport import make_transport

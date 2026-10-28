@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 from examples.wos.common import volume_path
 from scipy.ndimage import distance_transform_edt
-from sphereWalker.pressure import ClosedPressureProjector
+from examples.fluids.pressure_prototype.pressure import ClosedPressureProjector
 from examples.fluids.transport import make_transport
 
 
@@ -129,40 +129,6 @@ def run_velocity3d(name, domain, *, field_fn, initial_velocity, initial_dye,
     print(f"saved {volume_path(name)} ({time.perf_counter()-start:.1f}s)", flush=True)
 
 
-DYE_CENTERS = np.array([[-.25, -.25, -.25], [.75, .75, .75]])
-
-def gyroid_surface():
-    """Same degree-2 Warp-backed analytic field used by the gyroid renderer."""
-    from surfaces.implicit.jnp_bounded import jnpboundedImplicit
-
-    roll = jnp.asarray(np.roll(np.eye(3), -1, axis=0).T, jnp.float32)
-    ones = jnp.ones((3, 1), jnp.float32)
-
-    def field(params, x):
-        p = jnp.pi * x
-        return (jnp.sin(p) * jnp.cos(p @ roll)) @ ones
-
-    return jnpboundedImplicit(autobounds_max_degree=2, use_warp=True,
-                              fn=field, level_set=0., dim=3)
-
-def initial_dye(points: np.ndarray) -> np.ndarray:
-    """Two Gaussian pockets centered at interior field minima (F=-1.5)."""
-    return np.exp(-np.sum((points[:, None, :] - DYE_CENTERS)**2, axis=-1) / .3**2)
-
-def gyroid_diagnostics(velocity: np.ndarray, dye: np.ndarray, lower: np.ndarray,
-                spacing: np.ndarray) -> dict[str, float]:
-    dye = np.asarray(dye)
-    weights = dye.reshape(-1, 2)
-    totals = weights.sum(axis=0)
-    masses = totals * np.prod(spacing)
-    axes = [lower[k] + spacing[k] * np.arange(dye.shape[k]) for k in range(3)]
-    points = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3)
-    centers = weights.T @ points / np.maximum(totals[:, None], 1e-20)
-    displacement = np.linalg.norm(centers - DYE_CENTERS, axis=-1)
-    return {"red_mass": float(masses[0]), "blue_mass": float(masses[1]),
-            "red_displacement": float(displacement[0]), "blue_displacement": float(displacement[1]),
-            "velocity_rms": float(np.sqrt(np.mean(np.sum(velocity**2, axis=-1))))}
-
 def rotation(points):
     return np.cross(np.array([0., 0., 1.]), points)
 
@@ -177,34 +143,26 @@ def sphere_diagnostics(velocity, dye, lower, spacing):
 
 
 def main():
-    """Closed-domain all-Neumann pressure flow: rigid rotation or forced gyroid dye."""
+    """Experimental pressure flow: rigid rotation in an analytic closed sphere."""
     import argparse
     from examples.fluids.vorticity import render3d
-    from surfaceSampler.boundary import ImplicitBoxBoundary, SphereBoundary
-    from utils.helpers import update_trust_region_size_autobound
+    from examples.fluids.pressure_prototype.boundary_sampling import SphereBoundary
 
     parser = argparse.ArgumentParser(description=main.__doc__)
-    scenes = parser.add_subparsers(dest='scene', required=True)
-    for scene in ('sphere', 'gyroid'):
-        p = scenes.add_parser(scene)
-        p.add_argument('--render', action='store_true')
-        p.add_argument('--name', default='fluid_velocity_sphere' if scene == 'sphere' else 'fluid_gyroid_pressure')
-        p.add_argument('--grid', type=int, default=16)
-        p.add_argument('--steps', type=int, default=5 if scene == 'sphere' else 10)
-        p.add_argument('--dt', type=float, default=.02 if scene == 'sphere' else .1)
-        p.add_argument('--walks', type=int, default=262144 if scene == 'sphere' else 8192)
-        p.add_argument('--path-length', type=int, default=6 if scene == 'sphere' else 4)
-        p.add_argument('--volume-samples', type=int, default=512)
-        p.add_argument('--boundary-volume-samples', type=int, default=256)
-        p.add_argument('--regularization', type=float, default=1e-5)
-        p.add_argument('--max-active-states', type=int, default=2048)
-        p.add_argument('--seed', type=int, default=0)
-        p.add_argument('--render-frames', type=int, default=120 if scene == 'sphere' else 240)
-        p.add_argument('--orbit', action='store_true')
-        if scene == 'gyroid':
-            p.add_argument('--buoyancy', type=float, default=4.)
-            p.add_argument('--geometry-epsilon', type=float, default=1e-4)
-            p.add_argument('--max-steps', type=int, default=10000)
+    parser.add_argument('--render', action='store_true')
+    parser.add_argument('--name', default='fluid_velocity_sphere')
+    parser.add_argument('--grid', type=int, default=16)
+    parser.add_argument('--steps', type=int, default=5)
+    parser.add_argument('--dt', type=float, default=.02)
+    parser.add_argument('--walks', type=int, default=262144)
+    parser.add_argument('--path-length', type=int, default=6)
+    parser.add_argument('--volume-samples', type=int, default=512)
+    parser.add_argument('--boundary-volume-samples', type=int, default=256)
+    parser.add_argument('--regularization', type=float, default=1e-5)
+    parser.add_argument('--max-active-states', type=int, default=2048)
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--render-frames', type=int, default=120)
+    parser.add_argument('--orbit', action='store_true')
     args = parser.parse_args()
     if (args.grid < 3 or min(args.steps, args.walks, args.max_active_states, args.render_frames) < 1
             or args.path_length < 3 or args.seed < 0
@@ -214,36 +172,19 @@ def main():
             or args.dt <= 0 or args.regularization < 0):
         parser.error('positive counts/dt, length >=3, even sample budgets and finite parameters required')
     if args.render:
-        options = dict(camera=(5., -6., 4.)) if args.scene == 'gyroid' else {}
-        render3d(args.name, title=f'{args.scene}: all-Neumann pressure flow',
-                 render_frames=args.render_frames, rotate_camera=args.orbit, **options)
+        render3d(args.name, title='sphere: all-Neumann pressure flow',
+                 render_frames=args.render_frames, rotate_camera=args.orbit)
         return
-    match args.scene:
-        case 'sphere':
-            domain = SphereBoundary()
-            centers = np.array([[-.4, 0., 0.], [.4, 0., 0.]])
-            velocity = rotation
-            dye = lambda p: np.exp(-np.sum((p[:, None, :]-centers)**2, -1)/.2**2)
-            force = lambda u, d: jnp.zeros_like(u)
-            diagnostic = sphere_diagnostics
-            field = lambda x: domain.surface.signed_value(domain.params, x)
-        case 'gyroid':
-            if (args.max_steps < 1 or not np.isfinite([args.buoyancy, args.geometry_epsilon]).all()
-                    or args.geometry_epsilon <= 0):
-                parser.error('positive geometry epsilon/step limit and finite buoyancy required')
-            surface = gyroid_surface()
-            domain = ImplicitBoxBoundary(surface, {}, (-2.,)*3, (2.,)*3,
-                lipschitz_bound=2*np.pi*np.sqrt(3), update_tr_fn=update_trust_region_size_autobound,
-                epsilon=args.geometry_epsilon, refinement_limit=.002, max_steps=args.max_steps,
-                max_active_states=args.max_active_states)
-            velocity, dye = lambda points: np.zeros_like(points), initial_dye
-            force = lambda vel, dye: args.buoyancy*(dye[..., :1]-dye[..., 1:])*jnp.array([0., 0., 1.])
-            diagnostic, field = gyroid_diagnostics, lambda x: surface.signed_value({}, x)
-    run_velocity3d(args.name, domain, field_fn=field, initial_velocity=velocity,
-        initial_dye=dye, body_force=force, grid=args.grid, steps=args.steps, dt=args.dt,
+    domain = SphereBoundary()
+    centers = np.array([[-.4, 0., 0.], [.4, 0., 0.]])
+    run_velocity3d(args.name, domain,
+        field_fn=lambda x: domain.surface.signed_value(domain.params, x),
+        initial_velocity=rotation,
+        initial_dye=lambda p: np.exp(-np.sum((p[:, None, :]-centers)**2, -1)/.2**2),
+        body_force=lambda u, d: jnp.zeros_like(u), grid=args.grid, steps=args.steps, dt=args.dt,
         seed=args.seed, n_samples=args.walks, path_length=args.path_length,
         volume_samples=args.volume_samples, boundary_volume_samples=args.boundary_volume_samples,
-        regularization=args.regularization, diagnostics_fn=diagnostic,
+        regularization=args.regularization, diagnostics_fn=sphere_diagnostics,
         max_active_states=args.max_active_states)
 
 
