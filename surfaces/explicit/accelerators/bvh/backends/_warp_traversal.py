@@ -1,6 +1,7 @@
 """Shared ordered BVH traversal; callbacks specialize at compilation."""
 import ctypes
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 import warp as wp
@@ -8,30 +9,16 @@ import warp as wp
 from ._warp_tree import DeviceTree, STACK_CAPACITY
 
 
-_PREAMBLE = r"""
-namespace bvh {
-CUDA_CALLABLE inline float quiet_nan() {
-#if defined(__CUDA_ARCH__)
-    return __int_as_float(0x7fc00000);
-#else
-    const uint32_t bits = 0x7fc00000u;
-    float value;
-    memcpy(&value, &bits, sizeof(value));
-    return value;
-#endif
-}
-template<typename T, int N> union Stack {
-    T data[N];
-    CUDA_CALLABLE Stack() {}
-};
-}
-#undef NAN
-#define NAN (::bvh::quiet_nan())
-""" + "\n".join(f"namespace bvh {{ using Stack_{bits}_{n} = Stack<uint{bits}_t,{n}>; }}"
-                 for bits in (32, 64) for n in range(1, STACK_CAPACITY+1))
-# A union copies storage without reading unwritten slots; its first store activates the array.
-# Warp's NAN macro divides doubles; its vector constructors also zero-fill stacks.
-QUERY_BUILD_OPTIONS = wp.ModuleBuildOptions(extra_cpu_preamble=_PREAMBLE, extra_cuda_preamble=_PREAMBLE)
+_NATIVE_DIR = Path(__file__).with_name("native").resolve()
+# Native ABI registration accepts identifiers, so name the stack specializations.
+_PREAMBLE = '#include "query.h"\n' + "\n".join(
+    f"namespace bvh {{ using Stack_{bits}_{n} = Stack<uint{bits}_t,{n}>; }}"
+    for bits in (32, 64) for n in range(1, STACK_CAPACITY+1))
+QUERY_BUILD_OPTIONS = wp.ModuleBuildOptions(
+    extra_cpu_include_dirs=[_NATIVE_DIR], extra_cuda_include_dirs=[_NATIVE_DIR],
+    extra_cpu_preamble=_PREAMBLE, extra_cuda_preamble=_PREAMBLE,
+    extra_build_dependencies=sorted(_NATIVE_DIR.glob("*.h")),
+)
 
 
 @lru_cache(maxsize=None)
@@ -41,41 +28,28 @@ def stack_functions(capacity, wide):
                  {"_fields_": [("storage", Storage*capacity)]})
     wp.build_experimental.add_native_type(Stack, native_name=f"bvh::Stack_{bits}_{capacity}")
 
-    @wp.func_native("stack.data[index] = value;")
+    @wp.func_native("bvh::push(stack, index, value);")
     def push(stack: wp.ref[Stack], index: int, value: Scalar): ...
 
-    @wp.func_native("return stack.data[index];")
+    @wp.func_native("return bvh::pop(stack, index);")
     def pop(stack: wp.ref[Stack], index: int) -> Scalar: ...
 
     return Stack, push, pop
 
 
-@wp.func_native("return values.data[index];")
+@wp.func_native("return bvh::load_array(values, index);")
 def load_array(values: Any, index: int):
     return values[index]
 
 
-@wp.func_native("values.data[index] = value;")
+@wp.func_native("bvh::store_array(values, index, value);")
 def store_array(values: Any, index: Any, value: Any): ...
 
-# Packed layout adapted from NVIDIA Warp bvh.h; Apache-2.0.
-# Copyright (c) 2022 NVIDIA CORPORATION & AFFILIATES.
-@wp.func_native(r"""
-    #if defined(__CUDA_ARCH__)
-    const float4 value=__ldg(reinterpret_cast<const float4*>(values.data+index));
-    return wp::vec4(value.x,value.y,value.z,value.w);
-    #else
-    return values.data[index];
-    #endif
-""")
+@wp.func_native("return bvh::load_node(values, index);")
 def load_node(values: wp.array(dtype=wp.vec4), index: int) -> wp.vec4: ...
 
 
-@wp.func_native(r"""
-    uint32_t a,b;
-    memcpy(&a,&lower.c[3],4); memcpy(&b,&upper.c[3],4);
-    return uint64_t(a) | (uint64_t(b)<<32);
-""")
+@wp.func_native("return bvh::pack_node(lower, upper);")
 def pack_node(lower: wp.vec4, upper: wp.vec4) -> wp.uint64: ...
 
 
@@ -84,35 +58,35 @@ def load_metadata(lower: wp.array(dtype=wp.vec4), upper: wp.array(dtype=wp.vec4)
     return pack_node(load_array(lower, index), load_array(upper, index))
 
 
-@wp.func_native("return (node & 0x80000000ull) != 0;")
+@wp.func_native("return bvh::node_is_leaf(node);")
 def node_is_leaf(node: wp.uint64) -> bool: ...
 
 
-@wp.func_native("return static_cast<int>(node & 0x7fffffffull);")
+@wp.func_native("return bvh::node_lower(node);")
 def node_lower(node: wp.uint64) -> int: ...
 
 
-@wp.func_native("return static_cast<int>((node >> 32) & 0x7fffffffull);")
+@wp.func_native("return bvh::node_upper(node);")
 def node_upper(node: wp.uint64) -> int: ...
 
 
-@wp.func_native("return uint32_t(index) | (uint32_t(tag)<<31);")
+@wp.func_native("return bvh::pack_entry(index, tag);")
 def pack_entry(index: int, tag: bool) -> wp.uint32: ...
 
 
-@wp.func_native("return static_cast<int>(entry & 0x7fffffffull);")
+@wp.func_native("return bvh::entry_index(entry);")
 def entry_index(entry: wp.uint32) -> int: ...
 
 
-@wp.func_native("return (entry & 0x80000000ull) != 0;")
+@wp.func_native("return bvh::entry_tag(entry);")
 def entry_tag(entry: wp.uint32) -> bool: ...
 
 
-@wp.func_native("uint32_t bits; memcpy(&bits,&score,4); return (uint64_t(bits)<<32) | entry;")
+@wp.func_native("return bvh::cache_entry(entry, score);")
 def cache_entry(entry: wp.uint32, score: float) -> wp.uint64: ...
 
 
-@wp.func_native("uint32_t bits=uint32_t(entry>>32); float value; memcpy(&value,&bits,4); return value;")
+@wp.func_native("return bvh::entry_score(entry);")
 def entry_score(entry: wp.uint64) -> float: ...
 
 

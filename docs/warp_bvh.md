@@ -227,6 +227,22 @@ Rebuild the tree when changing bounds or topology.
 Adapted ray helpers retain Warp's
 [Apache-2.0 license](../surfaces/explicit/accelerators/bvh/backends/licenses/warp-LICENSE.txt).
 
+Native C++ lives in [headers](../surfaces/explicit/accelerators/bvh/backends/native/query.h);
+Python keeps typed one-line bindings. The query factory attaches include paths
+and every header as a Warp build dependency. Header edits trigger recompilation
+in a new process; reapply module options when editing within a running process.
+Primitive, dimension and metric specialization still happens during JIT compilation.
+
+Format and lint the headers with their local Clang configurations:
+
+```sh
+native_dir=surfaces/explicit/accelerators/bvh/backends/native
+warp_native=$(python -c 'from pathlib import Path; import warp; print(Path(warp.__file__).parent / "native")')
+clang-format --dry-run --Werror "$native_dir"/*.h
+clang-tidy "$native_dir/query.h" -- -x c++ -std=c++17 \
+    -Wno-pragma-once-outside-header -isystem "$warp_native"
+```
+
 ## Validation and timing
 
 ```sh

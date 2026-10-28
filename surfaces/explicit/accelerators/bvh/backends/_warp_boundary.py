@@ -8,7 +8,6 @@ import jax.numpy as jnp
 import numpy as np
 import warp as wp
 
-from ._warp_geometry import _NATIVE_CONE_VISIBILITY, _NATIVE_SEGMENT_CLOSEST
 from ._warp_traversal import load_array
 from ._warp_tree import DeviceTree, build_tree
 
@@ -160,14 +159,7 @@ def _features(core, tree, geometry):
                           node_offset, node_count, axis, angles, radii)
 
 
-@wp.func_native(r"""
-    const auto p=viewpoint;
-    const auto& node_lower=tree.node_lower;
-    const auto& node_upper=tree.node_upper;
-    const auto& node_cone_sin_cos=meta.node_cone_sin_cos;
-    const auto& node_cone_axis=meta.node_cone_axis;
-    const auto& node_cone_radius=meta.node_cone_radius;
-""" + _NATIVE_CONE_VISIBILITY + "return cone_may_have_silhouette(node);")
+@wp.func_native("return bvh::cone_may_have_silhouette(viewpoint, node, tree.node_lower, tree.node_upper, meta.node_cone_sin_cos, meta.node_cone_axis, meta.node_cone_radius);")
 def cone_visibility(viewpoint: wp.vec3, tree: DeviceTree, meta: SilhouetteMeta, node: int) -> bool: ...
 
 
@@ -213,11 +205,7 @@ def _feature_primitive(dimension):
             b = load_array(item.data.feature_b, item.index)
         return wp.min(a, b), wp.max(a, b)
 
-    source = ("return wp::vec2(item.data.feature_a.data[item.index][0], item.data.feature_a.data[item.index][1]);"
-              if dimension == 2 else "const auto p=query;\n" + _NATIVE_SEGMENT_CLOSEST
-              + "return closest_segment(item.data.feature_a.data[item.index], item.data.feature_b.data[item.index]);")
-
-    @wp.func_native(source)
+    @wp.func_native("return bvh::feature_closest(query, item);")
     def closest(query: Vec, item: Feature) -> Vec: ...
 
     @wp.func

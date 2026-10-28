@@ -58,9 +58,6 @@ class ClassificationOps:
 
 
 def builtin_classification(primitive, metadata_type):
-    from ._warp_geometry import _NATIVE_EDGE_PREDICATES
-    from ._warp_inside import _triangle_event_source
-
     Vec, Geometry, Meta = primitive.point_type, primitive.data_type, metadata_type
 
     @wp.func
@@ -69,26 +66,7 @@ def builtin_classification(primitive, metadata_type):
             return False
         return meta.closed[0] != 0
 
-    if primitive.dimension == 2:
-        source = _NATIVE_EDGE_PREDICATES + r"""
-            const wp::vec3 a = meta.vertices.data[meta.indices.data[2*slot]];
-            const wp::vec3 b = meta.vertices.data[meta.indices.data[2*slot+1]];
-            const double ax=double(a[0])-double(point[0]), ay=double(a[1])-double(point[1]);
-            const double bx=double(b[0])-double(point[0]), by=double(b[1])-double(point[1]);
-            const double cross=cross2(ax,ay,bx,by);
-            if (cross == 0.0 && wp::min(ax,bx) <= 0 && wp::max(ax,bx) >= 0
-                && wp::min(ay,by) <= 0 && wp::max(ay,by) >= 0) return 2;
-            if ((ay <= 0 && by > 0) || (by <= 0 && ay > 0)) return cross/(by-ay) > 0 ? 1 : 0;
-            return 0;
-        """
-    else:
-        source = _NATIVE_EDGE_PREDICATES + r"""
-            const auto p = point;
-            const wp::vec3i ids(meta.indices.data[3*slot],
-                                meta.indices.data[3*slot+1], meta.indices.data[3*slot+2]);
-        """ + _triangle_event_source("meta.vertices.data[ids[$]]")
-
-    @wp.func_native(source)
+    @wp.func_native("return bvh::classification_event(point, meta, slot);")
     def event(point: Vec, geometry: Geometry, slot: int, original: int, meta: Meta) -> int: ...
 
     return ClassificationOps(Meta, valid, event)

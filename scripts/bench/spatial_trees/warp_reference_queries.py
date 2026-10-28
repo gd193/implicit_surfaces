@@ -120,6 +120,7 @@ def main():
         parser.error("reference GPU, runtime or timing configuration differs; measure fresh references")
     reference_rows = {} if previous_report is None else {r["case"]: r for r in previous_report["results"]}
     sources = [*sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends").glob("*warp*.py")),
+               *sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends/native").glob("*.h")),
                ROOT/"surfaces/explicit/accelerators/bvh/backends/sah_jax.py", Path(__file__),
                *sorted(Path(__file__).parent.glob("_warp*.py")), Path(__file__).with_name("warp_query_matrix.py"),
                Path(__file__).with_name("build_references.py"),

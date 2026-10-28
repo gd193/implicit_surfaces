@@ -83,17 +83,6 @@ class Euclidean:
                           cull_limit, viewpoint=viewpoint, group_leaves=getattr(primitive, "point_bounds", False))
 
 
-_ANGLE = r"""
-    using V = wp::vec_t<3,double>;
-    const V origin(query.data[0][0],query.data[0][1],query.data[0][2]);
-    const V direction(query.data[1][0],query.data[1][1],query.data[1][2]);
-    const auto angle = [&](const V& view) -> double {
-        return wp::dot(view,view) > 0
-            ? atan2(wp::length(wp::cross(view,direction)),wp::dot(view,direction)) : INFINITY;
-    };
-"""
-
-
 @dataclass(frozen=True)
 class Angular:
     @lru_cache(maxsize=None)
@@ -103,44 +92,14 @@ class Angular:
             raise TypeError("Angular requires a point or segment endpoint operation")
         dimension, Vec = primitive.dimension, primitive.point_type
         Query = wp.types.matrix((2, dimension), wp.float32)
-        source = _ANGLE
-        if dimension == 2:
-            source = source.replace("query.data[0][2]", "0.0").replace("query.data[1][2]", "0.0")
-        def coordinates(name):
-            return f"V({name}[0],{name}[1],"+(f"{name}[2])" if dimension == 3 else "0.0)")
         @wp.func
         def valid(query: Query):
             return wp.isfinite(query) and wp.max(wp.abs(query[1])) > 0.0
 
-        @wp.func_native(source + r"""
-            const V view=.5*(V(lower)+V(upper))-origin, extent=.5*(V(upper)-V(lower));
-            const double length2=wp::dot(view,view), radius2=wp::dot(extent,extent);
-            if (length2 <= radius2) return 0.f;
-            const double lower_angle=angle(view)-asin(sqrt(radius2/length2));
-            return static_cast<float>(wp::max(0.0,lower_angle-4.e-7));
-        """)
+        @wp.func_native("return bvh::angular_bound(query, lower, upper);")
         def bound(query: Query, lower: wp.vec3, upper: wp.vec3) -> float: ...
 
-        @wp.func_native(source + r"""
-            const V va=VERTEX_A, vb=VERTEX_B;
-            wp::vec3 best(va);
-            float score = static_cast<float>(angle(va-origin));
-            float other = static_cast<float>(angle(vb-origin));
-            if (other < score) { best=wp::vec3(vb); score=other; }
-            const V view=va-origin, edge=vb-va;
-            const double alpha=wp::dot(direction,view), beta=wp::dot(direction,edge);
-            const double c=wp::dot(view,view), d=wp::dot(view,edge), f=wp::dot(edge,edge);
-            const double denominator=beta*d-alpha*f;
-            if (denominator != 0) {
-                const double t=(alpha*d-beta*c)/denominator;
-                if (t > 0 && t < 1) {
-                    const wp::vec3 point(va+t*edge);
-                    other=static_cast<float>(angle(V(point)-origin));
-                    if (other < score) { best=point; score=other; }
-                }
-            }
-            return wp::vec4(best[0],best[1],best[2],score);
-        """.replace("VERTEX_A", coordinates("a")).replace("VERTEX_B", coordinates("b")))
+        @wp.func_native("return bvh::angular_segment(query, a, b);")
         def segment(query: Query, a: Vec, b: Vec) -> wp.vec4: ...
 
         @wp.func
