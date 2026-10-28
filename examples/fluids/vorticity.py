@@ -32,7 +32,7 @@ from scipy.ndimage import map_coordinates as map_coordinates_np
 
 from examples.wos.common import load_volume, volume_path, volume_stages
 from sphereWalker.integrator import WoSGradientIntegrator
-from sphereWalker.vector_potential import make_gradient_velocity_solve
+from examples.fluids.dirichlet import make_gradient_velocity_solve
 from examples.fluids.transport import make_transport, make_vortex_stretch
 
 
