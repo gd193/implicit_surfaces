@@ -1,0 +1,389 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-24",
+  "query": "closest point on triangle surface",
+  "device": {
+    "gpu": "NVIDIA A40",
+    "sm": 86,
+    "physical_index": 1
+  },
+  "fixture": {
+    "n_vertices": 10242,
+    "n_triangles": 20480,
+    "n_queries": 65536,
+    "subdivisions": 5,
+    "seed": 404,
+    "layout": "Little-endian contiguous rows of three float32 or int32 values",
+    "files": {
+      "vertices.f32": {
+        "shape": [10242, 3],
+        "dtype": "<f4",
+        "sha256": "429f6cbbc29beb2531bd5fa49a76160d07fe19cd497aa9b4ede1ea9e5d8ee4f2"
+      },
+      "faces.i32": {
+        "shape": [20480, 3],
+        "dtype": "<i4",
+        "sha256": "76ba4e88911ad4b149a0fa8c9a40a321a920cd949694ca5853a8e9c25d1241f2"
+      },
+      "gaussian.f32": {
+        "shape": [65536, 3],
+        "dtype": "<f4",
+        "sha256": "5df3a84e3675d4482b004ec804e070f53761d6ef07e2ab7c511845cd7ec58866"
+      },
+      "shell.f32": {
+        "shape": [65536, 3],
+        "dtype": "<f4",
+        "sha256": "09f0e7276f8ce8eee6bf854b31ae80804fe71da2ca78ab084e8e158ac3be5c26"
+      },
+      "interior.f32": {
+        "shape": [65536, 3],
+        "dtype": "<f4",
+        "sha256": "5a84146ee8266585ee9565520f3577794aebed69b8708de465fe61a85ec0154e"
+      }
+    },
+    "leaf_threshold": 4,
+    "input_order": "original"
+  },
+  "scope": "Resident queries/geometry/outputs. Build, compilation, input transfers, readback and CPU dispatch time excluded. FCPW device spans include runtime parameter uploads.",
+  "protocols": {
+    "cuda_graphs": {
+      "timer": "CUDA events",
+      "dispatches_per_sample": 50,
+      "samples": 15,
+      "warmup_launches": 5,
+      "warmup_graphs": 1,
+      "ordering": "Ours/native Warp randomized round-robin; cuBQL standalone"
+    },
+    "slang_cuda": {
+      "timer": "Slang-RHI device timestamps",
+      "dispatches_per_sample": 50,
+      "samples": 15,
+      "warmup_batches": 5,
+      "ordering": "Standalone samples"
+    }
+  },
+  "sources": {
+    "current": {
+      "base_commit": "66bc193cf7e11929eed03d3bb2565f7d2c4076a1",
+      "versions": {
+        "jax": "0.10.2",
+        "jaxlib": "0.10.2",
+        "warp-lang": "1.17.0",
+        "trimesh": "4.12.1",
+        "numpy": "2.4.3",
+        "cuda_nvrtc": "12.9.86",
+        "cuda_driver_api": "13.3",
+        "nvidia_driver": "610.57.04"
+      },
+      "sha256": {
+        "surfaces/explicit/accelerators/bvh/backends/_warp_build.py": "c5462c022c4148f1844837575b41250fcfe9d2ff3c11c52fa0a1623a2b9f1e3d",
+        "surfaces/explicit/accelerators/bvh/backends/_warp_closest.py": "cf607c2f0b91c8cf7f64372e002e79b360c626138d82a10767631ae148ae0a4a",
+        "surfaces/explicit/accelerators/bvh/backends/_warp_geometry.py": "6b4884a7634fb7f57303242650d8c718bedaf62be56541f48533973fa6cbde24",
+        "surfaces/explicit/accelerators/bvh/backends/_warp_jax.py": "fbd18a6c59573b320ddeb2236705fc8690fd3650cbc371fb9461315034957eb7",
+        "surfaces/explicit/accelerators/bvh/backends/_warp_layout.py": "79520f693fa72d4b61d4a608bec1bbd290f3b1f84f4080077d6989fe74be75c6",
+        "surfaces/explicit/accelerators/bvh/backends/_warp_overlap.py": "8a5117e3dc4447f11773674303096012ea96a4c9f33fca317d97bbac057b31fa",
+        "surfaces/explicit/accelerators/bvh/backends/_warp_ray.py": "f36d6058ac76f99cf3d46115846e432d7359e521f999f747e881463f628ee908",
+        "surfaces/explicit/accelerators/bvh/backends/_warp_sampling.py": "4bb3bc0a6562262b837957b7fd80872ebce4867c4c76bf685eae61b124fea122",
+        "surfaces/explicit/accelerators/bvh/backends/_warp_silhouette.py": "028f54ca150a6e0dd6022fe79ebcc5eb953dbb3bd014a2e5266d222ecfc0a2d9",
+        "surfaces/explicit/accelerators/bvh/backends/_warp_specs.py": "44e5579abc0084bc08baaee83eff7a356fe95434c8ff7eb17f6e991c40a613c4",
+        "surfaces/explicit/accelerators/bvh/backends/sah_warp.py": "319003c3ebe7529291bb1ebe89a63f9bfd6b2941cdcfbb3574608878cc7815b1",
+        "surfaces/explicit/accelerators/bvh/backends/snch_warp.py": "fcc2abe5d44c50e05beb9afb3ee3e598ed5ba7b611b424ffcc333f9ecb870dae",
+        "scripts/bench/spatial_trees/warp_bvh_device.py": "34041d80b60c757b23e859ec5711b851a17ea90725c7d49289099907159d5d6b",
+        "scripts/bench/spatial_trees/_warp_fixtures.py": "868dd773c07ee0798e991f979677d6eb481221835ab17664e636f5097a945112"
+      }
+    },
+    "warp": {
+      "version": "1.17.0",
+      "native_headers_sha256": {
+        "warp/native/mesh.h": "eb743e454c5d1ca1f27cf74ad43871e0812f620ada1cdb6b1b87eedfca706a57",
+        "warp/native/intersect.h": "68cc1540d406fcf443276d632a58b792d8ad6f3dce98cd647dbfc48eebf9876b",
+        "warp/native/bvh.h": "749180aee9fae78ed3eec1182ccf5c34a70b7e504ef2a312ad3a826a470b87ad",
+        "warp/native/vec.h": "93994499dfac4b341e1bdf04dd1aec92939844562c58b602b94d0f81a1d6ca62",
+        "warp/native/builtin.h": "9a8c44dda8453dcee2308ec016a648da43bc77d41427c7694b6555a1f810d7bf"
+      }
+    },
+    "cubql": {
+      "repository": "https://github.com/NVIDIA/cuBQL",
+      "commit": "20f9db19cdb160e2b83d8f05dfdb0437fe11fe24",
+      "license": "Apache-2.0",
+      "api": "triangles::CPAT::runQuery(Triangle*,bvh,point)",
+      "builders": ["spatial median", "SAH"],
+      "blocks": [64, 128, 256],
+      "compiler": "nvcc13.2.51 -O3 -arch=sm_86 -ccbin /usr/bin/g++",
+      "sha256": {
+        "cubql/cuBQL/bvh.h": "cbec159c0c596618997abf665fe90e73028b2ea9e3fc21b23bbb29e6d91aff41",
+        "cubql/cuBQL/traversal/shrinkingRadiusQuery.h": "30cd9b52b542179f0744272dbc896389521d68c891830d09a925391b2bf97348",
+        "cubql/cuBQL/queries/triangleData/closestPointOnAnyTriangle.h": "bf929527ed92382344e771cdf6169dcec0ed6976d83efa92f9e20aebb99279df",
+        "cubql/cuBQL/queries/triangleData/math/pointToTriangleDistance.h": "3796d957dfef06c4598bce9c4b89a5309a6b568e9d753c5c0e6ed36335f41faa",
+        "cubql/cuBQL/builder/cuda/instantiate_builders.cu": "c29582a5aa6ee34cfbf2c44f3aab4d57e92e626cc26d00c6e4efb0984b2aa5b4"
+      }
+    },
+    "fcpw": {
+      "repository": "https://github.com/rohan-sawhney/fcpw",
+      "commit": "e498ca81fe01ae20ea3482485c90379307008de8",
+      "license": "MIT",
+      "slang": "2026.16.1",
+      "nvrtc": "13.2.51",
+      "slang_rhi_commit": "12f1bffba0d0672ad5d7b579d48642cf1e2b2fdb",
+      "eigen_commit": "37bce6b2f81fc1d7b167c6e70024a4ec2eaf9620",
+      "builder": "CPU Bvh_SurfaceArea, non-vectorized",
+      "backend": "Slang-RHI CUDA",
+      "default_block_dim": 256,
+      "tested_blocks": [64, 128, 256],
+      "changes": "Only closestPoint numthreads attribute for 64/128 launch variants; upstream source unchanged",
+      "sha256": {
+        "fcpw/include/fcpw/gpu/bounding-volumes.slang": "c4ca9dfbc24e08d99436d933def3714d9e61d31f2ac54e02b68b0e98f1333012",
+        "fcpw/include/fcpw/gpu/interaction.slang": "30fe8ae277934c82aa4627504ca918aa10a62290b5f3af8a91859fc59b0db309",
+        "fcpw/include/fcpw/gpu/transform.slang": "dae40d08edeaee8d1f785c00ecba4bc5792b0f920b8c0c76b59e248f03d393f9",
+        "fcpw/include/fcpw/gpu/geometry.slang": "d96a59f07bc8bfd419494b6aaccb6dc7cd0cf87348d52e17f9341b67f2cd0ff2",
+        "fcpw/include/fcpw/gpu/math-constants.slang": "c3ea2a831c0bde15fb5dd26c1c3cd1633e047b8b3de8a82a5ae047d4f73b285d",
+        "fcpw/include/fcpw/gpu/fcpw.slang": "d0947074f2c08618bc8e763ceba1e29d6b1c795a089de77d8bbda77c0871cd1d",
+        "fcpw/include/fcpw/gpu/aggregate.slang": "94d07a7de452ffadcbb456fde3bced71af1840835314097dd3a87897347da68c",
+        "fcpw/include/fcpw/gpu/bvh-node.slang": "18f8ba095d06bb5e7317c2a7c5188a038e9c3e4b1d49f38c2b87564060a56953",
+        "fcpw/include/fcpw/gpu/bvh.cs.slang": "b906a83e07e513a642dcf8c3a123d6a2158199e1cdb11caf72ee28a3a99d7f28",
+        "fcpw/include/fcpw/gpu/ray.slang": "d58d2a5de9031d89f11d1afb55519ad053af4643785f4bb4de71acdaba114372",
+        "fcpw/include/fcpw/gpu/bvh.slang": "79fe14d9a90971163f1eda338f147f0893b15535cdeff61b1b50b488e2674540"
+      }
+    },
+    "external_harnesses_sha256": {
+      "algo_infos_crawled/research_2026-10-23/cp_comparison/export_fixtures.py": "40083358a45b00e5237ce2eafc699768230d75651d926b82ada6e2716888a8a3",
+      "algo_infos_crawled/research_2026-10-23/cp_comparison/verify_outputs.py": "d02b8e00cdd6c5ea359b71ff93266ddbdd732f207b5686a97471dbd93782f89e",
+      "algo_infos_crawled/research_2026-10-23/cp_comparison/run_warp.py": "b04849448eba336a0371bcf1489730b9c8b4429e1cb7923101cdd82c9fa4b6a0",
+      "algo_infos_crawled/research_2026-10-23/cp_comparison/summarize.py": "62aab529cbd964b0ab83f864fe0c6d9a0bc421df0207ade2739a74f865b040bd",
+      "algo_infos_crawled/research_2026-10-23/cp_comparison/cubql_cp.cu": "c57db988ca39673a6a69cef50c2e0fc7aad9db93c25cb44b9bcd1ef2c0e02859",
+      "algo_infos_crawled/research_2026-10-23/cp_comparison/fcpw/benchmark.cpp": "412248d1c2daa397449a0ad9883174debf10e34a58c5c33337d0cc11933f0d95",
+      "algo_infos_crawled/research_2026-10-23/cp_comparison/fcpw/generate_variants.py": "8efbe079a03a422c68340c96efafd014eb65367a7c59d4d072f8525002591b84",
+      "algo_infos_crawled/research_2026-10-23/cp_comparison/fcpw/CMakeLists.txt": "1aba689d764d5002d96c8656890c4322c865ef6078283790dbd4b39c445ae18a",
+      "algo_infos_crawled/research_2026-10-23/cp_comparison/fcpw/generated/64/bvh.cs.slang": "425c4b807d74393311c124a3b84cf85eb2acf943b7df489252815e8babbcd06c",
+      "algo_infos_crawled/research_2026-10-23/cp_comparison/fcpw/generated/128/bvh.cs.slang": "4f8538493e95822cf62103cd0efe10b39677cd4454a07b320bab51a38989500f"
+    }
+  },
+  "measurements": [
+    {
+      "implementation": "ours",
+      "distribution": "gaussian",
+      "tree": "bvh.sah.warp",
+      "block_dim": 64,
+      "protocol": "cuda_graphs",
+      "sources": ["current"],
+      "median_ms": 6.835138549804688,
+      "samples_ms": [6.834974975585937, 6.835281982421875, 6.835015869140625, 6.835875854492188, 6.834708251953125, 6.835241088867187, 6.835548095703125, 6.833684692382812, 6.834421997070312, 6.834483032226562, 6.8354254150390625, 6.835712280273437, 6.834790649414063, 6.835138549804688, 6.83546630859375],
+      "resources": {
+        "register_count": 51,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "implementation": "warp",
+      "distribution": "gaussian",
+      "tree": "warp.Mesh(sah)",
+      "block_dim": 64,
+      "protocol": "cuda_graphs",
+      "sources": ["current", "warp"],
+      "median_ms": 9.831608276367188,
+      "samples_ms": [9.831383056640625, 9.8317724609375, 9.831055297851563, 9.831895141601562, 9.831444702148438, 9.831792602539062, 9.831116943359374, 9.830830078125, 9.831280517578126, 9.83193603515625, 9.8309326171875, 9.832222900390626, 9.8317724609375, 9.832632446289063, 9.831608276367188],
+      "resources": {
+        "register_count": 61,
+        "local_memory_size": 128
+      }
+    },
+    {
+      "implementation": "cubql",
+      "distribution": "gaussian",
+      "tree": "cubql_sah",
+      "block_dim": 64,
+      "protocol": "cuda_graphs",
+      "sources": ["cubql", "external_harnesses_sha256"],
+      "median_ms": 10.562,
+      "samples_ms": [10.5612, 10.5614, 10.5618, 10.5614, 10.5625, 10.5614, 10.5622, 10.5625, 10.5604, 10.562, 10.5621, 10.5612, 10.563, 10.5649, 10.5625],
+      "validation": {
+        "checked_queries": 65536,
+        "float64_oracle_queries": 128,
+        "max_distance_delta_vs_custom": 7.152557373046875e-07,
+        "max_point_distance_inconsistency": 5.96150067977419e-07,
+        "max_surface_error": 8.325212520457151e-07,
+        "max_oracle_distance_error": 1.995570078072717e-07
+      }
+    },
+    {
+      "implementation": "fcpw",
+      "distribution": "gaussian",
+      "tree": "fcpw",
+      "block_dim": 64,
+      "protocol": "slang_cuda",
+      "sources": ["fcpw", "external_harnesses_sha256"],
+      "median_ms": 7.4283,
+      "samples_ms": [7.42852, 7.4283, 7.42778, 7.4293, 7.42812, 7.4276800000000005, 7.42918, 7.42828, 7.4284799999999995, 7.428640000000001, 7.4286, 7.4277999999999995, 7.42894, 7.42792, 7.42822],
+      "validation": {
+        "checked_queries": 65536,
+        "float64_oracle_queries": 128,
+        "max_distance_delta_vs_custom": 4.76837158203125e-07,
+        "max_point_distance_inconsistency": 5.96150067977419e-07,
+        "max_surface_error": 7.545733812700482e-08,
+        "max_oracle_distance_error": 2.380837922366652e-07
+      }
+    },
+    {
+      "implementation": "ours",
+      "distribution": "shell",
+      "tree": "bvh.sah.warp",
+      "block_dim": 64,
+      "protocol": "cuda_graphs",
+      "sources": ["current"],
+      "median_ms": 0.18151424407958985,
+      "samples_ms": [0.18051071166992189, 0.18010112762451172, 0.18044927597045898, 0.1804083251953125, 0.18051071166992189, 0.18157567977905273, 0.18182144165039063, 0.18147327423095702, 0.18165760040283202, 0.18225151062011719, 0.18151424407958985, 0.18190336227416992, 0.18110464096069337, 0.18167808532714844, 0.1819443130493164],
+      "resources": {
+        "register_count": 51,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "implementation": "warp",
+      "distribution": "shell",
+      "tree": "warp.Mesh(sah)",
+      "block_dim": 64,
+      "protocol": "cuda_graphs",
+      "sources": ["current", "warp"],
+      "median_ms": 0.21106687545776368,
+      "samples_ms": [0.20965375900268554, 0.20967424392700196, 0.20944896697998047, 0.20940799713134767, 0.21106687545776368, 0.21098495483398438, 0.2112716865539551, 0.21123071670532226, 0.21137407302856445, 0.21280767440795897, 0.21112831115722655, 0.21129215240478516, 0.2108620834350586, 0.2107596778869629, 0.21334016799926758],
+      "resources": {
+        "register_count": 61,
+        "local_memory_size": 128
+      }
+    },
+    {
+      "implementation": "cubql",
+      "distribution": "shell",
+      "tree": "cubql_sah",
+      "block_dim": 64,
+      "protocol": "cuda_graphs",
+      "sources": ["cubql", "external_harnesses_sha256"],
+      "median_ms": 0.185037,
+      "samples_ms": [0.185057, 0.184832, 0.185057, 0.185078, 0.185262, 0.184975, 0.184852, 0.185078, 0.184996, 0.184934, 0.185037, 0.184791, 0.185119, 0.185078, 0.184955],
+      "validation": {
+        "checked_queries": 65536,
+        "float64_oracle_queries": 128,
+        "max_distance_delta_vs_custom": 8.568167686462402e-08,
+        "max_point_distance_inconsistency": 4.783198714886083e-08,
+        "max_surface_error": 4.9130426853787566e-08,
+        "max_oracle_distance_error": 3.5100573017587955e-08
+      }
+    },
+    {
+      "implementation": "fcpw",
+      "distribution": "shell",
+      "tree": "fcpw",
+      "block_dim": 64,
+      "protocol": "slang_cuda",
+      "sources": ["fcpw", "external_harnesses_sha256"],
+      "median_ms": 0.18888000000000002,
+      "samples_ms": [0.18886, 0.18896000000000002, 0.18882000000000002, 0.18882000000000002, 0.18911999999999998, 0.18894, 0.18894, 0.18884, 0.18888000000000002, 0.18902000000000002, 0.18858, 0.18914, 0.18868, 0.18882000000000002, 0.18905999999999998],
+      "validation": {
+        "checked_queries": 65536,
+        "float64_oracle_queries": 128,
+        "max_distance_delta_vs_custom": 8.568167686462402e-08,
+        "max_point_distance_inconsistency": 4.303570826091896e-09,
+        "max_surface_error": 7.549807912385092e-08,
+        "max_oracle_distance_error": 5.443844627861516e-08
+      }
+    },
+    {
+      "implementation": "ours",
+      "distribution": "interior",
+      "tree": "bvh.sah.warp",
+      "block_dim": 64,
+      "protocol": "cuda_graphs",
+      "sources": ["current"],
+      "median_ms": 6.530560302734375,
+      "samples_ms": [6.526893920898438, 6.525870361328125, 6.530314331054687, 6.529781494140625, 6.529843139648437, 6.530580444335937, 6.530150146484375, 6.531522827148438, 6.530498657226563, 6.530560302734375, 6.530764770507813, 6.530662231445312, 6.531215209960937, 6.531195068359375, 6.530867309570312],
+      "resources": {
+        "register_count": 51,
+        "local_memory_size": 512
+      }
+    },
+    {
+      "implementation": "warp",
+      "distribution": "interior",
+      "tree": "warp.Mesh(sah)",
+      "block_dim": 64,
+      "protocol": "cuda_graphs",
+      "sources": ["current", "warp"],
+      "median_ms": 8.670330810546876,
+      "samples_ms": [8.668590087890625, 8.6685693359375, 8.66850830078125, 8.669020385742188, 8.669368286132812, 8.66951171875, 8.671436767578125, 8.671334228515626, 8.671211547851563, 8.671907958984375, 8.67219482421875, 8.669490966796875, 8.670330810546876, 8.672665405273438, 8.671477661132812],
+      "resources": {
+        "register_count": 61,
+        "local_memory_size": 128
+      }
+    },
+    {
+      "implementation": "cubql",
+      "distribution": "interior",
+      "tree": "cubql_sah",
+      "block_dim": 64,
+      "protocol": "cuda_graphs",
+      "sources": ["cubql", "external_harnesses_sha256"],
+      "median_ms": 10.2148,
+      "samples_ms": [10.2145, 10.2143, 10.2148, 10.2146, 10.2146, 10.2149, 10.2153, 10.2143, 10.2152, 10.215, 10.2151, 10.2143, 10.2145, 10.215, 10.2153],
+      "validation": {
+        "checked_queries": 65536,
+        "float64_oracle_queries": 128,
+        "max_distance_delta_vs_custom": 2.384185791015625e-07,
+        "max_point_distance_inconsistency": 1.1641191133282547e-07,
+        "max_surface_error": 2.5075458954218295e-07,
+        "max_oracle_distance_error": 7.207969821010352e-08
+      }
+    },
+    {
+      "implementation": "fcpw",
+      "distribution": "interior",
+      "tree": "fcpw",
+      "block_dim": 128,
+      "protocol": "slang_cuda",
+      "sources": ["fcpw", "external_harnesses_sha256"],
+      "median_ms": 6.70414,
+      "samples_ms": [6.7038, 6.70366, 6.70436, 6.704339999999999, 6.70444, 6.704400000000001, 6.704199999999999, 6.7043, 6.70408, 6.7041200000000005, 6.704, 6.70352, 6.704400000000001, 6.70414, 6.70408],
+      "validation": {
+        "checked_queries": 65536,
+        "float64_oracle_queries": 128,
+        "max_distance_delta_vs_custom": 1.1920928955078125e-07,
+        "max_point_distance_inconsistency": 8.720997812794451e-08,
+        "max_surface_error": 7.758917295121617e-08,
+        "max_oracle_distance_error": 8.673683216109396e-08
+      }
+    }
+  ],
+  "validation": {
+    "selected_tests_passed": 112,
+    "native_warp_checks": "Distance/status and point-distance consistency on every query; IDs nonnegative on hits",
+    "external_checks": "All points lie on returned original triangles;128 float64 oracle queries per distribution",
+    "coverage": ["stable cross-leaf ties", "thin/degenerate/translated geometry", "finite squared-distance overflow status", "empty/invalid queries", "CPU/JIT/vmap/lax loops", "overlap/rays/silhouettes/sampling"]
+  },
+  "limits": "One regular icosphere; independent library trees and triangle/tie/degeneracy policies differ. Results do not establish arbitrary-mesh rankings.",
+  "external_provenance": "cuBQL/FCPW samples retained from the earlier study on identical buffers. Historical source hashes remain attached; only ours/native Warp were remeasured for this cleanup.",
+  "archive": {
+    "local_directory": "algo_infos_crawled/research_2026-10-23/review_archive",
+    "artifacts": [
+      {
+        "file": "warp_bvh_closest_point.json",
+        "sha256": "02865571be20c066cba6f2e52a7fa8d6fc8413e8322726491245a9082069d56f",
+        "bytes": 11817
+      },
+      {
+        "file": "bvh_closest_point_comparison.json",
+        "sha256": "bcda4b4e6e8da5aa49919a7d4f848e8587c509299eaef617fea7f5b7b4795bee",
+        "bytes": 49692
+      },
+      {
+        "file": "fcpw_closest_point_diagnosis.json",
+        "sha256": "6cceb538e2674b2676c5a0dfe13cf2f8b9178b327522c0f1ca340635baeb71ee",
+        "bytes": 61779
+      },
+      {
+        "file": "closest_point_ptx_opportunities.json",
+        "sha256": "9910f76dc1e2e2d4ea31e184ab87637c9445c99c8299eeed8bfdde591bc49753",
+        "bytes": 68027
+      }
+    ]
+  },
+  "command": "python -m scripts.bench.spatial_trees.warp_bvh_device --queries closest_point --counts 65536 --leaf-size 4 --block-dim 64 --native-warp --point-distribution <gaussian|shell|interior>"
+}

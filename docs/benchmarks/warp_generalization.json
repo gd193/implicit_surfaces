@@ -1,0 +1,524 @@
+{
+  "date": "2026-10-27",
+  "architecture": "One shared depth-first walker with static math callbacks; one CDF sampling descent. No separate triangle/native query implementation.",
+  "baseline_snapshot": {
+    "parent_commit": "2f99b55ff78cedb36cc746abc3895a5f40e19da0",
+    "description": "Uncommitted code at the start of traversal consolidation. Baseline hashes identify the actual snapshot."
+  },
+  "device": {
+    "name": "NVIDIA A40",
+    "physical_index": 0
+  },
+  "versions": {
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "warp-lang": "1.17.0",
+    "trimesh": "4.12.1",
+    "numpy": "2.4.3"
+  },
+  "method": {
+    "metric": "cuda_event_graph_kernel_ms",
+    "warmup_launches": 5,
+    "launches_per_graph": 30,
+    "samples": 15,
+    "stack_capacity": 64,
+    "scope": "Warmed resident arrays and CUDA graph/event timings. Build, compilation, transfers, readback and CPU dispatch excluded.",
+    "order": "Current and saved native kernels run on identical resident buffers in one process. Case order randomized each sample; GPU work serialized on idle physical GPU0.",
+    "scene": "65536 Gaussian queries; 20480-triangle sphere, leaf threshold4, radius0.5, Robin coefficient1.",
+    "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+    "interpretation": "Ratios compare the shared implementation to the saved triangle implementation. Equivalent default/explicit policies now share the exact kernel object, so there is no separate generic-versus-native path to time.",
+    "limits": "One triangle scene and five point/segment/angular workloads; timings are not universal bounds.",
+    "changes": "Callbacks inline completely. State is passed by reference; dense FFI arrays avoid stride arithmetic; both child loads precede callback math. Indexed stacks use cached scores for nearest and compact indices for silhouette/Robin. Leaf failures accumulate before the walker exits, removing per-candidate return branches."
+  },
+  "validation": {
+    "full_suite": {
+      "passed": 375,
+      "seconds": 213.27
+    },
+    "equivalent_kernel_queries": [
+      "first",
+      "any",
+      "count",
+      "all",
+      "nearest",
+      "silhouette",
+      "classify",
+      "sample",
+      "robin",
+      "overlap"
+    ],
+    "outputs": "All ten query outputs match the snapshot. Integer IDs/counts/statuses exact, floats atol=rtol=3e-5; all-hit slots normalized by primitive ID.",
+    "coverage": "CPU/GPU, JIT/nested vmap, 2D/3D, custom geometry/metrics/metadata, multiple primitive events, ownership/contact, caps/exclusions, stack/output overflow and empty geometry.",
+    "review": "Packed/indexed work records depend only on query family. Primitive/metric policies supply math and metadata; all equivalent-policy tests assert kernel object identity.",
+    "failure_checks": "Custom nearest NaNs and Robin NaN/negative bounds remain failures when followed or preceded by valid candidates; checked on CPU and GPU.",
+    "compiled_kernels": {
+      "ray_kernel_9275f220": {
+        "ptx_sha256": "e0967eee9485d208b3f3d0a22e7ed421b7f461f5f8021dbcd94244460eee2dab",
+        "call_instructions": 0
+      },
+      "first_hit_kernel_18139fe5": {
+        "ptx_sha256": "b0e3edf49d4acd62c830d2450da54795ff0d7c3316690bf468b12f3af3c80851",
+        "call_instructions": 0
+      },
+      "ray_kernel_80ff461e": {
+        "ptx_sha256": "4e62a005f38c0faf80ba1aa57c984b91ee5925de1fbd2ccfdfa8f38b11ffc3f8",
+        "call_instructions": 0
+      },
+      "any_hit_kernel_320f1197": {
+        "ptx_sha256": "5ea45f7ce17f84d428b44e57801aadff16e33e0aa423af37c436a495c59883f9",
+        "call_instructions": 0
+      },
+      "nearest_kernel_7177c8a3": {
+        "ptx_sha256": "b3865f36c715a83517253445c00d630db23502a2609d41d0d7c8c242b6bd937a",
+        "call_instructions": 0
+      },
+      "closest_point_kernel_d02d32f7": {
+        "ptx_sha256": "41422809501a73568ac8a3f3422d8e0cf6de81f317fc37a36dde8f40fea40d45",
+        "call_instructions": 0
+      },
+      "nearest_kernel_5fc708ea": {
+        "ptx_sha256": "105d6f1e1d6dda26d73f9477aea1df562b10775e08fa788643fa6059db3c022a",
+        "call_instructions": 0
+      },
+      "closest_silhouette_kernel_0a541619": {
+        "ptx_sha256": "4bdacb8c7b7f95784ceb0afbf6059d2dc00f2c9520841799d94b69239a420042",
+        "call_instructions": 0
+      },
+      "robin_radius_kernel_faa8795b": {
+        "ptx_sha256": "898e72d533cb7b2eb5ebea745f63b98237155617e17ee9a34833e71ebf0d158a",
+        "call_instructions": 0
+      },
+      "robin_radius_kernel_95a41445": {
+        "ptx_sha256": "df7c58627ff77ccafa43c239ef4bbf867ffee33e3c985775295f87c58572b1ed",
+        "call_instructions": 0
+      },
+      "ray_kernel_77fa9d06": {
+        "ptx_sha256": "761875e047222067b0194ae3b8cb65c6302e806836fff905e69633fbb3c490cc",
+        "call_instructions": 0
+      },
+      "count_hits_kernel_fcc9536a": {
+        "ptx_sha256": "1a432ed22bc7d923ec0290425d9e3798dd0496329ba67797b847f4002e9b6cf1",
+        "call_instructions": 0
+      },
+      "ray_kernel_d5ce3895": {
+        "ptx_sha256": "66369f29d787d8cbc2e979f2195514d95b29791fd7f231ba6fe97a975a0bcef2",
+        "call_instructions": 0
+      },
+      "all_hits_kernel_bac48382": {
+        "ptx_sha256": "ffc3a5e33af78796b9957ec3d41737da939265157bcba1cd9ac89d95b5726591",
+        "call_instructions": 0
+      },
+      "classify_kernel_424cfcbb": {
+        "ptx_sha256": "0c9d87d52f35703c67596aee21050bd3df41f111e7d46fa75c95c2dccf9f7100",
+        "call_instructions": 0
+      },
+      "classify_point_kernel_a1f11b99": {
+        "ptx_sha256": "7acff660e1cbae24eb6d932120ddae764f788c22700e9597caa4983863965919",
+        "call_instructions": 0
+      },
+      "overlap_kernel_8f053cbd": {
+        "ptx_sha256": "ae4063670025013d9b852a9988e1f9ed696467b448b7f9d31e9bebb2d0cdbe0f",
+        "call_instructions": 0
+      },
+      "aabb_overlap_kernel_3a6cf1f3": {
+        "ptx_sha256": "5e2ec8eee240ac6a713e9a367af8985d85e09674b90691adf1cf340487c98dad",
+        "call_instructions": 0
+      },
+      "boundary_sample_kernel_8bb3d6dd": {
+        "ptx_sha256": "20c064b31b3469a3a275ae2d0d25669f23d0390b7b387dd82346d5a5dab8ded1",
+        "call_instructions": 0
+      },
+      "sample_boundary_kernel_45e30c18": {
+        "ptx_sha256": "747ed80ca42626ccc3b016831fb901891ee6335740d81055dcbe4d9d573baa7a",
+        "call_instructions": 0
+      }
+    }
+  },
+  "production_loc": {
+    "scope": "Python source under surfaces/",
+    "this_specialization_fix": {
+      "added": 284,
+      "removed": 251,
+      "net": 33
+    },
+    "all_uncommitted_vs_parent": {
+      "added": 2111,
+      "removed": 1783,
+      "net": 328
+    }
+  },
+  "source_sha256": {
+    "surfaces/explicit/accelerators/bvh/backends/_warp_boundary.py": "1cf9206a606050cd4674e4679d0f34e827f25d3c88fe6b8e0e69c70fe0615a0d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_boundary_queries.py": "60a1fe79b649104e10cbda1393ee9fdd0c4e115eb8866d253442572d26fcabde",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_build.py": "5806b11affdeb2af8a9ae786a5dfa45e0f092b4e156726c1be0cfd7bf2b43546",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_crossings.py": "872dc46abe29c7b18b0674ed73fb2249ba4158b8fac3f4db0660e1697a786810",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_domain.py": "98ffff00cee6088f868bbffd70a45d3fd4c8469fc7e6f9353f778dce7f970ce3",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_factory.py": "7d0ef8dcf62d7ebd6631e397044bdab9392c014d6e92dee574f669c4640224d0",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_geometry.py": "bd49478901807ad9f7a4d11668b83a50e2ce610d6d53601656e4bb80ec62ffdc",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_inside.py": "5b9c99a06b10bfd03fd92cac03eda210f746a4043a22c8f50a1cca705d128190",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_jax.py": "ca8e3a368321d485a8858f10009c688aae3bbd896fd14c597cac1f9dfcb2b8e5",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_layout.py": "da546422a1313ccb4c51a0f1aa0bc4523037b0aff52f0f4f886bf192957d0722",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_metrics.py": "267fb47772f1882e0d0cf55d4237c10dc721b7b50d01414a7b209248e0635f39",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_nearest.py": "dce84887f44c027d14480f7867cb950f20528370756c8ab872ad61dfce8914b3",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_overlap.py": "16be3e2daf1186c2c459c9d3c97ef91a7fb24c5df35f883075d0dd31329daaf7",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_primitives.py": "b0f7a8d81138aa4c6509903b35d9dce2426f71459cec666bd908c7ebb353066c",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_rays.py": "f8a8097a09b4291213f10fdb78df2e248a41758f5ffdae28b30aa297b42ebd5a",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_robin.py": "ccad7426aa4e734eb85c0e08efab3fb344a7620dd2ff51413549b289ef1b53e4",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_silhouette.py": "836fea37fcc61f7613f70ea30d01f511241a131fe0088ca06161a3c241f6b45b",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_traversal.py": "5aaf9518c3e0fe76fe984cfba7c238ab16f035eb638d0a1073983d80cdca8be6",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_tree.py": "0010e7bfe2b73b005398e2e1048002c86abf221936de5e3a783b3c5c306ef1a0",
+    "surfaces/explicit/accelerators/bvh/backends/sah_warp.py": "ebcd1301846167c9ef6b4b14a92333ef62f88cdbcee02a20b9d3a3ad56bbf07b",
+    "surfaces/explicit/accelerators/bvh/backends/snch_warp.py": "5a9a4f64f33ffaa12c6927a195dd7f90cf37125d78ea75834da12b515d84fc13",
+    "surfaces/explicit/accelerators/bvh/backends/snch_jax.py": "b359b976d94450f3d5c37529a674692b0520e042356f9553acc3afdd2f100d5e",
+    "surfaces/explicit/accelerators/bvh/backends/sah_jax.py": "b878ba21e8dd200a6a3a6418c9c50b368c24f7b430ba8d851bc736a0b2f3d478",
+    "scripts/bench/spatial_trees/warp_bvh_device.py": "f10c232b16b2f8c231401785def845dc6bbc0123ea16ffeebfe18b7de8022e81",
+    "scripts/bench/spatial_trees/_warp_fixtures.py": "137455ef002e6a44a0dba207444cc041fd2f55b0863c45c681d499662127bf88",
+    "surfaces/explicit/accelerators/bvh/warp.py": "a54db2f7b463425898c375f898ecb6c2bf6697ee57753238017716706c27d84c"
+  },
+  "baseline_source_sha256": {
+    "surfaces/explicit/accelerators/bvh/backends/_warp_boundary.py": "59e4b0d985ec3e86d997f92869a89d6075380da10d13d0b43f3624e204ca078d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_boundary_queries.py": "76ae9ea52914ffee1492dc38a939f41449b16f080cc07055aa2d527f262e5f5d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_build.py": "c5462c022c4148f1844837575b41250fcfe9d2ff3c11c52fa0a1623a2b9f1e3d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_closest.py": "e06aa55957a60a0dac0386f6247547761a573a26660a1c7eaf6c64b3a694d390",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_crossings.py": "609b7352a77e9ecbadf76b2e6866f6861749f1f5b9333d26dc83b4362a455d9f",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_domain.py": "fd06f860e4433a3cf09dcb09e7aeadfe02aa71809e133ea3f9e956fc21571334",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_factory.py": "594cc53e58af840773bc5a99c03ab7f6f5416b4caca7312c3c2c579ee697b134",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_geometry.py": "f31c8d1fa33322f5a9cef48f3163329aa37e057c88b330147604a3e6e3fc210e",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_inside.py": "7a2909a6371c7ecb044073a9aa708b9b8edaaaa1294e612d1de46f796a7b85d7",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_jax.py": "234982078c9e827ad7c0e433a035c949e5fd57d5340fb818b7dd2a0646a60a71",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_layout.py": "da546422a1313ccb4c51a0f1aa0bc4523037b0aff52f0f4f886bf192957d0722",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_metrics.py": "72bcb24de4b617b3c3f1743304249a1baaa4027d6e8c3460e8d70a40161f2d15",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_nearest.py": "5da332faf46b9a560de846ebdd88a5cb3f884362e6763342107b9581188a7644",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_overlap.py": "c6ff9ff236434002b5c8d549f64710c583d033c3c71d68f3c8ceb1576909d0a6",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_primitives.py": "04dda50f18ba9c35b98dbd27cd1a914a36e03459d23b75d6e5c05eb643fd9ee6",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_ray.py": "3e5bab72d2dba1886ba172a5261090b87a959fa72c86b6a4f98427ee3d8f69ae",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_rays.py": "677fc3cb9dd386ba619704a87b9dc5009d5c67a21ae977c3c2df8b5031b3561c",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_robin.py": "478ce885f7226487c173f9993925a240ffa318229cb67620b6fa6a648a284be6",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_sampling.py": "fc89d5f5555a5fb713518f670ceb797e396ffae8e42bae3f4f2fb96fb3047d43",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_silhouette.py": "f72df2848f95a1d2aaa84e2e25bbb3938eb7d45b56ad460c4e23a174f9cd3cca",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_specs.py": "88bc05d2a4ccb1bacc2380b1305a6f9a893405462332f8003cf4b9f0c9203960",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_traversal.py": "6267a42fab1c67f497b3a91b54487e51c1449f20eb9fe16c14f29e28f55317a9",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_tree.py": "dba41f970ff11eaa7f4762048ab9a7ac612fa85035ba6060006b5881ae0d1b63",
+    "surfaces/explicit/accelerators/bvh/backends/sah_warp.py": "ebcd1301846167c9ef6b4b14a92333ef62f88cdbcee02a20b9d3a3ad56bbf07b",
+    "surfaces/explicit/accelerators/bvh/backends/snch_warp.py": "5a9a4f64f33ffaa12c6927a195dd7f90cf37125d78ea75834da12b515d84fc13",
+    "surfaces/explicit/accelerators/bvh/backends/snch_jax.py": "b359b976d94450f3d5c37529a674692b0520e042356f9553acc3afdd2f100d5e",
+    "surfaces/explicit/accelerators/bvh/backends/sah_jax.py": "b878ba21e8dd200a6a3a6418c9c50b368c24f7b430ba8d851bc736a0b2f3d478",
+    "scripts/bench/spatial_trees/warp_bvh_device.py": "aa5a928d77fd15af225fb19ea20b37a496039288034e6b0f463c9b93173afabb",
+    "scripts/bench/spatial_trees/_warp_fixtures.py": "137455ef002e6a44a0dba207444cc041fd2f55b0863c45c681d499662127bf88",
+    "surfaces/explicit/accelerators/bvh/warp.py": "a39d1e587e64d37db38512f012418cd46a34fcdbcc2f98a2398e51b1047e2365"
+  },
+  "triangle_results": [
+    {
+      "query": "first_hit",
+      "block_dim": 128,
+      "query_sha256": "d2e3ac6f3411eb34efcae650ba0e5e6410443dc9b68beeaac64a940d9182a87a",
+      "before": {
+        "device_p50_ms": 0.11414186954498291,
+        "samples_ms": [0.11424427032470703, 0.11407360235850016, 0.11417600313822428, 0.11410773595174153, 0.11397120157877604, 0.11403946876525879, 0.11448319753011067, 0.11421013673146566, 0.11414186954498291, 0.11424427032470703, 0.11410773595174153, 0.11434666315714519, 0.11461973190307617, 0.11349333127339681, 0.11352746486663819],
+        "properties": {
+          "register_count": 61,
+          "local_memory_size": 512
+        }
+      },
+      "shared": {
+        "device_p50_ms": 0.11342506408691407,
+        "samples_ms": [0.11339093049367269, 0.11325439612070719, 0.11345919768015543, 0.11328852971394857, 0.11376640001932779, 0.11345919768015543, 0.11328852971394857, 0.11362986564636231, 0.11328852971394857, 0.11311786969502767, 0.11342506408691407, 0.11352746486663819, 0.11325439612070719, 0.11345919768015543, 0.11352746486663819],
+        "properties": {
+          "register_count": 52,
+          "local_memory_size": 512
+        }
+      },
+      "shared_over_before": 0.9937200480338518,
+      "paired_ratio_median": 0.9928358356257306
+    },
+    {
+      "query": "any_hit",
+      "block_dim": 128,
+      "query_sha256": "d2e3ac6f3411eb34efcae650ba0e5e6410443dc9b68beeaac64a940d9182a87a",
+      "before": {
+        "device_p50_ms": 0.10093226432800292,
+        "samples_ms": [0.10093226432800292, 0.10076159636179606, 0.10093226432800292, 0.10052266915639242, 0.1009663979212443, 0.10103466510772705, 0.10141013463338217, 0.10086399714152018, 0.10130773385365804, 0.1009663979212443, 0.10086399714152018, 0.10106879870096842, 0.10089813073476156, 0.10072746276855468, 0.10093226432800292],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 512
+        }
+      },
+      "shared": {
+        "device_p50_ms": 0.10188799699147542,
+        "samples_ms": [0.10209279855092367, 0.10158080259958903, 0.10216106573740641, 0.10205866495768229, 0.10154666900634765, 0.10185386339823405, 0.10158080259958903, 0.1019221305847168, 0.10188799699147542, 0.10199039777119955, 0.10185386339823405, 0.10202453136444092, 0.10181972980499268, 0.10199039777119955, 0.10175147056579589],
+        "properties": {
+          "register_count": 48,
+          "local_memory_size": 512
+        }
+      },
+      "shared_over_before": 1.009469050058826,
+      "paired_ratio_median": 1.0094562582691837
+    },
+    {
+      "query": "closest_point",
+      "block_dim": 64,
+      "query_sha256": "141e42571854c490687893a7ca86895f3062b9d9a11b1aeb4ff75b300afff854",
+      "before": {
+        "device_p50_ms": 6.829909261067709,
+        "samples_ms": [6.82437998453776, 6.824584452311198, 6.824550374348958, 6.830046081542969, 6.8269399007161455, 6.828783162434896, 6.829977416992188, 6.834415181477865, 6.834210205078125, 6.829909261067709, 6.830728658040365, 6.833800760904948, 6.828373209635417, 6.829158528645833, 6.830250549316406],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 512
+        }
+      },
+      "shared": {
+        "device_p50_ms": 6.896435038248698,
+        "samples_ms": [6.8924072265625, 6.89093983968099, 6.894284566243489, 6.896503702799479, 6.896435038248698, 6.89442138671875, 6.897117614746094, 6.907904052734375, 6.90718739827474, 6.897390747070313, 6.894660441080729, 6.904524739583334, 6.896161905924479, 6.897663879394531, 6.896298726399739],
+        "properties": {
+          "register_count": 58,
+          "local_memory_size": 512
+        }
+      },
+      "shared_over_before": 1.009740360323702,
+      "paired_ratio_median": 1.0099275031120745
+    },
+    {
+      "query": "closest_silhouette",
+      "block_dim": 64,
+      "query_sha256": "a5db03dc0fc37052bef4fa1678c39957c9ab6fa216078162fa6517b3c8f4e4a6",
+      "before": {
+        "device_p50_ms": 1.595801544189453,
+        "samples_ms": [1.5948458353678385, 1.5970303853352865, 1.5956651051839192, 1.5954261779785157, 1.595801544189453, 1.5957674662272134, 1.5965184529622396, 1.596074676513672, 1.5961429595947265, 1.5959723154703775, 1.596245320638021, 1.595904032389323, 1.595357894897461, 1.5956991831461589, 1.5950847625732423],
+        "properties": {
+          "register_count": 45,
+          "local_memory_size": 256
+        }
+      },
+      "shared": {
+        "device_p50_ms": 1.5986687978108725,
+        "samples_ms": [1.598737080891927, 1.598907725016276, 1.598566436767578, 1.5986687978108725, 1.5987711588541667, 1.59911257425944, 1.5981226603190104, 1.5987028757731119, 1.5987711588541667, 1.5986687978108725, 1.5982250213623046, 1.5983275095621745, 1.5981226603190104, 1.5980543772379556, 1.598395792643229],
+        "properties": {
+          "register_count": 47,
+          "local_memory_size": 256
+        }
+      },
+      "shared_over_before": 1.0017967482434513,
+      "paired_ratio_median": 1.001689554583345
+    },
+    {
+      "query": "robin_radius",
+      "block_dim": 64,
+      "query_sha256": "a5db03dc0fc37052bef4fa1678c39957c9ab6fa216078162fa6517b3c8f4e4a6",
+      "before": {
+        "device_p50_ms": 4.227652231852214,
+        "samples_ms": [4.227413431803385, 4.225365447998047, 4.225160471598307, 4.227652231852214, 4.228061930338542, 4.229734293619791, 4.229358927408854, 4.229051717122396, 4.228812917073568, 4.229188283284505, 4.226116180419922, 4.229154205322265, 4.2261505126953125, 4.226696523030599, 4.226901245117188],
+        "properties": {
+          "register_count": 51,
+          "local_memory_size": 256
+        }
+      },
+      "shared": {
+        "device_p50_ms": 3.991347249348958,
+        "samples_ms": [3.9907328287760415, 3.9924395243326822, 3.9901524861653646, 3.9881385803222655, 3.9949994405110676, 3.9927467346191405, 3.995136006673177, 3.987524159749349, 3.9938390096028646, 3.9871147155761717, 3.9931561787923178, 3.991347249348958, 3.9874560038248696, 3.992132314046224, 3.9911422729492188],
+        "properties": {
+          "register_count": 56,
+          "local_memory_size": 256
+        }
+      },
+      "shared_over_before": 0.9441049146088996,
+      "paired_ratio_median": 0.9442241589059333
+    },
+    {
+      "query": "count_hits",
+      "block_dim": 128,
+      "query_sha256": "a6530a030907b9482b070313aa7925602043ca621fe1317ccc7e34a80cd314a2",
+      "before": {
+        "device_p50_ms": 0.34454186757405597,
+        "samples_ms": [0.3455317179361979, 0.34423465728759767, 0.344268798828125, 0.34641920725504555, 0.3441322644551595, 0.3454293251037598, 0.3452586809794108, 0.34228906631469724, 0.3453269322713216, 0.34498561223347984, 0.34303998947143555, 0.344814936319987, 0.34409812291463215, 0.34454186757405597, 0.34409812291463215],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "shared": {
+        "device_p50_ms": 0.32600746154785154,
+        "samples_ms": [0.32628053029378257, 0.3257685343424479, 0.32600746154785154, 0.32467625935872396, 0.32573439280192057, 0.3235157330830892, 0.32628053029378257, 0.3242666562398275, 0.3265194574991862, 0.3262122790018717, 0.32658774058024087, 0.32549546559651693, 0.324232546488444, 0.32604160308837893, 0.3281920115152995],
+        "properties": {
+          "register_count": 94,
+          "local_memory_size": 528
+        }
+      },
+      "shared_over_before": 0.9462056493839007,
+      "paired_ratio_median": 0.945582271938626
+    },
+    {
+      "query": "all_hits",
+      "block_dim": 128,
+      "query_sha256": "a6530a030907b9482b070313aa7925602043ca621fe1317ccc7e34a80cd314a2",
+      "before": {
+        "device_p50_ms": 0.3958101272583008,
+        "samples_ms": [0.39471785227457684, 0.3975167910257975, 0.39656108220418296, 0.3955370585123698, 0.3958442687988281, 0.39557120005289714, 0.3946837425231934, 0.3972778638203939, 0.39536641438802084, 0.3968000094095866, 0.3963904062906901, 0.39724372227986654, 0.39550294876098635, 0.3958101272583008, 0.3953322728474935],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "shared": {
+        "device_p50_ms": 0.35444053014119464,
+        "samples_ms": [0.35444053014119464, 0.35416746139526367, 0.3533482551574707, 0.35457706451416016, 0.35276800791422525, 0.3521877288818359, 0.35604480107625325, 0.3538943926493327, 0.3548842748006185, 0.35382614135742185, 0.35351893107096355, 0.3564202626546224, 0.35604480107625325, 0.3548501332600911, 0.3554645220438639],
+        "properties": {
+          "register_count": 96,
+          "local_memory_size": 528
+        }
+      },
+      "shared_over_before": 0.895481206093272,
+      "paired_ratio_median": 0.8964446108987568
+    },
+    {
+      "query": "classify_point",
+      "block_dim": 128,
+      "query_sha256": "141e42571854c490687893a7ca86895f3062b9d9a11b1aeb4ff75b300afff854",
+      "before": {
+        "device_p50_ms": 0.04997119903564453,
+        "samples_ms": [0.04997119903564453, 0.05000533262888591, 0.0501418670018514, 0.05000533262888591, 0.04993706544240316, 0.0501418670018514, 0.04990293184916179, 0.04993706544240316, 0.05003946622212728, 0.04980053504308065, 0.04980053504308065, 0.05024426778157552, 0.04983466863632202, 0.04980053504308065, 0.05000533262888591],
+        "properties": {
+          "register_count": 53,
+          "local_memory_size": 592
+        }
+      },
+      "shared": {
+        "device_p50_ms": 0.04956159989039103,
+        "samples_ms": [0.04962986707687378, 0.04959573348363241, 0.04942506551742554, 0.04942506551742554, 0.04969813426335653, 0.04956159989039103, 0.04945919911066691, 0.04949333270390829, 0.04956159989039103, 0.04959573348363241, 0.04966400067011515, 0.0497322678565979, 0.049390931924184166, 0.04949333270390829, 0.04962986707687378],
+        "properties": {
+          "register_count": 50,
+          "local_memory_size": 584
+        }
+      },
+      "shared_over_before": 0.991803295635125,
+      "paired_ratio_median": 0.9911141607028017
+    },
+    {
+      "query": "aabb_overlap",
+      "block_dim": 256,
+      "query_sha256": "aa0677ee76f409196400c915a3c2694fc8bb76c59195d206949ab6acc99669e9",
+      "before": {
+        "device_p50_ms": 0.08898560206095378,
+        "samples_ms": [0.08905386924743652, 0.0889514684677124, 0.0889514684677124, 0.08905386924743652, 0.08905386924743652, 0.08898560206095378, 0.08912213643391927, 0.08871253331502278, 0.08912213643391927, 0.08901973565419515, 0.08891733487447102, 0.08864426612854004, 0.08864426612854004, 0.08898560206095378, 0.08898560206095378],
+        "properties": {
+          "register_count": 48,
+          "local_memory_size": 256
+        }
+      },
+      "shared": {
+        "device_p50_ms": 0.05140479803085327,
+        "samples_ms": [0.051234134038289386, 0.05140479803085327, 0.051234134038289386, 0.05106346607208252, 0.05133653481801351, 0.051473065217336016, 0.051473065217336016, 0.051507198810577394, 0.051712000370025636, 0.05133653481801351, 0.05157546599706014, 0.051268267631530764, 0.05140479803085327, 0.051268267631530764, 0.05167786677678426],
+        "properties": {
+          "register_count": 33,
+          "local_memory_size": 512
+        }
+      },
+      "shared_over_before": 0.5776754535597991,
+      "paired_ratio_median": 0.5778971265607851
+    },
+    {
+      "query": "sample_boundary",
+      "block_dim": 256,
+      "query_sha256": "ea6cad22b741f4027cb935e6bd31cf9b6a825b8e9d0ee97cb4105e009350d50c",
+      "before": {
+        "device_p50_ms": 0.031163734197616578,
+        "samples_ms": [0.031197865804036457, 0.031095467011133828, 0.0312661329905192, 0.031129600604375203, 0.031197865804036457, 0.03092479904492696, 0.031061333417892457, 0.031095467011133828, 0.031163734197616578, 0.03133440017700195, 0.031197865804036457, 0.031231999397277832, 0.031061333417892457, 0.030993066231409707, 0.03174399932225545],
+        "properties": {
+          "register_count": 48,
+          "local_memory_size": 0
+        }
+      },
+      "shared": {
+        "device_p50_ms": 0.029115732510884604,
+        "samples_ms": [0.029115732510884604, 0.029115732510884604, 0.029115732510884604, 0.029115732510884604, 0.029354665676752725, 0.029149866104125975, 0.029115732510884604, 0.029218133290608725, 0.02904746731122335, 0.029013333717981975, 0.02904746731122335, 0.029422932863235475, 0.029218133290608725, 0.02904746731122335, 0.02908160090446472],
+        "properties": {
+          "register_count": 56,
+          "local_memory_size": 0
+        }
+      },
+      "shared_over_before": 0.9342825325827414,
+      "paired_ratio_median": 0.9363336624100106
+    }
+  ],
+  "representatives": [
+    {
+      "case": "points2",
+      "n_queries": 65536,
+      "query_sha256": "44264c92657c4c2e705c0804c8369c39ae8ae390f8a41bdc588865f0aac9c8c4",
+      "reference": "Shared walker at start of specialization fix, measured on GPU0 in same process.",
+      "before_p50_ms": 0.15769599278767904,
+      "shared_p50_ms": 0.1434282620747884,
+      "shared_over_before": 0.9095238220028797,
+      "before_samples_ms": [0.15790079434712728, 0.15783252716064453, 0.15749120712280273, 0.15742293993631998, 0.1582080046335856, 0.15766186714172364, 0.1572864055633545, 0.15786666870117189, 0.1574570655822754, 0.15769599278767904, 0.15783252716064453, 0.1574570655822754, 0.15773013432820637, 0.1589589277903239, 0.1575935999552409],
+      "shared_samples_ms": [0.14322346051534016, 0.14335999488830567, 0.1434282620747884, 0.14335999488830567, 0.14322346051534016, 0.14363306363423664, 0.14349652926127116, 0.14322346051534016, 0.14325760205586752, 0.1437013308207194, 0.143667205174764, 0.14353067080179852, 0.1444522698720296, 0.14434986114501952, 0.14325760205586752]
+    },
+    {
+      "case": "points3",
+      "n_queries": 65536,
+      "query_sha256": "a18abf796f50facd2caa46852c0a3ad2f3bc2e6ab927c2b9aed9e49433d99770",
+      "reference": "Shared walker at start of specialization fix, measured on GPU0 in same process.",
+      "before_p50_ms": 0.11632640361785888,
+      "shared_p50_ms": 0.11492693424224854,
+      "shared_over_before": 0.9879694606547993,
+      "before_samples_ms": [0.11629227002461752, 0.11632640361785888, 0.11629227002461752, 0.11670186519622802, 0.1165994644165039, 0.1165994644165039, 0.11642879645029704, 0.11649706363677978, 0.1161898692448934, 0.1161898692448934, 0.1160533348719279, 0.1161898692448934, 0.11632640361785888, 0.11636053721110026, 0.11646293004353842],
+      "shared_samples_ms": [0.11489280064900716, 0.11482453346252441, 0.11492693424224854, 0.11499520142873128, 0.11496106783548991, 0.11489280064900716, 0.11492693424224854, 0.11475626627604167, 0.11468799908955891, 0.11506346861521403, 0.11492693424224854, 0.11496106783548991, 0.11533652941385905, 0.11506346861521403, 0.11472213268280029]
+    },
+    {
+      "case": "segments2",
+      "n_queries": 65536,
+      "query_sha256": "5401459e11da65992e920e263de126ef5216295b7ab766f835017d2441280d7e",
+      "reference": "Shared walker at start of specialization fix, measured on GPU0 in same process.",
+      "before_p50_ms": 0.25118719736735023,
+      "shared_p50_ms": 0.24067413012186686,
+      "shared_over_before": 0.9581464845514859,
+      "before_samples_ms": [0.25132373174031575, 0.25091412862141926, 0.2510848045349121, 0.2513578732808431, 0.25118719736735023, 0.2512213389078776, 0.2514944076538086, 0.2511189301808675, 0.25128960609436035, 0.2511189301808675, 0.25118719736735023, 0.25115307172139484, 0.25132373174031575, 0.2512213389078776, 0.25115307172139484],
+      "shared_samples_ms": [0.24036693572998047, 0.2405717372894287, 0.2409813404083252, 0.2406058629353841, 0.2408789316813151, 0.24135680198669435, 0.24067413012186686, 0.24111785888671874, 0.24036693572998047, 0.2409813404083252, 0.24104960759480795, 0.24053759574890138, 0.24067413012186686, 0.24108373324076335, 0.2402986685434977]
+    },
+    {
+      "case": "segments3",
+      "n_queries": 65536,
+      "query_sha256": "03f769f8ac7046eeff9e0ab32bfd6db2603252eecf88d52e1b65d92e56635e18",
+      "reference": "Shared walker at start of specialization fix, measured on GPU0 in same process.",
+      "before_p50_ms": 0.23244800567626953,
+      "shared_p50_ms": 0.22794240315755207,
+      "shared_over_before": 0.9806167297258191,
+      "before_samples_ms": [0.23248213132222492, 0.23244800567626953, 0.23268693288167316, 0.23234559694925944, 0.2324138641357422, 0.2319701353708903, 0.23261866569519044, 0.23251627286275228, 0.23234559694925944, 0.23244800567626953, 0.23244800567626953, 0.23261866569519044, 0.2324138641357422, 0.23258454004923504, 0.23227732976277668],
+      "shared_samples_ms": [0.22783999443054198, 0.22801067034403483, 0.2276693344116211, 0.22763519287109374, 0.22807893753051758, 0.22811306317647298, 0.2284543991088867, 0.22804479598999022, 0.22804479598999022, 0.22787413597106934, 0.22794240315755207, 0.22801067034403483, 0.22794240315755207, 0.22787413597106934, 0.2277034600575765]
+    },
+    {
+      "case": "angular_segments3",
+      "n_queries": 8192,
+      "query_sha256": "ed62edde9c531f15775d61c17ad70a3e4d093b423eba69ede96155506eb82945",
+      "reference": "Shared walker at start of specialization fix, measured on GPU0 in same process.",
+      "before_p50_ms": 13.93046162923177,
+      "shared_p50_ms": 13.923362223307292,
+      "shared_over_before": 0.9994903682222863,
+      "before_samples_ms": [13.93029073079427, 13.93128153483073, 13.930393473307292, 13.929506429036458, 13.931076049804688, 13.93052978515625, 13.930257161458334, 13.93046162923177, 13.930939737955729, 13.931076049804688, 13.93070068359375, 13.929983520507813, 13.93046162923177, 13.929335530598959, 13.93052978515625],
+      "shared_samples_ms": [13.924659220377604, 13.923362223307292, 13.923157755533854, 13.923294067382812, 13.92332763671875, 13.923805745442708, 13.923430379231771, 13.923020426432291, 13.923362223307292, 13.922952270507812, 13.923976643880208, 13.923873901367188, 13.923976643880208, 13.922850545247396, 13.92332763671875]
+    }
+  ],
+  "command": "python -m scripts.bench.spatial_trees.warp_bvh_device --backend bvh.snch.warp --counts 65536 --launches 30 --repeats 15 --queries first_hit any_hit count_hits all_hits classify_point closest_point aabb_overlap closest_silhouette sample_boundary robin_radius",
+  "comparison_harness_sha256": "7f4283512f8185ea524025cca6ac0226d7a3192e947cd5d1d6f0046568ce44c7",
+  "representatives_baseline_source_sha256": {
+    "surfaces/explicit/accelerators/bvh/backends/_warp_boundary.py": "59e4b0d985ec3e86d997f92869a89d6075380da10d13d0b43f3624e204ca078d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_boundary_queries.py": "4d1f3384c51d7e9f7b32ef555eb901a6544645efb21cf04697d6fa482475f211",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_build.py": "5806b11affdeb2af8a9ae786a5dfa45e0f092b4e156726c1be0cfd7bf2b43546",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_crossings.py": "872dc46abe29c7b18b0674ed73fb2249ba4158b8fac3f4db0660e1697a786810",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_domain.py": "98ffff00cee6088f868bbffd70a45d3fd4c8469fc7e6f9353f778dce7f970ce3",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_factory.py": "830f0729bb362f48c365ed7f2a2292a988dc724a7bfd8712e53a20578ece731e",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_geometry.py": "bd49478901807ad9f7a4d11668b83a50e2ce610d6d53601656e4bb80ec62ffdc",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_inside.py": "de8bfcd5b054f527eeb8d5615f6a5cbef6afa0b80a64f9935efda5e063093198",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_jax.py": "ca8e3a368321d485a8858f10009c688aae3bbd896fd14c597cac1f9dfcb2b8e5",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_layout.py": "da546422a1313ccb4c51a0f1aa0bc4523037b0aff52f0f4f886bf192957d0722",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_metrics.py": "72bcb24de4b617b3c3f1743304249a1baaa4027d6e8c3460e8d70a40161f2d15",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_nearest.py": "e3f562a83c87a13fdfcff9152bf5fc4055ca297d5591054abc502d67ef288526",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_overlap.py": "f152fbffcb7ceee89b06c3b7e143c6ca4afb884382925ce239b770e12843f858",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_primitives.py": "04d79032a36521910e1819aa524feef947e76c2ecd9273ba21af0015515a46dc",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_rays.py": "965c7c301f2597555c4d6bf8f8dfece911379b5255ae3fdfdef6f99709fca575",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_robin.py": "67431745d2a4c3b2755b0e9ef4459a94d4cea7fa0d10ed3847b685ffc7553d3b",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_silhouette.py": "c5e4ecd01bc5c202ae178eaee6564d19a57c64842c2a445c2632a2fbaa48f5ce",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_traversal.py": "7d5bb6415790d3df27ec9cb4b4a9e1f254f335729fff9f84bc204bfcf570bbeb",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_tree.py": "0010e7bfe2b73b005398e2e1048002c86abf221936de5e3a783b3c5c306ef1a0",
+    "surfaces/explicit/accelerators/bvh/backends/sah_warp.py": "ebcd1301846167c9ef6b4b14a92333ef62f88cdbcee02a20b9d3a3ad56bbf07b",
+    "surfaces/explicit/accelerators/bvh/backends/snch_warp.py": "5a9a4f64f33ffaa12c6927a195dd7f90cf37125d78ea75834da12b515d84fc13"
+  }
+}

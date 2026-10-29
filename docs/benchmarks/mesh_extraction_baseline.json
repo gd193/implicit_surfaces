@@ -1,0 +1,634 @@
+{
+  "source_sha256": "30bf9a8b48a945235d84eb08c34082c40578862f93e27bd2bc20dc665c322eaf",
+  "git_commit": "acf34743323bf72c61c73eeb6bfa4f47e5a0bc89",
+  "gpu_info": "GPU-7d941c27-c953-74bd-eabd-36dd67cf2111, NVIDIA A40, 610.57.04",
+  "started_utc": "2026-10-28T01:18:16.262165+00:00",
+  "complete": true,
+  "full_report": "/local00/bioinf/volkmann/implicit_surfaces_artifacts/mesh_opt_2026-10-28/full_baseline_report.json",
+  "results": [
+    {
+      "field": "sphere",
+      "cells_per_axis": 32,
+      "backend": "legacy",
+      "phase": "pipeline",
+      "median_device_activity_ms": 0.422883,
+      "wall_ms": [
+        18.22744496166706,
+        18.260216806083918,
+        18.179717008024454,
+        18.216765020042658,
+        18.23347806930542
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 0.183301,
+          "memcpy_ms": 0.239582,
+          "memset_ms": 0.0,
+          "kernels": 121
+        },
+        {
+          "kernel_ms": 0.182755,
+          "memcpy_ms": 0.24105500000000002,
+          "memset_ms": 0.0,
+          "kernels": 121
+        },
+        {
+          "kernel_ms": 0.182571,
+          "memcpy_ms": 0.238649,
+          "memset_ms": 0.0,
+          "kernels": 121
+        },
+        {
+          "kernel_ms": 0.182614,
+          "memcpy_ms": 0.240487,
+          "memset_ms": 0.0,
+          "kernels": 121
+        },
+        {
+          "kernel_ms": 0.182565,
+          "memcpy_ms": 0.23898,
+          "memset_ms": 0.0,
+          "kernels": 121
+        }
+      ],
+      "mesh": {
+        "vertices": 10908,
+        "triangles": 3636,
+        "output_bytes": 174528,
+        "max_field_residual": 0.000790715217590332
+      }
+    },
+    {
+      "field": "sphere",
+      "cells_per_axis": 32,
+      "backend": "warp-dense",
+      "phase": "pipeline",
+      "median_device_activity_ms": 0.040384,
+      "wall_ms": [
+        1.272417139261961,
+        1.2877131812274456,
+        1.2752660550177097,
+        1.2666471302509308,
+        1.2347889132797718
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 0.028094,
+          "memcpy_ms": 0.006750999999999999,
+          "memset_ms": 0.006913,
+          "kernels": 9
+        },
+        {
+          "kernel_ms": 0.027617,
+          "memcpy_ms": 0.00608,
+          "memset_ms": 0.006721,
+          "kernels": 9
+        },
+        {
+          "kernel_ms": 0.027488,
+          "memcpy_ms": 0.006176,
+          "memset_ms": 0.0066240000000000005,
+          "kernels": 9
+        },
+        {
+          "kernel_ms": 0.027329,
+          "memcpy_ms": 0.006144,
+          "memset_ms": 0.0066879999999999995,
+          "kernels": 9
+        },
+        {
+          "kernel_ms": 0.027519000000000002,
+          "memcpy_ms": 0.006176999999999999,
+          "memset_ms": 0.0066879999999999995,
+          "kernels": 9
+        }
+      ],
+      "mesh": {
+        "vertices": 1820,
+        "triangles": 3636,
+        "output_bytes": 65472,
+        "max_field_residual": 0.000790715217590332
+      }
+    },
+    {
+      "field": "sphere",
+      "cells_per_axis": 32,
+      "backend": "warp-sparse",
+      "phase": "pipeline",
+      "median_device_activity_ms": 0.244778,
+      "wall_ms": [
+        8.739751763641834,
+        8.73254518955946,
+        8.71645798906684,
+        8.72708484530449,
+        8.702159393578768
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 0.210878,
+          "memcpy_ms": 0.022208,
+          "memset_ms": 0.012991999999999998,
+          "kernels": 82
+        },
+        {
+          "kernel_ms": 0.20957699999999999,
+          "memcpy_ms": 0.022177,
+          "memset_ms": 0.013024,
+          "kernels": 82
+        },
+        {
+          "kernel_ms": 0.209218,
+          "memcpy_ms": 0.022623,
+          "memset_ms": 0.012991999999999998,
+          "kernels": 82
+        },
+        {
+          "kernel_ms": 0.20918299999999998,
+          "memcpy_ms": 0.022177,
+          "memset_ms": 0.013023,
+          "kernels": 82
+        },
+        {
+          "kernel_ms": 0.209317,
+          "memcpy_ms": 0.022238,
+          "memset_ms": 0.013087999999999999,
+          "kernels": 82
+        }
+      ],
+      "mesh": {
+        "vertices": 1820,
+        "triangles": 3636,
+        "output_bytes": 65472,
+        "max_field_residual": 0.000790715217590332
+      }
+    },
+    {
+      "field": "sphere",
+      "cells_per_axis": 128,
+      "backend": "legacy",
+      "phase": "pipeline",
+      "median_device_activity_ms": 2.8306180000000003,
+      "wall_ms": [
+        77.80089508742094,
+        79.16961191222072,
+        81.03398606181145,
+        78.70305422693491,
+        79.09326534718275
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 1.045967,
+          "memcpy_ms": 1.787937,
+          "memset_ms": 0.0,
+          "kernels": 578
+        },
+        {
+          "kernel_ms": 1.0452739999999998,
+          "memcpy_ms": 1.786887,
+          "memset_ms": 0.0,
+          "kernels": 578
+        },
+        {
+          "kernel_ms": 1.046984,
+          "memcpy_ms": 1.772451,
+          "memset_ms": 0.0,
+          "kernels": 578
+        },
+        {
+          "kernel_ms": 1.0469490000000001,
+          "memcpy_ms": 1.7836690000000002,
+          "memset_ms": 0.0,
+          "kernels": 578
+        },
+        {
+          "kernel_ms": 1.044035,
+          "memcpy_ms": 1.771739,
+          "memset_ms": 0.0,
+          "kernels": 578
+        }
+      ],
+      "mesh": {
+        "vertices": 174048,
+        "triangles": 58016,
+        "output_bytes": 2784768,
+        "max_field_residual": 4.971027374267578e-05
+      }
+    },
+    {
+      "field": "sphere",
+      "cells_per_axis": 128,
+      "backend": "warp-dense",
+      "phase": "pipeline",
+      "median_device_activity_ms": 0.773473,
+      "wall_ms": [
+        12.626743875443935,
+        12.642907910048962,
+        12.485976330935955,
+        12.531823944300413,
+        12.519526295363903
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 0.496802,
+          "memcpy_ms": 0.110719,
+          "memset_ms": 0.165952,
+          "kernels": 41
+        },
+        {
+          "kernel_ms": 0.496801,
+          "memcpy_ms": 0.110789,
+          "memset_ms": 0.166336,
+          "kernels": 41
+        },
+        {
+          "kernel_ms": 0.495772,
+          "memcpy_ms": 0.113849,
+          "memset_ms": 0.16691499999999998,
+          "kernels": 41
+        },
+        {
+          "kernel_ms": 0.49593400000000004,
+          "memcpy_ms": 0.110916,
+          "memset_ms": 0.166048,
+          "kernels": 41
+        },
+        {
+          "kernel_ms": 0.49567900000000004,
+          "memcpy_ms": 0.110812,
+          "memset_ms": 0.16614400000000001,
+          "kernels": 41
+        }
+      ],
+      "mesh": {
+        "vertices": 29010,
+        "triangles": 58016,
+        "output_bytes": 1044312,
+        "max_field_residual": 4.971027374267578e-05
+      }
+    },
+    {
+      "field": "sphere",
+      "cells_per_axis": 128,
+      "backend": "warp-sparse",
+      "phase": "pipeline",
+      "median_device_activity_ms": 0.39162399999999997,
+      "wall_ms": [
+        11.957353912293911,
+        12.386662885546684,
+        13.021122198551893,
+        13.284945860505104,
+        20.903201773762703
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 0.33919900000000003,
+          "memcpy_ms": 0.037507,
+          "memset_ms": 0.016381999999999997,
+          "kernels": 104
+        },
+        {
+          "kernel_ms": 0.338215,
+          "memcpy_ms": 0.036417000000000005,
+          "memset_ms": 0.016992,
+          "kernels": 104
+        },
+        {
+          "kernel_ms": 0.337951,
+          "memcpy_ms": 0.036799,
+          "memset_ms": 0.016544,
+          "kernels": 104
+        },
+        {
+          "kernel_ms": 0.33798500000000004,
+          "memcpy_ms": 0.036893999999999996,
+          "memset_ms": 0.016928000000000002,
+          "kernels": 104
+        },
+        {
+          "kernel_ms": 0.336444,
+          "memcpy_ms": 0.03811,
+          "memset_ms": 0.016384,
+          "kernels": 104
+        }
+      ],
+      "mesh": {
+        "vertices": 29010,
+        "triangles": 58016,
+        "output_bytes": 1044312,
+        "max_field_residual": 4.971027374267578e-05
+      }
+    },
+    {
+      "field": "neural",
+      "cells_per_axis": 32,
+      "backend": "legacy",
+      "phase": "pipeline",
+      "median_device_activity_ms": 0.501053,
+      "wall_ms": [
+        17.885918263345957,
+        17.80970487743616,
+        17.648724373430014,
+        17.697892151772976,
+        17.658452037721872
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 0.261182,
+          "memcpy_ms": 0.240636,
+          "memset_ms": 0.0,
+          "kernels": 154
+        },
+        {
+          "kernel_ms": 0.26076,
+          "memcpy_ms": 0.239653,
+          "memset_ms": 0.0,
+          "kernels": 154
+        },
+        {
+          "kernel_ms": 0.26143500000000003,
+          "memcpy_ms": 0.239618,
+          "memset_ms": 0.0,
+          "kernels": 154
+        },
+        {
+          "kernel_ms": 0.261306,
+          "memcpy_ms": 0.23974199999999998,
+          "memset_ms": 0.0,
+          "kernels": 154
+        },
+        {
+          "kernel_ms": 0.261564,
+          "memcpy_ms": 0.241574,
+          "memset_ms": 0.0,
+          "kernels": 154
+        }
+      ],
+      "mesh": {
+        "vertices": 10224,
+        "triangles": 3408,
+        "output_bytes": 163584,
+        "max_field_residual": 0.0008141696453094482
+      }
+    },
+    {
+      "field": "neural",
+      "cells_per_axis": 32,
+      "backend": "warp-dense",
+      "phase": "pipeline",
+      "median_device_activity_ms": 0.107679,
+      "wall_ms": [
+        1.1911713518202305,
+        1.190416980534792,
+        1.1801370419561863,
+        1.17797264829278,
+        1.1905371211469173
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 0.094176,
+          "memcpy_ms": 0.00752,
+          "memset_ms": 0.007103,
+          "kernels": 13
+        },
+        {
+          "kernel_ms": 0.093471,
+          "memcpy_ms": 0.0072,
+          "memset_ms": 0.007008,
+          "kernels": 13
+        },
+        {
+          "kernel_ms": 0.092321,
+          "memcpy_ms": 0.00704,
+          "memset_ms": 0.007039,
+          "kernels": 13
+        },
+        {
+          "kernel_ms": 0.093473,
+          "memcpy_ms": 0.007168,
+          "memset_ms": 0.007105,
+          "kernels": 13
+        },
+        {
+          "kernel_ms": 0.09232000000000001,
+          "memcpy_ms": 0.007167,
+          "memset_ms": 0.007006999999999999,
+          "kernels": 13
+        }
+      ],
+      "mesh": {
+        "vertices": 1706,
+        "triangles": 3408,
+        "output_bytes": 61368,
+        "max_field_residual": 0.0008141696453094482
+      }
+    },
+    {
+      "field": "neural",
+      "cells_per_axis": 32,
+      "backend": "warp-sparse",
+      "phase": "pipeline",
+      "median_device_activity_ms": 0.722275,
+      "wall_ms": [
+        9.248380083590746,
+        16.773778945207596,
+        9.603109210729599,
+        9.348600171506405,
+        9.259686805307865
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 0.6886030000000001,
+          "memcpy_ms": 0.022883,
+          "memset_ms": 0.013344,
+          "kernels": 103
+        },
+        {
+          "kernel_ms": 0.6858569999999999,
+          "memcpy_ms": 0.022686,
+          "memset_ms": 0.013344,
+          "kernels": 103
+        },
+        {
+          "kernel_ms": 0.687391,
+          "memcpy_ms": 0.024864999999999998,
+          "memset_ms": 0.013471,
+          "kernels": 103
+        },
+        {
+          "kernel_ms": 0.683262,
+          "memcpy_ms": 0.022657,
+          "memset_ms": 0.013411,
+          "kernels": 103
+        },
+        {
+          "kernel_ms": 0.686115,
+          "memcpy_ms": 0.022783,
+          "memset_ms": 0.013377,
+          "kernels": 103
+        }
+      ],
+      "mesh": {
+        "vertices": 1706,
+        "triangles": 3408,
+        "output_bytes": 61368,
+        "max_field_residual": 0.0008141696453094482
+      }
+    },
+    {
+      "field": "neural",
+      "cells_per_axis": 128,
+      "backend": "legacy",
+      "phase": "pipeline",
+      "median_device_activity_ms": 3.716888,
+      "wall_ms": [
+        70.54389081895351,
+        70.98351838067174,
+        70.76923782005906,
+        71.01151626557112,
+        71.05785608291626
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 1.950631,
+          "memcpy_ms": 1.9328940000000001,
+          "memset_ms": 0.0,
+          "kernels": 779
+        },
+        {
+          "kernel_ms": 1.9471749999999999,
+          "memcpy_ms": 1.7697129999999999,
+          "memset_ms": 0.0,
+          "kernels": 779
+        },
+        {
+          "kernel_ms": 1.949036,
+          "memcpy_ms": 1.763662,
+          "memset_ms": 0.0,
+          "kernels": 779
+        },
+        {
+          "kernel_ms": 1.950907,
+          "memcpy_ms": 1.768278,
+          "memset_ms": 0.0,
+          "kernels": 779
+        },
+        {
+          "kernel_ms": 1.9507180000000002,
+          "memcpy_ms": 1.757821,
+          "memset_ms": 0.0,
+          "kernels": 779
+        }
+      ],
+      "mesh": {
+        "vertices": 164268,
+        "triangles": 54756,
+        "output_bytes": 2628288,
+        "max_field_residual": 5.581974983215332e-05
+      }
+    },
+    {
+      "field": "neural",
+      "cells_per_axis": 128,
+      "backend": "warp-dense",
+      "phase": "pipeline",
+      "median_device_activity_ms": 2.924464,
+      "wall_ms": [
+        13.397595845162868,
+        13.384710997343063,
+        13.300430960953236,
+        13.435585889965296,
+        13.397882226854563
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 2.62563,
+          "memcpy_ms": 0.136539,
+          "memset_ms": 0.164834,
+          "kernels": 173
+        },
+        {
+          "kernel_ms": 2.624257,
+          "memcpy_ms": 0.136966,
+          "memset_ms": 0.164064,
+          "kernels": 173
+        },
+        {
+          "kernel_ms": 2.623497,
+          "memcpy_ms": 0.136711,
+          "memset_ms": 0.164256,
+          "kernels": 173
+        },
+        {
+          "kernel_ms": 2.622624,
+          "memcpy_ms": 0.136867,
+          "memset_ms": 0.16432,
+          "kernels": 173
+        },
+        {
+          "kernel_ms": 2.621098,
+          "memcpy_ms": 0.136285,
+          "memset_ms": 0.16505799999999998,
+          "kernels": 173
+        }
+      ],
+      "mesh": {
+        "vertices": 27380,
+        "triangles": 54756,
+        "output_bytes": 985632,
+        "max_field_residual": 5.180947482585907e-05
+      }
+    },
+    {
+      "field": "neural",
+      "cells_per_axis": 128,
+      "backend": "warp-sparse",
+      "phase": "pipeline",
+      "median_device_activity_ms": 1.1057569999999999,
+      "wall_ms": [
+        12.92844070121646,
+        13.325503095984459,
+        13.266423717141151,
+        13.344982173293829,
+        13.216379098594189
+      ],
+      "device_samples": [
+        {
+          "kernel_ms": 1.050174,
+          "memcpy_ms": 0.039007,
+          "memset_ms": 0.016576,
+          "kernels": 134
+        },
+        {
+          "kernel_ms": 1.048222,
+          "memcpy_ms": 0.042178,
+          "memset_ms": 0.017375,
+          "kernels": 134
+        },
+        {
+          "kernel_ms": 1.0519660000000002,
+          "memcpy_ms": 0.036317,
+          "memset_ms": 0.016704,
+          "kernels": 134
+        },
+        {
+          "kernel_ms": 1.048482,
+          "memcpy_ms": 0.037601,
+          "memset_ms": 0.017632000000000002,
+          "kernels": 134
+        },
+        {
+          "kernel_ms": 1.051266,
+          "memcpy_ms": 0.037953,
+          "memset_ms": 0.016800000000000002,
+          "kernels": 134
+        }
+      ],
+      "mesh": {
+        "vertices": 27380,
+        "triangles": 54756,
+        "output_bytes": 985632,
+        "max_field_residual": 5.180947482585907e-05
+      }
+    }
+  ]
+}

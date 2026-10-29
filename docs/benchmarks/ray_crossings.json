@@ -1,0 +1,210 @@
+{
+  "date": "2026-10-25",
+  "device": {
+    "name": "NVIDIA A40",
+    "physical_index": 1
+  },
+  "method": {
+    "metric": "cuda_event_graph_kernel_ms",
+    "n_queries": 65536,
+    "leaf_size": 4,
+    "block_dim": 128,
+    "output_capacity": 8,
+    "launches_per_graph": 50,
+    "samples": 15,
+    "warmup_launches": 5,
+    "scope": "Resident buffers, warmed CUDA graphs, CUDA events; build, compilation, uploads, readback and host dispatch excluded.",
+    "order": "Custom/reference cases randomized each repeat; GPU runs serialized.",
+    "reference": "Warp 1.17.0 mesh_query_ray_count_intersections, independent SAH builder. Line counts sum two opposite rays; custom uses one signed interval traversal.",
+    "fixtures": "Existing deterministic origins/directions from _warp_fixtures._queries(65536); off-edge finite inputs, no face exclusion.",
+    "precision": "Adaptive float32/float64 projected triangle predicates; conservative count/all-hit boxes. Hit arrays use float32 parameters and int32 original face IDs."
+  },
+  "versions": {
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "warp-lang": "1.17.0",
+    "trimesh": "4.12.1",
+    "numpy": "2.4.3"
+  },
+  "source_sha256": {
+    "surfaces/explicit/accelerators/bvh/backends/_warp_build.py": "c5462c022c4148f1844837575b41250fcfe9d2ff3c11c52fa0a1623a2b9f1e3d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_closest.py": "3fc86a85f5b6235af677d2090e67247d21d7815b8445334c91b90dd621cc9cb6",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_crossings.py": "0c1047e197e2421675ac2ac3d8ac74051321d1355d5e8952898892842d81c76b",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_geometry.py": "205b48855f5013673cd53de5cb317425ab2f4fc45b7bebb0caaf60fa13d33ab6",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_inside.py": "c0de7bf4fea078cabb09ec217a237d3c8b4e7fdd436c1212ff27ae5621187c22",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_jax.py": "c775fdeeaf89a7c09cd2b1a70a547955c9770f53fd123e278aad461a1bd1808f",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_layout.py": "89f6bd4261392e6760ffc8cf7faba710ffa29ef09afc242b45bc6e7e23e8006d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_overlap.py": "8a5117e3dc4447f11773674303096012ea96a4c9f33fca317d97bbac057b31fa",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_ray.py": "bbe222e2040b9646fda18333952bd323878229b5b69f7aefc10137e8f76fb875",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_robin.py": "167a6dac58682901d1d68e0dea2f65a99f8d91e7060da472e7f7fcbe1bfcf83e",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_sampling.py": "4bb3bc0a6562262b837957b7fd80872ebce4867c4c76bf685eae61b124fea122",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_silhouette.py": "b5e277947865127c461cd4f18e35a7e9f71b65c6a7338a8d2e489c642435de00",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_specs.py": "398cec3d185362769aef66f2afb4d4bd3897711b3a9c2e18252373e463899a9a",
+    "surfaces/explicit/accelerators/bvh/backends/sah_warp.py": "6c2dc16bed5c95630756b8963440531d8819c8afe7854c95413794ca80610ea3",
+    "surfaces/explicit/accelerators/bvh/backends/snch_warp.py": "30632d8c3b18fbb502f9a3a0f165e27621ffba4287724f12d5bd23196e8bcf4e",
+    "surfaces/explicit/accelerators/bvh/backends/snch_jax.py": "b359b976d94450f3d5c37529a674692b0520e042356f9553acc3afdd2f100d5e",
+    "surfaces/explicit/accelerators/bvh/backends/sah_jax.py": "b878ba21e8dd200a6a3a6418c9c50b368c24f7b430ba8d851bc736a0b2f3d478",
+    "scripts/bench/spatial_trees/warp_bvh_device.py": "7e688b5d383d7cff1fa1b9bddb5b6d6f256faba983e263eb87a897bf73591ff6",
+    "scripts/bench/spatial_trees/_warp_fixtures.py": "137455ef002e6a44a0dba207444cc041fd2f55b0863c45c681d499662127bf88"
+  },
+  "reference_headers_sha256": {
+    "mesh.h": "eb743e454c5d1ca1f27cf74ad43871e0812f620ada1cdb6b1b87eedfca706a57",
+    "intersect.h": "68cc1540d406fcf443276d632a58b792d8ad6f3dce98cd647dbfc48eebf9876b",
+    "bvh.h": "749180aee9fae78ed3eec1182ccf5c34a70b7e504ef2a312ad3a826a470b87ad"
+  },
+  "validation": {
+    "regressions": "193 selected tests pass; 28 new crossing cases.",
+    "geometry": "Independent float64 oracle checks count, face and parameters; analytic signed bounds, shared edges, reversed faces, coplanar/degenerate faces, scaling, face exclusion, 129 crossings and output overflow.",
+    "bridge": "CPU/GPU, JIT, nested vmap, dynamic geometry, empty batches and integer face-ID broadcasting.",
+    "endpoints": "1000 non-axis-aligned directions, positive/negative exact single-point intervals, CPU and GPU.",
+    "benchmark": "All counts and statuses match native Warp on 262144 query/interval cases. All-hit counts match the count kernel, with valid IDs/parameters and zero output overflows."
+  },
+  "results": [
+    {
+      "mesh": "sphere",
+      "interval": "ray",
+      "n_triangles": 20480,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "a6530a030907b9482b070313aa7925602043ca621fe1317ccc7e34a80cd314a2",
+      "count": {
+        "device_p50_ms": 0.3439820861816406,
+        "device_samples_ms": [0.3436134338378906, 0.343900146484375, 0.34400257110595706, 0.3441459274291992, 0.34430976867675783, 0.343265266418457, 0.343265266418457, 0.3437772750854492, 0.3438796615600586, 0.3439820861816406, 0.34297855377197267, 0.3443507385253906, 0.34490367889404294, 0.3442483139038086, 0.3453542327880859],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "all_hits": {
+        "device_p50_ms": 0.39759872436523436,
+        "device_samples_ms": [0.39745536804199216, 0.3965542221069336, 0.39827457427978513, 0.39759872436523436, 0.3989913558959961, 0.39827457427978513, 0.39751678466796875, 0.39815166473388675, 0.39759872436523436, 0.39759872436523436, 0.39809024810791016, 0.39723007202148436, 0.39788543701171875, 0.3969023895263672, 0.39831550598144533],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "warp_count": {
+        "device_p50_ms": 0.6074367904663086,
+        "device_samples_ms": [0.607457275390625, 0.6086860656738281, 0.6030335998535157, 0.6083993530273437, 0.6041804885864258, 0.6046105575561523, 0.6064742279052734, 0.608542709350586, 0.60801025390625, 0.6088499069213867, 0.6074367904663086, 0.6032588958740235, 0.6073344039916992, 0.6080307388305664, 0.6041600036621094],
+        "properties": {
+          "register_count": 64,
+          "local_memory_size": 208
+        }
+      },
+      "warp_count_over_ours": 1.7658965826073572
+    },
+    {
+      "mesh": "sphere",
+      "interval": "line",
+      "n_triangles": 20480,
+      "geometry_sha256": "96af4b0afa317459c1324f0fbe9e0b83ec5cb9252ee87c11feed7a82015fc723",
+      "query_sha256": "a2fd995245cc6ac48b00784bb4d22f047a42383365fcd7e0ff2541b25afbc59f",
+      "count": {
+        "device_p50_ms": 0.3503923034667969,
+        "device_samples_ms": [0.34842624664306643, 0.3500851058959961, 0.35162113189697264, 0.3495935821533203, 0.3509043121337891, 0.34885631561279296, 0.34965503692626954, 0.3504537582397461, 0.3499622344970703, 0.35123199462890625, 0.3503923034667969, 0.3516416168212891, 0.34979839324951173, 0.3512934494018555, 0.35125247955322264],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "all_hits": {
+        "device_p50_ms": 0.4048691177368164,
+        "device_samples_ms": [0.4040499114990234, 0.4060774230957031, 0.4043366241455078, 0.40603649139404296, 0.4047052764892578, 0.4040499114990234, 0.4034764862060547, 0.4041727828979492, 0.4050739288330078, 0.4063846588134766, 0.4049919891357422, 0.4050124740600586, 0.4031283187866211, 0.40566783905029297, 0.4048691177368164],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "warp_count": {
+        "device_p50_ms": 0.6530252838134766,
+        "device_samples_ms": [0.6507315063476562, 0.6527999877929688, 0.6525542449951172, 0.6538854217529297, 0.6555852508544922, 0.6529228973388672, 0.6535167694091797, 0.6535372924804688, 0.6570188903808594, 0.6529228973388672, 0.6538034820556641, 0.6515711975097657, 0.6519398498535156, 0.6530252838134766, 0.6538649749755859],
+        "properties": {
+          "register_count": 64,
+          "local_memory_size": 208
+        }
+      },
+      "warp_count_over_ours": 1.8636975679899805
+    },
+    {
+      "mesh": "torus",
+      "interval": "ray",
+      "n_triangles": 16384,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "a6530a030907b9482b070313aa7925602043ca621fe1317ccc7e34a80cd314a2",
+      "count": {
+        "device_p50_ms": 0.2631065559387207,
+        "device_samples_ms": [0.2636800003051758, 0.2637824058532715, 0.265031681060791, 0.2631065559387207, 0.26251264572143557, 0.2624921607971191, 0.2634342384338379, 0.26243072509765625, 0.26480640411376954, 0.26214399337768557, 0.2635775947570801, 0.26226688385009767, 0.26421247482299803, 0.26265600204467776, 0.2627584075927734],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "all_hits": {
+        "device_p50_ms": 0.30681087493896486,
+        "device_samples_ms": [0.3075276756286621, 0.3054387283325195, 0.3078758430480957, 0.3077939224243164, 0.3047833633422852, 0.3065241622924805, 0.3072819137573242, 0.3050495910644531, 0.3075071907043457, 0.3062169647216797, 0.3061555290222168, 0.30681087493896486, 0.30679040908813476, 0.3072614479064941, 0.30709760665893554],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "warp_count": {
+        "device_p50_ms": 0.40955902099609376,
+        "device_samples_ms": [0.40955902099609376, 0.40876033782958987, 0.409354248046875, 0.40880126953125, 0.41011199951171873, 0.409620475769043, 0.4112588882446289, 0.4089651107788086, 0.40648704528808594, 0.40843265533447265, 0.4089446258544922, 0.4104806518554687, 0.4104806518554687, 0.40986625671386717, 0.40986625671386717],
+        "properties": {
+          "register_count": 64,
+          "local_memory_size": 208
+        }
+      },
+      "warp_count_over_ours": 1.5566279583374687
+    },
+    {
+      "mesh": "torus",
+      "interval": "line",
+      "n_triangles": 16384,
+      "geometry_sha256": "c5a3f105836addb116a13d41acce230924a54bbefbb53230da616d60632ad782",
+      "query_sha256": "a2fd995245cc6ac48b00784bb4d22f047a42383365fcd7e0ff2541b25afbc59f",
+      "count": {
+        "device_p50_ms": 0.2832998466491699,
+        "device_samples_ms": [0.2816409683227539, 0.28190719604492187, 0.28071935653686525, 0.2814771270751953, 0.28057600021362306, 0.28696575164794924, 0.28807167053222654, 0.2814361572265625, 0.2832998466491699, 0.2833407974243164, 0.2872115135192871, 0.2853683280944824, 0.28043264389038086, 0.2853887939453125, 0.28389375686645507],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "all_hits": {
+        "device_p50_ms": 0.3197747230529785,
+        "device_samples_ms": [0.3202252960205078, 0.31969280242919923, 0.3210240173339844, 0.3197747230529785, 0.3190784072875977, 0.3203481674194336, 0.31944704055786133, 0.32114688873291014, 0.31963136672973635, 0.31924224853515626, 0.3207167816162109, 0.3211673736572266, 0.3199590492248535, 0.3184230422973633, 0.3172761535644531],
+        "properties": {
+          "register_count": 80,
+          "local_memory_size": 560
+        }
+      },
+      "warp_count": {
+        "device_p50_ms": 0.42807296752929686,
+        "device_samples_ms": [0.4255539321899414, 0.4281139373779297, 0.4291993713378906, 0.42813438415527344, 0.4293222427368164, 0.4284620666503906, 0.42868736267089846, 0.4287897491455078, 0.42756095886230466, 0.42807296752929686, 0.4268646240234375, 0.4275404739379883, 0.4272947311401367, 0.42639358520507814, 0.4279500961303711],
+        "properties": {
+          "register_count": 64,
+          "local_memory_size": 208
+        }
+      },
+      "warp_count_over_ours": 1.511024353145555
+    }
+  ],
+  "existing_queries": [
+    {
+      "query": "first_hit",
+      "device_p50_ms": 0.11321344375610351,
+      "device_samples_ms": [0.11325440406799317, 0.11333632469177246, 0.11327487945556641, 0.11315199851989746, 0.11292672157287598, 0.11292672157287598, 0.11321344375610351, 0.11304960250854493, 0.11323391914367675, 0.11290623664855957, 0.11317248344421386, 0.1136844825744629, 0.11327487945556641, 0.11323391914367675, 0.11321344375610351]
+    },
+    {
+      "query": "any_hit",
+      "device_p50_ms": 0.10039296150207519,
+      "device_samples_ms": [0.10039296150207519, 0.1002905559539795, 0.10041343688964843, 0.10041343688964843, 0.10049535751342774, 0.10037247657775879, 0.10024959564208985, 0.1004748821258545, 0.10027008056640625, 0.10024959564208985, 0.10055680274963379, 0.10098688125610351, 0.10039296150207519, 0.10045439720153809, 0.10012672424316406]
+    },
+    {
+      "query": "classify_point",
+      "device_p50_ms": 0.05216256141662598,
+      "device_samples_ms": [0.05212160110473633, 0.05214208126068115, 0.052101120948791504, 0.05222400188446045, 0.05212160110473633, 0.05212160110473633, 0.0522649621963501, 0.0521830415725708, 0.052101120948791504, 0.052203521728515626, 0.05203968048095703, 0.052551679611206055, 0.052449278831481934, 0.0521830415725708, 0.05216256141662598]
+    }
+  ],
+  "command": "python -m scripts.bench.spatial_trees.warp_bvh_device --queries count_hits all_hits --native-warp --mesh <sphere|torus> [--line] --counts 65536 --max-hits 8 --launches 50 --repeats 15"
+}
