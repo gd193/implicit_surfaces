@@ -1,7 +1,7 @@
 """Plotted 2D WoSt validation against an analytical mixed-boundary solution.
 
 Run from any directory, e.g.:
-  JAX_PLATFORMS=cpu python examples/wos/wost_annulus.py --output /path/to/output
+  python examples/wos/wost_annulus.py --output /path/to/output
 
 Domain: a < r < b.  -Delta u = 1, u(a) = 0, u'(b) = 0.
 Truth: u(r) = (a^2-r^2)/4 + (b^2/2) log(r/a).

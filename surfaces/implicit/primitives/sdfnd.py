@@ -151,6 +151,12 @@ def box_inward_direction(params, position, direction, normal) -> jax.Array:
     return jnp.where(position == hi, -jnp.abs(direction), direction)
 
 
+def box_contact_count(params, position):
+    """Number of exact face contacts, matching box_inward_direction."""
+    lo, hi = _box(params, position)
+    return jnp.sum((position == lo) | (position == hi))
+
+
 def box_star_radius(
     params, position, radius_cap, *, on_boundary=False, normal=None
 ) -> StarRadius:

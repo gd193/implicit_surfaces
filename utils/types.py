@@ -1,4 +1,4 @@
-"""Ray algorithm state and results. All ray distances are world-space."""
+"""Ray and sampling state/results. All ray distances are world-space."""
 from enum import IntEnum
 from typing import NamedTuple
 import jax.numpy as jnp
@@ -72,3 +72,32 @@ class MultiHitRayOutput(NamedTuple):
 class SurfaceSamples(NamedTuple):
     points: jnp.ndarray
     rays: MultiHitRayOutput
+
+
+class BoxBoundarySample(NamedTuple):
+    """Sample from a uniformly selected face plane intersected with a ball.
+
+    Rejection outside the finite face retains zero mass; do not renormalize.
+    Density factors are retained for stable importance-weight cancellation.
+    position is clamped to the face when invalid, so callbacks remain defined.
+    No PDE kernel or solid-angle normalization is included.
+    """
+    position: jnp.ndarray
+    normal: jnp.ndarray
+    distance: jnp.ndarray
+    face_radius: jnp.ndarray
+    radial_fraction: jnp.ndarray
+    valid: jnp.ndarray
+
+    @property
+    def inverse_pdf(self):
+        """Inverse surface-area/length PDF, including the selected-face probability.
+
+        The 2D endpoint t=1 has zero density and infinite inverse PDF. Green
+        weights must use the cancelled expression below, not inf times zero.
+        """
+        dim = self.position.shape[0]
+        a, t = self.face_radius, self.radial_fraction
+        if dim == 3:
+            return (2*dim)*(2*jnp.pi*a*(a*t))
+        return (2*dim)*(2*a)/(-jnp.log(t))

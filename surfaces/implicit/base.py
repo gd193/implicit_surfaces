@@ -1,6 +1,5 @@
 import jax
 import jax.numpy as jnp
-import jax.random as jr
 from typing import Callable, Optional, Tuple, Any
 import abc
 
@@ -67,15 +66,6 @@ class ImplicitSurface(Surface):
             f"{type(self).__name__} does not support bounded intersections"
         )
 
-    def sample_neumann_boundary(self, params, position, radius, key):
-        """Optional Green-weighted Neumann sample in a Dirichlet-free ball.
-
-        Returns NeumannBoundarySample for the positive Laplace ball Green
-        function, with the local solid-angle normalization included.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not support Neumann boundary sampling"
-        )
 
     @abc.abstractmethod
     def empty_sphere(self, params: jnp.ndarray, x: jnp.ndarray, trust_region_size: jnp.ndarray,
