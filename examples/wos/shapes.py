@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-import common  # noqa: F401  (puts the repo root on sys.path)
+from examples.wos import common  # noqa: F401  (puts the repo root on sys.path)
 from surfaces.implicit.lipschitz import lipschitzImplicit, sdfImplicit
 from surfaces.implicit.primitives import smooth_union, sphere_sdf, torus_sdf
 

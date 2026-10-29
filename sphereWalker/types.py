@@ -19,6 +19,13 @@ class WalkerState(NamedTuple):
     status: jnp.ndarray
 
 
+class WoStParameters(NamedTuple):
+    """Internal dynamic context; public callbacks still receive their original params."""
+
+    problem: Any
+    neumann: Any
+
+
 class StarWalkerState(NamedTuple):
     position: jnp.ndarray
     nSteps: jnp.ndarray
@@ -80,7 +87,11 @@ class WalkerOutput(NamedTuple):
     w: jnp.ndarray       # shape ()
 
 class WalkerDiagnostics(NamedTuple):
-    """Partial sums, never a success-only average. Counts index WalkerTermination.
+    """Contribution sums and accepted sample counts; never a success-only average.
+
+    Strict solvers accept only boundary hits. Explicit truncated solvers also
+    accept capped source sums with zero remaining tail. termination_counts keeps
+    these caps separate, and complete still means every walk hit the boundary.
 
     nSteps is the mean total step count over all requested samples, including
     failures. A differential sample succeeds only after both boundary hits.

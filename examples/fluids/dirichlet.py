@@ -14,10 +14,22 @@ import jax.numpy as jnp
 import jax.random as jr
 from jax.extend.random import threefry2x32_p
 from sphereWalker.integrator import WoSIntegrator, get_scatter_fn
-from sphereWalker.star_integrator import antithetic_source_samples
 from sphereWalker.types import WalkerDiagnostics, WalkerState
 from sphereWalker.types import WalkerTermination as WT
 from utils.sampling_primitives import sample_uniform_2sphere, unit_interval, sample_green_2ball as _green_ball
+
+
+def antithetic_source_samples(total_samples: int, walks: int) -> int:
+    """First-ball draws per pair for a total budget of distinct source samples.
+
+    Both halves reuse the local source integral. Continuation source samples
+    have a separate budget.
+    """
+    if (isinstance(walks, bool) or not isinstance(walks, Integral) or walks < 2 or walks % 2
+            or isinstance(total_samples, bool) or not isinstance(total_samples, Integral)
+            or total_samples < walks//2 or total_samples % (walks//2)):
+        raise ValueError('source samples must be a positive multiple of the number of walk pairs')
+    return total_samples//(walks//2)
 
 
 class VectorPotentialResult(NamedTuple):

@@ -16,9 +16,20 @@ from sphereWalker.types import (WalkerState, WalkerOutput, DifferentialWalkerSta
                                 WalkerTermination as WT, WalkerDiagnostics)
 from utils.jnp_array_compaction import (
     uniform_size_generator,
+    geometric_size_generator,
     should_compact,
     compact_tree,
 )
+
+
+def _compaction_schedule(size, count, mode):
+    match mode:
+        case 'uniform':
+            return uniform_size_generator(size, count)
+        case 'geometric':
+            return geometric_size_generator(size, count)
+        case _:
+            raise ValueError('compaction_mode must be uniform or geometric')
 from utils.sampling_primitives import (
     sample_uniform_1sphere,
     sample_uniform_2sphere,
@@ -129,6 +140,10 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
     def _source(self, params: Any, x: jnp.ndarray) -> jnp.ndarray:
         return self.source_term(params, x) if self.source_takes_params else self.source_term(x)
 
+    def _contributing_status(self, status):
+        """Strict by default; explicit truncated estimators can accept the cap."""
+        return status == WT.BOUNDARY_HIT
+
     @abc.abstractmethod
     def step(self, params: Any, state: StateT) -> StateT:
         pass
@@ -211,7 +226,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
 
         sums, counts = current_accumulated_w
         to_accumulate = jax.vmap(self._compute_accumulator_update, in_axes=(None, 0))(params, current_states)
-        successful = is_done & (current_states.status == WT.BOUNDARY_HIT)
+        successful = is_done & self._contributing_status(current_states.status)
         finite = jnp.ones_like(successful)
         for leaf in jax.tree.leaves(to_accumulate):
             finite &= jnp.all(jnp.isfinite(leaf).reshape((leaf.shape[0], -1)), axis=1)
@@ -285,6 +300,33 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         counters = jnp.stack([n_free, jnp.sum(next_parents != -1, dtype=n_free.dtype)])
         return final_states, next_parents, updated_accumulated_w, updated_accumulated_nSteps, counters
 
+    @partial(jax.jit, static_argnames=['self', 'active_buffer_size', 'N_total_samples',
+                                     'n_samples', 'steps_between_refill', 'unroll_loop', 'rounds'])
+    def _process_refill_rounds(self, states: StateT, parents: jnp.ndarray,
+                               accumulated_w: Any, accumulated_nSteps: jnp.ndarray,
+                               next_task_index: jnp.ndarray, params: Any,
+                               initial_position_batch: jnp.ndarray, rng_key: jnp.ndarray,
+                               init_trust_region_size: float, active_buffer_size: int,
+                               N_total_samples: int, n_samples: int, steps_between_refill: int,
+                               unroll_loop: bool, rounds: int):
+        """Dispatch existing refill rounds together, preserving each round's order."""
+        initial_task_index = next_task_index
+        # Keep one copy of the walk/source body in the executable, even for
+        # multi-sample source integrals. Grouping still needs no host counters.
+        def advance(_, carry):
+            states, parents, accumulated_w, accumulated_nSteps, next_task_index, _ = carry
+            states, parents, accumulated_w, accumulated_nSteps, counters = self._process_active_states(
+                states, parents, accumulated_w, accumulated_nSteps, next_task_index,
+                params, initial_position_batch, rng_key, init_trust_region_size,
+                active_buffer_size, N_total_samples, n_samples, steps_between_refill, unroll_loop)
+            return states, parents, accumulated_w, accumulated_nSteps, next_task_index+counters[0], counters
+
+        states, parents, accumulated_w, accumulated_nSteps, next_task_index, counters = jax.lax.fori_loop(
+            0, rounds, advance, (states, parents, accumulated_w, accumulated_nSteps,
+                                next_task_index, jnp.zeros(2, jnp.int32)))
+        counters = jnp.stack([next_task_index-initial_task_index, counters[1]])
+        return states, parents, accumulated_w, accumulated_nSteps, counters
+
     def pre_warm_compaction_buckets(self,
                                     params: Any,
                                     initial_position_batch: jnp.ndarray,
@@ -295,7 +337,8 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                                     unroll_loop: bool = False,
                                     max_active_states: int = 1000**2,
                                     jit_buck_size: int = 1000,
-                                    n_compactions: int = 20) -> None:
+                                    n_compactions: int = 20,
+                                    compaction_mode: str = 'uniform') -> None:
         """Force one JIT compile per compaction-bucket size.
 
         `_process_active_states` is jitted with `active_buffer_size` as a
@@ -316,7 +359,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         # Padding only stabilizes storage shapes; it is not extra work.
         N_total_samples = N_original * n_samples
         active_buffer_size = min(N_total_samples, max_active_states)
-        compaction_sizes = uniform_size_generator(active_buffer_size, n_compactions)
+        compaction_sizes = _compaction_schedule(active_buffer_size, n_compactions, compaction_mode)
 
         accumulated_w = (self._get_accumulator_initial(params, positions_padded),
                          jnp.zeros((N_positions, len(WT)), dtype=jnp.int32))
@@ -389,13 +432,20 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                         jit_buck_size: int=1000,
                         n_compactions: int=0,
                         diag_log: Optional[list]=None, *,
-                        return_details: bool=False) -> WalkerOutput | WalkerDiagnostics:
-        """Estimate only from completed walks; raise on any incomplete sample.
+                        return_details: bool=False,
+                        refill_rounds: int=1,
+                        compaction_mode: str='uniform') -> WalkerOutput | WalkerDiagnostics:
+        """Estimate from accepted terminations; strict boundary hits by default.
 
         return_details=True returns successful contribution sums and per-position
-        termination counts instead of an estimate. It does not average a biased
-        subset of successful walks. max_steps is a total per-sample budget,
+        termination counts instead of an estimate. An explicit truncation policy
+        may retain source contributions at max_steps, with zero remaining tail.
+        max_steps is a total per-sample budget,
         shared by both phases of differential WoS.
+
+        refill_rounds groups up to this many existing refill rounds into one
+        device dispatch while pending tasks can keep the buffer full. Drain
+        rounds retain their usual host checks and compaction schedule.
 
         diag_log: if a list is passed, each outer iteration appends a dict
             with `{outer_idx, buffer_size, n_active, ms_total, ms_compact,
@@ -407,6 +457,10 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         initial_position_batch = self._prepare_positions(
             initial_position_batch, n_samples, steps_between_refill,
             max_active_states, jit_buck_size, n_compactions)
+        if isinstance(refill_rounds, bool) or not isinstance(refill_rounds, Integral) or refill_rounds < 1:
+            raise ValueError('refill_rounds must be a positive integer')
+        if compaction_mode not in ('uniform', 'geometric'):
+            raise ValueError('compaction_mode must be uniform or geometric')
         if initial_position_batch.shape[0] == 0:
             sums = self._get_accumulator_initial(params, initial_position_batch)
             steps = jnp.zeros(0, dtype=initial_position_batch.dtype)
@@ -448,7 +502,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         # a wide buffer. `compaction_sizes` is a descending list of buffer
         # widths; we walk down it as the active set fits each smaller bucket.
         # `n_compactions=0` yields a single-size schedule = current behavior.
-        compaction_sizes = uniform_size_generator(active_buffer_size, n_compactions)
+        compaction_sizes = _compaction_schedule(active_buffer_size, n_compactions, compaction_mode)
         current_compaction_index = 0
         current_buffer_size = compaction_sizes[current_compaction_index]
 
@@ -486,8 +540,15 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                 ms_compact = (time.perf_counter() - t_compact_start) * 1000
 
             t_process_start = time.perf_counter() if diag_log is not None else None
+            # Even if every lane finishes in every round, this group cannot
+            # exhaust pending tasks before its final round. Thus no intermediate
+            # compaction opportunity or task assignment changes.
+            rounds = (refill_rounds
+                      if next_task_index + refill_rounds*current_buffer_size <= N_total_samples else 1)
+            process = self._process_refill_rounds if rounds > 1 else self._process_active_states
+            round_options = {'rounds': rounds} if rounds > 1 else {}
             (active_states, active_parent_indices, accumulated_w, accumulated_nSteps,
-             counters) = self._process_active_states(
+             counters) = process(
                 active_states,
                 active_parent_indices,
                 accumulated_w,
@@ -502,6 +563,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                 n_samples,
                 steps_between_refill,
                 unroll_loop,
+                **round_options,
             )
             if diag_log is not None:
                 jax.block_until_ready(active_states.position)
@@ -517,6 +579,7 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                     buffer_size=int(current_buffer_size),
                     n_active=int(n_active_before),
                     next_task_index=int(next_task_index),
+                    refill_rounds=int(rounds),
                     ms_total=ms_total,
                     ms_compact=ms_compact,
                     ms_process=ms_process,
@@ -529,17 +592,18 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                 print(f"Remaining Active States: {jnp.sum(active_parent_indices != -1)} | Next Task Index: {next_task_index}/{N_total_samples}  (buffer={current_buffer_size})")
                 print(f"Process called so far. {process_calls}")
 
-        # Counts include all requested samples; failed samples never enter sums.
+        # Counts retain the actual termination reason even for accepted caps.
         sums, counts = accumulated_w
         sums = jax.tree.map(lambda leaf: leaf[:N_original], sums)
         counts = counts[:N_original]
         final_nSteps = accumulated_nSteps[:N_original] / n_samples
         final_positions = positions_padded[:N_original, :]
-        details = WalkerDiagnostics(final_positions, sums, counts[:, WT.BOUNDARY_HIT],
+        contributing = jnp.sum(jnp.where(self._contributing_status(jnp.arange(len(WT))), counts, 0), axis=-1)
+        details = WalkerDiagnostics(final_positions, sums, contributing,
                                     counts, final_nSteps)
         if return_details:
             return details
-        if not bool(jnp.all(details.complete)):
+        if not bool(jnp.all(details.successful_samples == n_samples)):
             exhausted = int(jnp.sum(counts[:, WT.MAX_STEPS]))
             invalid = int(jnp.sum(counts[:, WT.INVALID]))
             raise RuntimeError(f'incomplete WoS sampling: {exhausted} exhausted, {invalid} invalid; '

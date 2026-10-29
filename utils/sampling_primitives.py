@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 from typing import Tuple
-import math
+from utils.types import BoxBoundarySample
 
 
 def sample_uniform_ray_bbox_2d(key: jax.Array, bbox_mins: jnp.ndarray, bbox_maxs: jnp.ndarray, dtype: jnp.dtype) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -251,3 +251,63 @@ def sample_green_2ball(key, dtype):
     """Green-weighted sample in the unit ball."""
     kr, kd = jr.split(key)
     return sample_green_radius(kr, 3, dtype), sample_uniform_2sphere(kd, dtype)
+
+
+def sample_box_boundary_in_ball(key, position, radius, lower, upper):
+    """Sample a box face in a ball, in 2D or 3D, without Green weighting.
+
+    In 3D a uniform radial distance gives conditional area PDF 1/(2*pi*a*rho).
+    In 2D t=U*V with a random sign gives conditional length PDF -log(t)/(2*a).
+    Each of the 2*dim face planes is chosen with equal probability.
+    """
+    dim = position.shape[0]
+    if dim not in (2, 3):
+        raise ValueError('box boundary sampling supports dimensions 2 and 3')
+    lo, hi = jnp.asarray(lower, position.dtype), jnp.asarray(upper, position.dtype)
+    if lo.shape != position.shape or hi.shape != position.shape:
+        raise ValueError('box corners must match the position shape')
+    face_key, radial_key, angle_key, second_key = jr.split(key, 4)
+    face = jr.randint(face_key, (), 0, 2*dim)
+    axis = face % dim
+    coordinate = jnp.where(face < dim, lo[axis], hi[axis])
+    normal = jax.nn.one_hot(axis, dim, dtype=position.dtype)*jnp.where(face < dim, -1, 1)
+    center = position.at[axis].set(coordinate)
+    distance_to_plane = jnp.abs(coordinate-position[axis])
+    safe_radius = jnp.where(radius > 0, radius, 1.)
+    a = jnp.sqrt(jnp.maximum((safe_radius-distance_to_plane)*(safe_radius+distance_to_plane), 0.))
+    t = unit_interval(radial_key, position.dtype)
+    if dim == 3:
+        rho = a*t
+        angle = 2*jnp.pi*unit_interval(angle_key, position.dtype)
+        sample = center.at[(axis+1) % dim].add(rho*jnp.cos(angle))
+        sample = sample.at[(axis+2) % dim].add(rho*jnp.sin(angle))
+    else:
+        t = t*unit_interval(second_key, position.dtype)
+        rho = a*t
+        sign = jnp.where(jr.bernoulli(angle_key), 1., -1.)
+        sample = center.at[(axis+1) % dim].add(sign*rho)
+    r = jnp.hypot(distance_to_plane, rho)
+    valid = ((radius > distance_to_plane) & (r < radius)
+             & jnp.all(sample >= lo) & jnp.all(sample <= hi))
+    sample = jnp.where(valid, sample, jnp.clip(center, lo, hi))
+    return BoxBoundarySample(sample, normal, r, a, t, valid)
+
+
+def weighted_greens_fn_box_boundary(sample: BoxBoundarySample, radius):
+    """Positive ball Laplace Green function divided by the face-sampling PDF.
+
+    Algebraically cancel the singular Green factor against the sampler density
+    before evaluation, as for the volume-weighted helpers. No boundary flux or
+    contact/solid-angle correction is included; those belong to the estimator.
+    """
+    dim = sample.position.shape[0]
+    r, a, t = sample.distance, sample.face_radius, sample.radial_fraction
+    safe_radius = jnp.where(radius > 0, radius, 1.)
+    safe_r = jnp.where(r > 0, r, 1.)
+    if dim == 3:
+        weight = dim*a*((a*t)/safe_r)*jnp.maximum(1-r/safe_radius, 0.)
+    else:
+        log_ratio = jnp.log1p(jnp.maximum(safe_radius-r, 0.)/safe_r)
+        log_density = jnp.where(t < 1, -jnp.log(t), 1.)
+        weight = (2*dim*a/jnp.pi)*(log_ratio/log_density)
+    return jnp.where(sample.valid, weight, 0.)
