@@ -27,8 +27,7 @@ algo_paper/
 scripts/*
 assets/
 
-# Keep the Warp BVH benchmark reproducible without exposing other local
-# research scripts or generated benchmark data.
+# Keep maintained benchmarks; local experiments stay ignored.
 !scripts/bench/
 scripts/bench/*
 !scripts/bench/spatial_trees/
@@ -42,3 +41,6 @@ scripts/bench/spatial_trees/*
 !scripts/bench/spatial_trees/warp_reference_queries.py
 !scripts/bench/spatial_trees/references/
 !scripts/bench/mesh_extraction/
+!scripts/bench/pressure/
+scripts/bench/pressure/*
+!scripts/bench/pressure/benchmark.py

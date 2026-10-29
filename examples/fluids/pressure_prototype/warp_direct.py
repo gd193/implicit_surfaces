@@ -19,8 +19,13 @@ from examples.fluids.pressure_prototype.boundary_integrator import (
 )
 from examples.fluids.pressure_prototype.warp_volume_geometry import volume_geometry, warp_volume_contains
 
-_BLOCK_SIZE = 256  # wp.jax_kernel's CUDA block size
+_BLOCK_SIZE = 256
 _QUERY_TILE = 256
+
+
+def _block_size(samples):
+    # A warp suffices for small sample sets; larger sets keep parallel loads.
+    return min(_BLOCK_SIZE, max(32, 1 << (samples-1).bit_length()))
 
 
 @lru_cache(maxsize=16)
@@ -61,7 +66,8 @@ def _grid_sampler(dtype, lower_values, spacing_values):
 
 
 @lru_cache(maxsize=16)
-def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None):
+def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None,
+             block_size=_BLOCK_SIZE):
     scalar = wp.float32 if dtype == np.dtype('float32') else wp.float64
     vector = wp.vec3 if scalar == wp.float32 else wp.vec3d
     lower = wp.constant(vector(*lower_values))
@@ -125,11 +131,11 @@ def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None)
         output: wp.array2d(dtype=scalar),
     ):
         tid = wp.tid()
-        query, lane = tid//_BLOCK_SIZE, tid % _BLOCK_SIZE
+        query, lane = tid//block_size, tid % block_size
         x = vector(points[query, 0], points[query, 1], points[query, 2])
         u = vector(velocities[query, 0], velocities[query, 1], velocities[query, 2])
         total = vector(scalar(0.))
-        for k in range(lane, distances.shape[1], _BLOCK_SIZE):
+        for k in range(lane, distances.shape[1], block_size):
             d = vector(directions[query, k, 0], directions[query, k, 1],
                        directions[query, k, 2])
             r = distances[query, k]
@@ -154,13 +160,13 @@ def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None)
         output: wp.array2d(dtype=scalar),
     ):
         tid = wp.tid()
-        query, lane = tid//_BLOCK_SIZE, tid % _BLOCK_SIZE
+        query, lane = tid//block_size, tid % block_size
         x = vector(points[query, 0], points[query, 1], points[query, 2])
         u = vector(velocities[query, 0], velocities[query, 1], velocities[query, 2])
         upper = lower+wp.cw_mul(spacing, vector(scalar(field.shape[0]-1),
             scalar(field.shape[1]-1), scalar(field.shape[2]-1)))
         total = vector(scalar(0.))
-        for k in range(lane, samples.shape[1], _BLOCK_SIZE):
+        for k in range(lane, samples.shape[1], block_size):
             y = vector(samples[query, k, 0], samples[query, k, 1], samples[query, k, 2])
             normal = vector(samples[query, k, 3], samples[query, k, 4], samples[query, k, 5])
             flux = scalar(0.)
@@ -201,12 +207,12 @@ def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None)
             output: wp.array2d(dtype=scalar),
         ):
             tid = wp.tid()
-            query, lane = tid//_BLOCK_SIZE, tid % _BLOCK_SIZE
+            query, lane = tid//block_size, tid % block_size
             x = vector(points[query, 0], points[query, 1], points[query, 2])
             u = vector(velocities[query, 0], velocities[query, 1], velocities[query, 2])
             radius = radii[query]
             total = vector(scalar(0.))
-            for k in range(lane, radial_uniforms.shape[1], _BLOCK_SIZE):
+            for k in range(lane, radial_uniforms.shape[1], block_size):
                 d = vector(directions[query, k, 0], directions[query, k, 1],
                            directions[query, k, 2])
                 r = radius*radial_uniforms[query, k]
@@ -224,8 +230,8 @@ def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None)
                 output[query, 2] = result[2]
 
         kernels.append(prepared_volume_kernel)
-    return tuple(wp.jax_kernel(kernel,
-        module_preload_mode=wp.JaxModulePreloadMode.ALL_DEVICES)
+    return tuple(wp.jax_kernel(kernel, block_dim=block_size,
+        module_preload_mode=wp.JaxModulePreloadMode.NONE)
         for kernel in kernels)
 
 
@@ -233,9 +239,11 @@ def grid_volume(velocity, params, points, directions, distances, radii, valid):
     """Evaluate exactly the supplied radial pairs and masks on CUDA."""
     field = params['velocity']
     u = jax.vmap(velocity, (None, 0))(params, points)
-    kernel = _kernels(points.dtype, velocity.lower, velocity.spacing, 0.)[0]
+    block_size = _block_size(distances.shape[1])
+    kernel = _kernels(points.dtype, velocity.lower, velocity.spacing, 0.,
+                      block_size=block_size)[0]
     return kernel(field, points, u, directions, distances, radii, valid,
-                  launch_dims=len(points)*_BLOCK_SIZE,
+                  launch_dims=len(points)*block_size,
                   output_dims={'output': points.shape})[0]
 
 
@@ -243,8 +251,10 @@ def grid_pseudo(velocity, params, points, samples, regularization):
     """Evaluate supplied (position, normal, inverse-area-PDF) records on CUDA."""
     field = params['velocity']
     u = jax.vmap(velocity, (None, 0))(params, points)
-    kernel = _kernels(points.dtype, velocity.lower, velocity.spacing, regularization)[1]
-    return kernel(field, points, u, samples, launch_dims=len(points)*_BLOCK_SIZE,
+    block_size = _block_size(samples.shape[1])
+    kernel = _kernels(points.dtype, velocity.lower, velocity.spacing, regularization,
+                      block_size=block_size)[1]
+    return kernel(field, points, u, samples, launch_dims=len(points)*block_size,
                   output_dims={'output': points.shape})[0]
 
 
@@ -257,9 +267,11 @@ def grid_volume_prepared(geometry, velocity, params, points, directions,
     Radial uniforms retain the original keys, shapes and epsilon floor.
     """
     u = jax.vmap(velocity, (None, 0))(params, points)
-    kernel = _kernels(points.dtype, velocity.lower, velocity.spacing, 0., geometry)[2]
+    block_size = _block_size(radial_uniforms.shape[1])
+    kernel = _kernels(points.dtype, velocity.lower, velocity.spacing, 0., geometry,
+                      block_size)[2]
     return kernel(params['velocity'], points, u, directions, radial_uniforms, radii,
-                  launch_dims=len(points)*_BLOCK_SIZE,
+                  launch_dims=len(points)*block_size,
                   output_dims={'output': points.shape})[0]
 
 
