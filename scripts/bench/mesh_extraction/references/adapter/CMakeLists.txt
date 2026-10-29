@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.24)
+project(vtkm_mc_reference LANGUAGES CXX CUDA)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CUDA_STANDARD 17)
+find_package(VTKm REQUIRED)
+add_library(vtkm_mc_reference SHARED reference.cu)
+target_link_libraries(vtkm_mc_reference PRIVATE vtkm::worklet)
+target_include_directories(vtkm_mc_reference PRIVATE ${VTKm_SOURCE_DIR} ${VTKm_BINARY_DIR})

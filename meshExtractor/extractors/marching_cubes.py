@@ -41,7 +41,7 @@ def _extract_triangles_from_cell(cell_lower, cell_upper, vert_vals):
         pa, pb = vert_pos[ia, :], vert_pos[ib, :]
         t = -va / (vb - va)
         t = jnp.nan_to_num(t)
-        t = jnp.clip(t, a_min=0.0, a_max=1.0)
+        t = jnp.clip(t, 0.0, 1.0)
         cross = (1.0 - t) * pa + t * pb
         return cross
 
@@ -53,9 +53,9 @@ def _extract_triangles_from_cell(cell_lower, cell_upper, vert_vals):
 
     def get_tri_pos(tri):
         is_valid = tri[0] != -1
-        i0 = jnp.clip(tri[0], a_min=0)
-        i1 = jnp.clip(tri[1], a_min=0)
-        i2 = jnp.clip(tri[2], a_min=0)
+        i0 = jnp.maximum(tri[0], 0)
+        i1 = jnp.maximum(tri[1], 0)
+        i2 = jnp.maximum(tri[2], 0)
         return jnp.stack(
             (edge_cross_loc[i0, :], edge_cross_loc[i1, :], edge_cross_loc[i2, :]),
             axis=0,

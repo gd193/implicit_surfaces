@@ -1,0 +1,139 @@
+{
+  "title": "Robin star-radius: Warp/C++ versus WoSX",
+  "date": "2026-10-24",
+  "device": {
+    "name": "NVIDIA A40",
+    "compute_capability": "8.6",
+    "physical_index": 1
+  },
+  "n_queries": 65536,
+  "cap": 2.0,
+  "triangles": {
+    "sphere": 20480,
+    "torus": 16384
+  },
+  "precision": "float32",
+  "scope": "Warmed resident-buffer CUDA graphs timed by CUDA events. Build, compilation, parameter uploads, transfers, readback and CPU dispatch excluded. Reference graph must contain exactly one query kernel.",
+  "sampling": {
+    "launches_per_graph": 5,
+    "samples": 9,
+    "ours": "randomized round-robin",
+    "wosx": "standalone serial runs",
+    "reference_blocks": [
+      64,
+      128,
+      256
+    ],
+    "selection": "Best reference block per case; Warp uses 64."
+  },
+  "software": {
+    "jax": "0.10.2",
+    "warp-lang": "1.17.0",
+    "numpy": "2.4.3",
+    "trimesh": "4.12.1"
+  },
+  "compiler": {
+    "slang": "2026.16.1",
+    "slang_rhi_commit": "12f1bffba0d0672ad5d7b579d48642cf1e2b2fdb",
+    "reference_optimization": "SLANG_OPTIMIZATION_LEVEL_HIGH"
+  },
+  "references": {
+    "wosx": {
+      "repository": "https://github.com/nv-tlabs/wosx",
+      "commit": "2716c27175bb6b5795749c539393d547fb3a6c2b"
+    },
+    "fcpw": {
+      "repository": "https://github.com/rohan-sawhney/fcpw",
+      "commit": "e498ca81fe01ae20ea3482485c90379307008de8",
+      "matches_wosx_submodule": true
+    }
+  },
+  "reference_entry": "Query-only wrapper around unchanged WoSX Robin traversal and bounds. CPU construction and GPU packing use the pinned sources. No solver work is timed.",
+  "validation": {
+    "tolerance": {
+      "atol": 3e-05,
+      "rtol": 0.0001
+    },
+    "oracle": {
+      "checked": 218,
+      "max_absolute": 4.651196814808856e-06,
+      "outside_tolerance": 0
+    },
+    "oracle_scope": "218 selected queries: large reference discrepancies and deterministic random samples, checked by exhaustive float64 triangle/edge evaluation. This biased sample is not a population error-rate estimate.",
+    "reference": "Native WoSX has near-coplanar cancellation and silhouette/contact discrepancies. Counts and maximum absolute differences per case are retained below; timing does not imply identical numerical behavior."
+  },
+  "geometry_sha256": {
+    "sphere": {
+      "vertices.f32": "429f6cbbc29beb2531bd5fa49a76160d07fe19cd497aa9b4ede1ea9e5d8ee4f2",
+      "faces.i32": "76ba4e88911ad4b149a0fa8c9a40a321a920cd949694ca5853a8e9c25d1241f2"
+    },
+    "torus": {
+      "vertices.f32": "9bcf55e4facf8b834fee8475503977c4ebdce84b7384c1cfb342575ac8b04684",
+      "faces.i32": "74ba41c71cc802f37f7c33cfc35423fbf16d9f36007c6132da8908905914cdf1"
+    }
+  },
+  "query_sha256": {
+    "gaussian": "5df3a84e3675d4482b004ec804e070f53761d6ef07e2ab7c511845cd7ec58866",
+    "interior": "5a84146ee8266585ee9565520f3577794aebed69b8708de465fe61a85ec0154e",
+    "shell": "09f0e7276f8ce8eee6bf854b31ae80804fe71da2ca78ab084e8e158ac3be5c26"
+  },
+  "production_sha256": {
+    "scripts/bench/spatial_trees/_warp_fixtures.py": "137455ef002e6a44a0dba207444cc041fd2f55b0863c45c681d499662127bf88",
+    "scripts/bench/spatial_trees/warp_bvh_device.py": "fe81d17c789cab2b1574ef99019387124f5087b87886dc3091e4fa8bbada6fe5",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_build.py": "c5462c022c4148f1844837575b41250fcfe9d2ff3c11c52fa0a1623a2b9f1e3d",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_closest.py": "3fc86a85f5b6235af677d2090e67247d21d7815b8445334c91b90dd621cc9cb6",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_geometry.py": "dc855e3880d710fa9ed79403991b48a932d12f600d88b4172ebce7cf762fd2c5",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_jax.py": "fbd18a6c59573b320ddeb2236705fc8690fd3650cbc371fb9461315034957eb7",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_layout.py": "821993682ba4955f92dd6554333c25ecce988ead77480c06c0e568cb845220dc",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_overlap.py": "8a5117e3dc4447f11773674303096012ea96a4c9f33fca317d97bbac057b31fa",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_ray.py": "4dc3bbd2685d591a55868688028aa2b84954efc0de5d2f50b8d63ddcb7c25ad0",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_robin.py": "167a6dac58682901d1d68e0dea2f65a99f8d91e7060da472e7f7fcbe1bfcf83e",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_sampling.py": "4bb3bc0a6562262b837957b7fd80872ebce4867c4c76bf685eae61b124fea122",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_silhouette.py": "b5e277947865127c461cd4f18e35a7e9f71b65c6a7338a8d2e489c642435de00",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_specs.py": "c1339d555cc5667a469daa822f4551a9b84c1bdc594625659297535d214fd3aa",
+    "surfaces/explicit/accelerators/bvh/backends/sah_warp.py": "319003c3ebe7529291bb1ebe89a63f9bfd6b2941cdcfbb3574608878cc7815b1",
+    "surfaces/explicit/accelerators/bvh/backends/snch_jax.py": "b359b976d94450f3d5c37529a674692b0520e042356f9553acc3afdd2f100d5e",
+    "surfaces/explicit/accelerators/bvh/backends/snch_warp.py": "87c2bad5369ca221399b9940910450f9260c2016f3bb65d0634c128997d5452c"
+  },
+  "reference_sha256": {
+    "wosx/include/wosx/gpu/utils/reflectance-boundary-bvh/bvh.slang": "12a254b8861b7a5e4d612c5b01b04342487ca57a2624a7993d4247106c81e56d",
+    "wosx/include/wosx/gpu/utils/reflectance-boundary-bvh/geometry.slang": "e105bc0e35f49b53ff7abc724a50a56862e25176d418b9b6a3776142cc368843",
+    "wosx/include/wosx/gpu/utils/reflectance-boundary-bvh/robin-bounds.slang": "ab5b5c970f1538cb4a2f813f9941cd7d1cfe2caba60049ff7d54b7a2a3514adc",
+    "fcpw/include/fcpw/gpu/fcpw.slang": "d0947074f2c08618bc8e763ceba1e29d6b1c795a089de77d8bbda77c0871cd1d",
+    "fcpw/include/fcpw/gpu/bvh.slang": "79fe14d9a90971163f1eda338f147f0893b15535cdeff61b1b50b488e2674540",
+    "fcpw/include/fcpw/gpu/bounding-volumes.slang": "c4ca9dfbc24e08d99436d933def3714d9e61d31f2ac54e02b68b0e98f1333012",
+    "fcpw/include/fcpw/gpu/geometry.slang": "d96a59f07bc8bfd419494b6aaccb6dc7cd0cf87348d52e17f9341b67f2cd0ff2",
+    "fcpw/include/fcpw/gpu/interaction.slang": "30fe8ae277934c82aa4627504ca918aa10a62290b5f3af8a91859fc59b0db309",
+    "fcpw/include/fcpw/gpu/slang_rhi_utils.h": "fe718f4c7533f202c2e01c2ec4cdf4c8b9b8eb7055f85af9848d285dc1930421"
+  },
+  "harness_sha256": {
+    "wosx_bench.cpp": "e37da277ee3f3540c55f91b4a37339e28077dab6b6b0b23605b249ac2e4dc7a3",
+    "wosx_host.h": "5d052fc4f71a0bd25704cf2f3527ef8b09b3b6feb7c9338a116affb49a390608",
+    "shaders/wosx.slang": "734c9a5f0b61c88074456fdfe1245447971e62ed6d2c15524abe501c209ec97b",
+    "shaders/query.slang": "1cac7d621bf56b094503082f8aacd6b2badda4e82d0d1a4e9a25752752f6eac4",
+    "kernel_only.h": "41cde3b7ce3683b403be72d0fb768dffab5a72dec6f57b065fb792d29fc498fd",
+    "queue_stream.cpp": "6d70a45a2ad70c6c32f321b68b94667857610c89ab3a32e2e90a24eee58f9e3d"
+  },
+  "cases": [
+    {"mesh":"sphere","distribution":"gaussian","coefficient":1.0,"ours":{"block":64,"median_ms":34.56819152832031,"samples_ms":[34.547506713867186,34.596044921875,34.56819152832031,34.579864501953125,34.351104736328125,34.482382202148436,34.65584716796875,34.512692260742185,34.75660705566406],"registers":52,"local_bytes":256},"wosx":{"block":128,"median_ms":45.9329528809,"samples_ms":[45.9257843018,45.8733581543,45.879296875,45.9673614502,45.9098114014,45.9450378418,45.9444213867,45.9329528809,45.9696136475],"registers":61,"local_bytes":544},"reference_difference":{"count":487,"max_absolute":0.02219212055206299}},
+    {"mesh":"sphere","distribution":"gaussian","coefficient":10.0,"ours":{"block":64,"median_ms":24.162918090820312,"samples_ms":[24.1623046875,24.162918090820312,23.990066528320312,24.074240112304686,24.176025390625,24.173977661132813,24.1723388671875,24.036965942382814,24.17049560546875],"registers":52,"local_bytes":256},"wosx":{"block":64,"median_ms":33.2132354736,"samples_ms":[33.2048370361,33.2330993652,33.2132354736,33.2316680908,33.2075012207,33.225112915,33.2124145508,33.2378112793,33.2032012939],"registers":61,"local_bytes":544},"reference_difference":{"count":0,"max_absolute":4.649162292480469e-06}},
+    {"mesh":"sphere","distribution":"interior","coefficient":1.0,"ours":{"block":64,"median_ms":35.752139282226565,"samples_ms":[35.68230285644531,35.751730346679686,35.752139282226565,35.79862976074219,35.917413330078126,35.890994262695315,35.915365600585936,35.71712036132813,35.738214111328126],"registers":52,"local_bytes":256},"wosx":{"block":64,"median_ms":58.9922302246,"samples_ms":[58.9922302246,58.9893615723,59.0821350098,58.835559082,58.9987854004,59.0704650879,59.0856201172,58.9182983398,58.9799438477],"registers":61,"local_bytes":544},"reference_difference":{"count":0,"max_absolute":5.841255187988281e-06}},
+    {"mesh":"sphere","distribution":"interior","coefficient":10.0,"ours":{"block":64,"median_ms":25.48264923095703,"samples_ms":[25.325772094726563,25.469747924804686,25.560064697265624,25.477938842773437,25.48264923095703,25.522994995117188,25.446400451660157,25.495756530761717,25.525042724609374],"registers":52,"local_bytes":256},"wosx":{"block":64,"median_ms":36.3790344238,"samples_ms":[36.3778045654,36.3937805176,36.3792388916,36.3788299561,36.370022583,36.395211792,36.3812866211,36.3790344238,36.3751434326],"registers":61,"local_bytes":544},"reference_difference":{"count":0,"max_absolute":2.5033950805664062e-06}},
+    {"mesh":"sphere","distribution":"shell","coefficient":1.0,"ours":{"block":64,"median_ms":23.045733642578124,"samples_ms":[23.062322998046874,23.022181701660156,23.121919250488283,23.017062377929687,23.02423095703125,23.141990661621094,23.045733642578124,23.025254821777345,23.127244567871095],"registers":52,"local_bytes":256},"wosx":{"block":64,"median_ms":36.8134155273,"samples_ms":[36.8115722656,36.8408569336,36.7556610107,36.7155212402,36.8908294678,36.8652282715,36.8134155273,36.7208435059,36.8510986328],"registers":61,"local_bytes":544},"reference_difference":{"count":376,"max_absolute":0.026843219995498657}},
+    {"mesh":"sphere","distribution":"shell","coefficient":10.0,"ours":{"block":64,"median_ms":2.935193634033203,"samples_ms":[2.9319168090820313,2.9382656097412108,2.935193634033203,2.935193634033203,2.937241554260254,2.933760070800781,2.94256649017334,2.935193634033203,2.938060760498047],"registers":52,"local_bytes":256},"wosx":{"block":64,"median_ms":3.38001937866,"samples_ms":[3.38288650513,3.38001937866,3.37919998169,3.38124809265,3.38001937866,3.37715187073,3.38739204407,3.37919998169,3.38718719482],"registers":61,"local_bytes":544},"reference_difference":{"count":2,"max_absolute":9.152304846793413e-05}},
+    {"mesh":"torus","distribution":"gaussian","coefficient":1.0,"ours":{"block":64,"median_ms":8.118681335449219,"samples_ms":[8.114995574951172,8.118271636962891,8.12564468383789,8.129945373535156,8.122163391113281,8.118681335449219,8.117657470703126,8.119091033935547,8.115814208984375],"registers":52,"local_bytes":256},"wosx":{"block":64,"median_ms":10.8685310364,"samples_ms":[10.8648445129,10.8699645996,10.8685310364,10.8673027039,10.8689407349,10.8685310364,10.8625923157,10.8759040833,10.8673027039],"registers":61,"local_bytes":544},"reference_difference":{"count":246,"max_absolute":0.05362224578857422}},
+    {"mesh":"torus","distribution":"gaussian","coefficient":10.0,"ours":{"block":64,"median_ms":9.248563385009765,"samples_ms":[9.248563385009765,9.248358154296875,9.251840209960937,9.246720123291016,9.250611114501954,9.248767852783203,9.248563385009765,9.245081329345703,9.248153686523438],"registers":52,"local_bytes":256},"wosx":{"block":64,"median_ms":11.5267585754,"samples_ms":[11.5253250122,11.5267585754,11.5294204712,11.5171325684,11.5259391785,11.5236862183,11.5292160034,11.5318786621,11.5314689636],"registers":61,"local_bytes":544},"reference_difference":{"count":0,"max_absolute":5.884096026420593e-06}},
+    {"mesh":"torus","distribution":"interior","coefficient":1.0,"ours":{"block":64,"median_ms":14.895718383789063,"samples_ms":[14.889779663085937,14.9032958984375,14.906777954101562,14.899200439453125,14.895718383789063,14.890599060058594,14.895718383789063,14.897357177734374,14.88916473388672],"registers":52,"local_bytes":256},"wosx":{"block":128,"median_ms":20.7693817139,"samples_ms":[20.7697921753,20.7622146606,20.7771652222,20.7736831665,20.7566848755,20.7575042725,20.7738876343,20.7534072876,20.7693817139],"registers":61,"local_bytes":544},"reference_difference":{"count":317,"max_absolute":0.009898930788040161}},
+    {"mesh":"torus","distribution":"interior","coefficient":10.0,"ours":{"block":64,"median_ms":12.888677978515625,"samples_ms":[12.887858581542968,12.890521240234374,12.887449645996094,12.886015319824219,12.892160034179687,12.889907836914062,12.888677978515625,12.887040710449218,12.892568969726563],"registers":52,"local_bytes":256},"wosx":{"block":128,"median_ms":17.2163070679,"samples_ms":[17.2240890503,17.2163070679,17.2232696533,17.2120071411,17.2279800415,17.2146682739,17.2072967529,17.2111877441,17.2312576294],"registers":61,"local_bytes":544},"reference_difference":{"count":1,"max_absolute":3.687664866447449e-05}},
+    {"mesh":"torus","distribution":"shell","coefficient":1.0,"ours":{"block":64,"median_ms":12.218777465820313,"samples_ms":[12.218777465820313,12.222463989257813,12.219391632080079,12.218367767333984,12.220620727539062,12.215090942382812,12.216524505615235,12.219801330566407,12.216320037841797],"registers":52,"local_bytes":256},"wosx":{"block":64,"median_ms":17.5831039429,"samples_ms":[17.5874053955,17.5714309692,17.5874053955,17.5697921753,17.5831039429,17.5710205078,17.5859710693,17.5769607544,17.5865859985],"registers":61,"local_bytes":544},"reference_difference":{"count":379,"max_absolute":0.05433094501495361}},
+    {"mesh":"torus","distribution":"shell","coefficient":10.0,"ours":{"block":64,"median_ms":9.620070648193359,"samples_ms":[9.62129898071289,9.618022155761718,9.620275115966797,9.618841552734375,9.622528076171875,9.620070648193359,9.621504211425782,9.619251251220703,9.619455718994141],"registers":52,"local_bytes":256},"wosx":{"block":128,"median_ms":12.4788734436,"samples_ms":[12.4801025391,12.4880897522,12.4784637451,12.484198761,12.4715011597,12.4973052979,12.468019104,12.4788734436,12.4626945496],"registers":61,"local_bytes":544},"reference_difference":{"count":4,"max_absolute":0.0013760849833488464}}
+  ],
+  "neumann": [
+    {"mesh":"sphere","distribution":"gaussian","ours":{"block":64,"median_ms":6.094438552856445,"samples_ms":[6.087270355224609,6.094438552856445,6.121676635742188,6.086656188964843,6.103039932250977,6.079487991333008,6.116352081298828,6.0788734436035154,6.151987075805664],"registers":45,"local_bytes":256},"fcpw":{"block":64,"median_ms":7.57104644775,"samples_ms":[7.59541778564,7.57329940796,7.57104644775,7.56305923462,7.56961288452,7.56674575806,7.57596130371,7.55957794189,7.57288970947],"registers":50,"local_bytes":256}},
+    {"mesh":"sphere","distribution":"interior","ours":{"block":64,"median_ms":0.7819263935089111,"samples_ms":[0.7755775928497315,0.7823359966278076,0.780083179473877,0.7802879810333252,0.7741439819335938,0.7897088050842285,0.7897088050842285,0.7839744091033936,0.7819263935089111],"registers":45,"local_bytes":256},"fcpw":{"block":64,"median_ms":0.765542411804,"samples_ms":[0.764928007126,0.766566419601,0.765747213364,0.76697602272,0.765542411804,0.765952014923,0.765337610245,0.765337610245,0.765337610245],"registers":50,"local_bytes":256}},
+    {"mesh":"sphere","distribution":"shell","ours":{"block":64,"median_ms":5.514239883422851,"samples_ms":[5.5259136199951175,5.494988632202149,5.542297744750977,5.4982654571533205,5.519359970092774,5.514239883422851,5.551513671875,5.511577606201172,5.496217727661133],"registers":45,"local_bytes":256},"fcpw":{"block":64,"median_ms":5.56871681213,"samples_ms":[5.51956481934,5.52652816772,5.56871681213,5.57670402527,5.57690887451,5.54270706177,5.57854728699,5.57568016052,5.56216316223],"registers":50,"local_bytes":256}},
+    {"mesh":"torus","distribution":"gaussian","ours":{"block":64,"median_ms":2.98024959564209,"samples_ms":[2.9847551345825196,2.981273651123047,2.977382469177246,2.9814783096313477,2.98024959564209,2.978201675415039,2.98024959564209,2.979020881652832,2.977587127685547],"registers":45,"local_bytes":256},"fcpw":{"block":64,"median_ms":4.19860496521,"samples_ms":[4.19860496521,4.19717102051,4.20085754395,4.19921913147,4.19921913147,4.19819526672,4.19860496521,4.19778556824,4.19942398071],"registers":50,"local_bytes":256}},
+    {"mesh":"torus","distribution":"interior","ours":{"block":64,"median_ms":5.60742416381836,"samples_ms":[5.611315155029297,5.60742416381836,5.605376052856445,5.609267044067383,5.608857727050781,5.611315155029297,5.606195068359375,5.607014465332031,5.60742416381836],"registers":45,"local_bytes":256},"fcpw":{"block":64,"median_ms":6.97487335205,"samples_ms":[6.97507858276,6.97364501953,6.97303009033,6.97098236084,6.9722114563,6.97589797974,6.97589797974,6.97487335205,6.97487335205],"registers":50,"local_bytes":256}},
+    {"mesh":"torus","distribution":"shell","ours":{"block":64,"median_ms":4.955136108398437,"samples_ms":[4.955136108398437,4.950425720214843,4.956774520874023,4.952064132690429,4.955545425415039,4.958412933349609,4.956774520874023,4.954931259155273,4.949606323242188],"registers":45,"local_bytes":256},"fcpw":{"block":128,"median_ms":5.79174385071,"samples_ms":[5.78908157349,5.78949127197,5.79481582642,5.79379196167,5.78764801025,5.78764801025,5.79174385071,5.7952255249,5.79276809692],"registers":50,"local_bytes":256}}
+  ]
+}
