@@ -58,13 +58,13 @@ def test_boundary_gather(dtype, queries, walk_count, layout, regularization):
                                        expected, rtol=tolerance, atol=tolerance)
 
 
-def _interpolate(field, points):
-    index = (points.astype(np.float64)+1.)*4.
+def _interpolate(field, points, lower=(-1.,)*3, spacing=(.25,)*3):
+    index = (points.astype(np.float64)-lower)/spacing
     low = np.floor(index).astype(int)
     fraction = index-low
     result = np.zeros(points.shape, np.float64)
     for corner in product((0, 1), repeat=3):
-        cell = np.clip(low+corner, 0, 8)
+        cell = np.clip(low+corner, 0, np.asarray(field.shape[:3])-1)
         weight = np.prod(np.where(corner, fraction, 1-fraction), axis=-1)
         result += weight[..., None]*field[cell[..., 0], cell[..., 1], cell[..., 2]]
     return result
@@ -81,7 +81,8 @@ def test_grid_volume(dtype, kind, pairs):
     from examples.fluids.pressure_prototype.warp_volume_geometry import VolumeGeometry
 
     rng = np.random.default_rng(12)
-    field = rng.normal(size=(9, 9, 9, 3)).astype(dtype)
+    field = rng.normal(size=(9, 7, 5, 3)).astype(dtype)
+    lower, spacing = (-.5, -.75, -1.), (.125, .25, .5)
     points = rng.uniform(-.9, .9, (17, 3)).astype(dtype)
     directions = rng.normal(size=(17, pairs, 3))
     directions = (directions/np.linalg.norm(directions, axis=-1, keepdims=True)).astype(dtype)
@@ -95,7 +96,8 @@ def test_grid_volume(dtype, kind, pairs):
     if kind == 'torus':
         radial_distance = np.sqrt(positions[..., 0]**2+positions[..., 2]**2+dtype(1e-12))-dtype(.4)
         valid &= np.sqrt(radial_distance**2+positions[..., 1]**2+dtype(1e-12)) > dtype(.15)
-    change = _interpolate(field, positions)-_interpolate(field, points)[:, None, None]
+    change = (_interpolate(field, positions, lower, spacing)
+              -_interpolate(field, points, lower, spacing)[:, None, None])
     d = directions.astype(np.float64)[:, :, None]
     terms = (radii[:, None]/distances)[..., None, None]*(3*d*np.sum(d*change, axis=-1, keepdims=True)-change)
     expected = np.where(valid[..., None], terms, 0.).sum(axis=(1, 2))/(2*pairs)
@@ -103,7 +105,7 @@ def test_grid_volume(dtype, kind, pairs):
         x, directions, radial, radii, distances, valid = map(jnp.asarray,
             (points, directions, radial, radii, distances, valid))
         params = {'velocity': jnp.asarray(field)}
-        velocity = GridVelocity((-1.,)*3, (.25,)*3)
+        velocity = GridVelocity(lower, spacing)
         unprepared = grid_volume(velocity, params, x, directions, distances, radii, valid)
         prepared = grid_volume_prepared(geometry, velocity, params, x, directions, radial, radii)
         tolerance = 2e-5 if dtype == np.float32 else 2e-13

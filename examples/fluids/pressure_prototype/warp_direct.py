@@ -35,8 +35,10 @@ def _grid_sampler(dtype, lower_values, spacing_values):
     lower = wp.constant(vector(*lower_values))
     inverse_spacing = wp.constant(vector(*(dtype.type(1.)/dtype.type(v) for v in spacing_values)))
 
+    # JAX FFI binds the trailing component axis as vector elements.
+    # Vector loads expose constant component offsets to the CUDA compiler.
     @wp.func
-    def sample_vector(field: wp.array4d(dtype=scalar), y: vector) -> vector:
+    def sample_vector(field: wp.array3d(dtype=vector), y: vector) -> vector:
         index = wp.cw_mul(y-lower, inverse_spacing)
         lo = wp.vec3i(int(wp.floor(index[0])), int(wp.floor(index[1])),
                      int(wp.floor(index[2])))
@@ -57,8 +59,7 @@ def _grid_sampler(dtype, lower_values, spacing_values):
                     wc = fraction[2]
                     if c == 0:
                         wc = scalar(1.)-wc
-                    value = vector(field[i, j, k, 0], field[i, j, k, 1],
-                                   field[i, j, k, 2])
+                    value = field[i, j, k]
                     total += value*((wa*wb)*wc)
         return total
 
@@ -85,7 +86,7 @@ def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None,
         a, b = (i for i in range(3) if i != axis)
 
         @wp.func
-        def sample_face(field: wp.array4d(dtype=scalar), y: vector) -> scalar:
+        def sample_face(field: wp.array3d(dtype=vector), y: vector) -> scalar:
             dims = wp.vec3i(field.shape[0], field.shape[1], field.shape[2])
             index = wp.cw_mul(y-lower, inverse_spacing)
             ia, ib = int(wp.floor(index[a])), int(wp.floor(index[b]))
@@ -104,7 +105,7 @@ def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None,
                     wb = fb
                     if db == 0:
                         wb = scalar(1.)-fb
-                    total += (wa*wb)*field[point[0], point[1], point[2], axis]
+                    total += (wa*wb)*field[point[0], point[1], point[2]][axis]
             return total
 
         return sample_face
@@ -112,7 +113,7 @@ def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None,
     sample_x, sample_y, sample_z = (face_sampler(axis) for axis in range(3))
 
     @wp.func
-    def volume_contribution(field: wp.array4d(dtype=scalar), y: vector, u: vector,
+    def volume_contribution(field: wp.array3d(dtype=vector), y: vector, u: vector,
                             d: vector, factor: scalar) -> vector:
         delta = sample_vector(field, y)-u
         return factor*(scalar(3.)*d*wp.dot(d, delta)-delta)
@@ -121,7 +122,7 @@ def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None,
     # its multiply/add changes near-query samples and R/r amplifies that error.
     @wp.kernel(enable_backward=False, module='unique', module_options={'fuse_fp': False})
     def volume_kernel(
-        field: wp.array4d(dtype=scalar),
+        field: wp.array3d(dtype=vector),
         points: wp.array2d(dtype=scalar),
         velocities: wp.array2d(dtype=scalar),
         directions: wp.array3d(dtype=scalar),
@@ -153,7 +154,7 @@ def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None,
 
     @wp.kernel(enable_backward=False, module='unique')
     def pseudo_kernel(
-        field: wp.array4d(dtype=scalar),
+        field: wp.array3d(dtype=vector),
         points: wp.array2d(dtype=scalar),
         velocities: wp.array2d(dtype=scalar),
         samples: wp.array3d(dtype=scalar),
@@ -198,7 +199,7 @@ def _kernels(dtype, lower_values, spacing_values, regularization, geometry=None,
 
         @wp.kernel(enable_backward=False, module='unique', module_options={'fuse_fp': False})
         def prepared_volume_kernel(
-            field: wp.array4d(dtype=scalar),
+            field: wp.array3d(dtype=vector),
             points: wp.array2d(dtype=scalar),
             velocities: wp.array2d(dtype=scalar),
             directions: wp.array3d(dtype=scalar),
