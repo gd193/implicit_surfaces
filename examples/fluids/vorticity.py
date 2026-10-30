@@ -91,7 +91,7 @@ def run3d(name, surface, params, lo, hi, n, omega0, *, title, steps=300, dt=.02,
           rotate_camera=True, check_transport=False, smoke=False, obstacle_metadata=(),
           make_velocity_solve=make_gradient_velocity_solve,
           n_compactions=4, compaction_mode='uniform', advection_method='bfecc', refill_rounds=4,
-          frame_stride=1):
+          frame_stride=1, render_cutaway=False):
     """surface: implicit with empty_sphere(params, x, tr) and signed_value, negative inside.
     omega0(points) -> (N, 3) initial vorticity, zeroed outside. levels: isosurfaces as fractions of the initial max.
     stretching: apply the paper's boundary-aware vortex-segment update.
@@ -333,12 +333,12 @@ def run3d(name, surface, params, lo, hi, n, omega0, *, title, steps=300, dt=.02,
         simulate()
     if render_now:
         render3d(name, title=title, levels=levels, camera=camera,
-                 render_frames=render_frames, rotate_camera=rotate_camera)
+                 render_frames=render_frames, rotate_camera=rotate_camera, cutaway=render_cutaway)
 
 
 def render3d(name, *, title, levels=(.2, .45), camera=(2.2, -2.6, 1.6),
-             render_frames=600, rotate_camera=True):
-    """Shared volume/dye renderer for both fluid formulations."""
+             render_frames=600, rotate_camera=True, cutaway=False):
+    """Render saved fields; cutaway removes the camera-facing half at the volume center."""
     import pyvista as pv
     from examples.wos import render_volume as rv
     from scipy.ndimage import gaussian_filter
@@ -379,8 +379,24 @@ def render3d(name, *, title, levels=(.2, .45), camera=(2.2, -2.6, 1.6),
         wall = grid.contour([0.], scalars="sdf")
     cmap, clim = "plasma", (levels[0] * top, levels[-1] * top * 1.6)
     state = {}
+    clip_plane = None
+    if cutaway:
+        from vtkmodules.vtkCommonDataModel import vtkPlane
+        clip_plane = vtkPlane()
+        clip_plane.SetOrigin(*((data['lower'] + data['upper']) / 2))
+
+    def clip_actor(actor):
+        if clip_plane is not None:
+            actor.mapper.AddClippingPlane(clip_plane)
+        return actor
 
     def on_frame(t):
+        if clip_plane is not None:
+            angle = np.arctan2(camera[1], camera[0]) + (2*np.pi*t if rotate_camera else 0.)
+            radius = np.hypot(camera[0], camera[1])
+            # VTK retains positive signed distances: the normal points away from the camera.
+            direction = np.array([radius*np.cos(angle), radius*np.sin(angle), camera[2]])
+            clip_plane.SetNormal(*(-direction / np.linalg.norm(direction)))
         if 'frame_times' in data:
             times = data['frame_times']
             requested_time = times[0]+t*(times[-1]-times[0])
@@ -409,7 +425,7 @@ def render3d(name, *, title, levels=(.2, .45), camera=(2.2, -2.6, 1.6),
                              font_size=10, color="black")]
         if smoke_frames is not None:
             actors.append(p.add_volume(grid, scalars='smoke', cmap=['#303941', '#303941'], clim=(0., 1.),
-                          opacity=[0., .10, .18, .25, .32, .40, .48, .56],
+                          opacity=[0., .01, .018, .025, .032, .040, .048, .056],
                           opacity_unit_distance=float(min(render_spacing)),
                           show_scalar_bar=False, shade=False))
         elif "dyes" in state:
@@ -419,11 +435,11 @@ def render3d(name, *, title, levels=(.2, .45), camera=(2.2, -2.6, 1.6),
         elif iso.n_points:
             actors.append(p.add_mesh(iso, scalars="w", cmap=cmap, clim=clim, opacity=.75,
                                      smooth_shading=True, show_scalar_bar=False))
-        return actors
+        return [actors[0], *(clip_actor(actor) for actor in actors[1:])]
 
     def static(p):
         color = 'royalblue' if data.get('scene', '') == 'smoke-column' else 'lightsteelblue'
-        p.add_mesh(wall, color=color, opacity=1. if smoke_frames is not None else .12, smooth_shading=True)
+        clip_actor(p.add_mesh(wall, color=color, opacity=1. if smoke_frames is not None else .12, smooth_shading=True))
         if dye_frames is not None or smoke_frames is not None:
             return
         bar = pv.PolyData(np.zeros((2, 3)))  # invisible, owns the color bar
@@ -436,7 +452,7 @@ def render3d(name, *, title, levels=(.2, .45), camera=(2.2, -2.6, 1.6),
     budget = (f"{int(data['n_samples'])} shared boundary walks" if "n_samples" in data else
               f"{int(data['n_walks'])} walks/pt/step" if "n_walks" in data else
               f"{int(data['boundary_lines'])} boundary lines, series {int(data['path_length'])}")
-    rv.orbit(name, "fluid", f"{title}: {caption}, {budget}",
+    rv.orbit(name, "fluid_cutaway" if cutaway else "fluid", f"{title}: {caption}, {budget}",
              layer, normal=(0., 0., 1.), extent_points=np.asarray(wall.points), static=static,
              camera=camera, sweeps=0, on_frame=on_frame, still_t=.5, frames=render_frames,
              rotate_camera=rotate_camera,
