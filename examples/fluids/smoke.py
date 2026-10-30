@@ -121,6 +121,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--name', default='torus_smoke', help='output directory name')
     parser.add_argument('--render', action='store_true', help='render the saved run without simulating')
+    parser.add_argument('--cutaway', action='store_true',
+                        help='hide the camera-facing half of the smoke and obstacle when rendering')
     parser.add_argument('--render-frames', type=int, default=240)
     parser.add_argument('--frame-stride', type=int, default=1,
                         help='save every k-th visualization frame; always save the last frame')
@@ -221,7 +223,7 @@ def main() -> None:
           diagnostics_fn=measure, rotate_camera=False, camera=(3., -4., 1.8),
           n_compactions=7, compaction_mode='geometric', refill_rounds=16,
           obstacle_metadata=metadata, render_frames=args.render_frames,
-          frame_stride=args.frame_stride,
+          frame_stride=args.frame_stride, render_cutaway=args.cutaway,
           stages=lambda _: (not args.render, args.render))
 
 
