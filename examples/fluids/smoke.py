@@ -154,18 +154,23 @@ def main() -> None:
     def omega0(points):
         return args.flow_scale * column_vorticity(points)
 
-    # The original expression is faster at 64 cubed; nested interpolation
-    # avoids XLA's split at 128 cubed. Select once, before tracing either solve.
-    local_sampler = sample_vector_grid_nested if args.grid >= 128 else sample_vector_grid
+    grid_lower = (-extent+extent/args.grid,)*3
+    grid_spacing = (2*extent/args.grid,)*3
 
     def local_source(params, x):
-        return local_sampler(params['omega'], x,
-            (-extent+extent/args.grid,)*3, (2*extent/args.grid,)*3)
+        return sample_vector_grid_nested(params['omega'], x, grid_lower, grid_spacing)
+
+    def local_gradient_cuda(params, points, radii, key, *, pairs):
+        from examples.fluids.warp_local import grid_local_gradient
+        return grid_local_gradient(params['omega'], points, radii, key,
+            lower=grid_lower, spacing=grid_spacing, pairs=pairs, draws=source_samples)
 
     def gradient_factory(*arguments, **options):
         return make_dirichlet_gradient_solve(*arguments,
             gradient_source_samples=source_samples,
-            prepare_local_source=prepare_local_source, local_source=local_source, **options)
+            prepare_local_source=prepare_local_source, local_source=local_source,
+            local_gradient_cuda=local_gradient_cuda if jax.default_backend() == 'gpu' else None,
+            **options)
 
     print(f'Pointwise WoS: {args.walks} walks/site on the full source each step; '
           f'cap: {args.max_steps}', flush=True)

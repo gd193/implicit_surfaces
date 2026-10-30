@@ -28,12 +28,7 @@ def sample_vector_grid(field, x, lower, spacing):
 
 
 def sample_vector_grid_nested(field, x, lower, spacing):
-    """Clamped trilinear sampling with seven nested linear interpolations.
-
-    The local fluid integral uses this expression to keep all corner gathers
-    fused with source weighting at 128 cubed. The walk/transport sampler above
-    retains its existing summation order and generated code.
-    """
+    """Clamped trilinear sampling with seven nested vector interpolations."""
     index = (x-jnp.asarray(lower, x.dtype))/jnp.asarray(spacing, x.dtype)
     base = jnp.floor(index).astype(jnp.int32)
     fraction = index-base.astype(index.dtype)

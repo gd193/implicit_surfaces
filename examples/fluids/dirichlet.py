@@ -197,8 +197,11 @@ def _local_source_keys(
     """
     if jax.config.jax_threefry_partitionable and jr.key_impl(key) == 'threefry2x32':
         def counter(words, value):
+            value = jnp.asarray(value, jnp.uint32)
+            # Preserve batched key shapes for Threefry's CPU loop.
+            zero = value ^ value
             return tuple(threefry2x32_p.bind(
-                *words, jnp.uint32(0), jnp.asarray(value, jnp.uint32)))
+                *(w+zero for w in words), zero, value))
 
         initial = counter(tuple(jr.key_data(key)), index)
         radial = counter(initial, 1)
@@ -224,22 +227,26 @@ def _local_source_keys(
 def make_dirichlet_gradient_solve(empty_sphere, boundary, source, *, dim,
                                   gradient_source_samples,
                                   prepare_local_source=_identity_source_params,
+                                  local_gradient_cuda=None,
                                   **configuration):
     """Same gradient factory contract; homogeneous or nonzero Dirichlet data.
 
     gradient_source_samples is the number of distinct local draws per pair.
-    Local batches contain at most 512 queries and target at most 512K source
+    JAX batches contain at most 512 queries and target at most 512K source
     samples, independently of grid size (one query is the minimum batch).
     The existing WoS batch driver, geometry queries and PRNG are reused.
     prepare_local_source may change the local source's parameter layout, but
     must preserve its values at every point. Walks receive the original params.
     An optional local_source callback may evaluate that same source with a
     different expression; it follows source_takes_params and must be callable.
+    local_gradient_cuda replaces the local CUDA integral or returns NotImplemented.
     """
     if dim != 3:
         raise ValueError('the fluid adapter requires three dimensions')
     if not callable(prepare_local_source):
         raise TypeError('prepare_local_source must be callable')
+    if local_gradient_cuda is not None and not callable(local_gradient_cuda):
+        raise TypeError('local_gradient_cuda must be callable')
     configuration = dict(configuration)
     local_source = configuration.pop('local_source', source)
     if not callable(local_source):
@@ -297,6 +304,19 @@ def make_dirichlet_gradient_solve(empty_sphere, boundary, source, *, dim,
 
         batch = min(512, max(1, len(points)), max(1, (512*1024)//(pairs*draws)))
         return jax.lax.map(at_point, (jnp.arange(len(points)), points, radii), batch_size=batch)
+
+    if local_gradient_cuda is not None:
+        reference = local_gradient
+
+        @partial(jax.jit, static_argnames=('pairs',))
+        def local_gradient(params, points, radii, key, *, pairs):
+            def cuda(*args):
+                result = local_gradient_cuda(*args, pairs=pairs)
+                return reference(*args, pairs=pairs) if result is NotImplemented else result
+
+            return jax.lax.platform_dependent(params, points, radii, key,
+                cuda=cuda,
+                default=lambda *args: reference(*args, pairs=pairs))
 
     @jax.jit
     def prepare(params, points, trust_radius):
