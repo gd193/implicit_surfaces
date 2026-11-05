@@ -1,7 +1,5 @@
 """JAX scalar fields to indexed meshes; uses pinned Warp 1.18 kernels."""
-from functools import lru_cache
 from math import prod
-from operator import index
 
 import jax
 import jax.numpy as jnp
@@ -11,63 +9,11 @@ import warp.geometry as geometry
 from warp._src import utils
 from warp._src.geometry import marching_cubes as mc
 from warp._src.geometry.iso_surface import resolve_domain_bounds, validate_field
-
-
-class _FieldEvaluator:
-    def __init__(self, field, batch_size):
-        self.batch_size = batch_size
-
-        def scalar(params, point):
-            value = jnp.asarray(field(params, point))
-            if value.shape != () or value.dtype != jnp.float32:
-                raise TypeError("field must return a scalar float32")
-            return value
-
-        self.evaluate = jax.jit(jax.vmap(scalar, in_axes=(None, 0)))
-        self.values = jax.jit(self._values)
-
-    def _values(self, params, points):
-        count = points.shape[0]
-        if count <= self.batch_size:
-            return self.evaluate(params, points)
-        padded = jnp.pad(points, ((0, -count % self.batch_size), (0, 0)))
-        chunks = padded.reshape(-1, self.batch_size, 3)
-        return jax.lax.map(lambda p: self.evaluate(params, p), chunks).reshape(-1)[:count]
-
-    def __call__(self, params, points):
-        return wp.from_jax(self.values(params, wp.to_jax(points)))
-
-    def dense(self, params, shape, lower, upper):
-        batch = self._dense_batch(tuple(shape), tuple(lower), tuple(upper))
-        out = wp.empty(shape, dtype=wp.float32)
-        flat = out.flatten()
-        copied = wp.Event() if out.device.is_cuda else None
-        previous = None
-        for start in range(0, flat.size, self.batch_size):
-            values = wp.from_jax(batch(jnp.int32(start), params))
-            if copied is not None and previous is not None:
-                wp.synchronize_event(copied)
-            wp.copy(flat, values, dest_offset=start, count=min(self.batch_size, flat.size-start))
-            if copied is not None:
-                wp.record_event(copied)
-            previous = values  # Retain the JAX source until its asynchronous copy completes.
-        if copied is not None:
-            wp.synchronize_event(copied)
-        return out
-
-    @lru_cache(maxsize=4)
-    def _dense_batch(self, shape, lower, upper):
-        nx, ny, nz = shape
-
-        @jax.jit
-        def batch(start, params):
-            i = jnp.minimum(start + jnp.arange(self.batch_size), nx*ny*nz - 1)
-            p = jnp.stack((i // (ny*nz), (i // nz) % ny, i % nz), axis=-1)
-            lo, hi = jnp.asarray(lower, jnp.float32), jnp.asarray(upper, jnp.float32)
-            delta = (hi-lo) / jnp.asarray((nx-1, ny-1, nz-1), jnp.float32)
-            return self.evaluate(params, lo + p.astype(jnp.float32)*delta)
-
-        return batch
+from meshExtractor._field import _FieldEvaluator, _validate_grid
+from meshExtractor.dual import (
+    make_dual_contouring as make_dual_contouring,
+    make_dual_contouring_resident as make_dual_contouring_resident,
+)
 
 
 def _extract_dense(field, threshold=0., *, lower=None, upper=None):
@@ -131,19 +77,7 @@ def make_marching_cubes(field, bounds, resolution=128, *, level=0., lipschitz_bo
     sparse sampling; otherwise sample densely. Parameters remain dynamic.
     Call outside JAX transformations: mesh sizes depend on field values.
     """
-    cells = (index(resolution),)*3 if np.isscalar(resolution) else tuple(map(index, resolution))
-    lower, upper = (np.asarray(b, np.float32) for b in bounds)
-    batch_size = index(batch_size)
-    if len(cells) != 3 or min(cells) < 1 or batch_size < 1:
-        raise ValueError("resolution and batch_size must be positive")
-    if lower.shape != (3,) or upper.shape != (3,) or not np.all(np.isfinite([lower, upper])) or np.any(upper <= lower):
-        raise ValueError("bounds must be finite increasing 3D corners")
-    if not np.isfinite(level) or (lipschitz_bound is not None and
-                                (not np.isfinite(lipschitz_bound) or lipschitz_bound <= 0)):
-        raise ValueError("level must be finite and Lipschitz bound positive and finite")
-    nodes = tuple(n+1 for n in cells)
-    if lipschitz_bound is None and max(3*prod(nodes), 15*prod(cells)) > np.iinfo(np.int32).max:
-        raise ValueError("dense grid exceeds int32 mesh indexing")
+    cells, nodes, lower, upper, batch_size = _validate_grid(bounds, resolution, level, lipschitz_bound, batch_size)
     lower, upper = tuple(lower), tuple(upper)
     # Warp pads sparse root grids; projection extends the same Lipschitz bound.
     padded = lipschitz_bound is not None and (len(set(cells)) != 1 or cells[0] & (cells[0]-1))

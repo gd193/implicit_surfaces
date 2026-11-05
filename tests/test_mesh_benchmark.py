@@ -13,7 +13,7 @@ wp = pytest.importorskip("warp")
 pytest.importorskip("warp.geometry")
 
 from scripts.bench.mesh_extraction._cases import (  # noqa: E402
-    BACKENDS, fixture, host_mesh, make_runner, validate_mesh,
+    MC_BACKENDS, fixture, host_mesh, make_runner, validate_mesh,
 )
 from scripts.bench.mesh_extraction.benchmark import trace_samples  # noqa: E402
 from meshExtractor.warp import _extract_dense, make_marching_cubes  # noqa: E402
@@ -35,7 +35,7 @@ def test_mesh_adapters_against_dense_reference(name, level, phase):
         reference -= 1.
     else:
         reference, reference_faces = np.empty((0, 3)), np.empty((0, 3), int)
-    for backend in BACKENDS:
+    for backend in MC_BACKENDS:
         run, _ = make_runner(backend, scene, cells, phase, 1024)
         vertices, faces = host_mesh(run())
         validate_mesh(vertices, faces, scene, cells)

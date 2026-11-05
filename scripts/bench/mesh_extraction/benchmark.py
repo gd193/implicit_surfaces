@@ -76,9 +76,11 @@ def worker(args):
     case_dir.mkdir(parents=True, exist_ok=True)
     scene = fixture(args.field[0], args.level)
     with wp.ScopedMemoryTracker("mesh", print=False) as tracker:
-        run, details = make_runner(args.backend[0], scene, args.resolutions[0], args.phase[0], args.batch_size)
+        run, details = make_runner(args.backend[0], scene, args.resolutions[0], args.phase[0], args.batch_size, args.root_steps,
+                                   capacity=args.capacity, sparse_capacity=args.sparse_capacity, resident=args.resident)
         mesh = run()
-        jax.block_until_ready(mesh) if args.backend[0] == "legacy" else wp.synchronize_device()
+        jax.block_until_ready(mesh)
+        wp.synchronize_device()
         stream = io.StringIO()
         tracker.report(file=stream, max_items=0)
         memory = {"scope": "fresh process: input preparation and first extraction, including compilation",
@@ -89,8 +91,7 @@ def worker(args):
 
     def invoke():
         mesh = run()
-        if args.backend[0] == "legacy":
-            jax.block_until_ready(mesh)
+        jax.block_until_ready(mesh)
         wp.synchronize_device()
         return mesh
 
@@ -127,7 +128,7 @@ def worker(args):
     no_op = args.phase[0] == "extraction" and (
         (args.backend[0] == "legacy" and not len(faces)) or
         (args.backend[0] == "warp-sparse" and details["cells"] == 0))
-    device_samples, kernels = trace_samples(trace_file, allow_no_kernels=no_op)
+    device_samples, kernels = trace_samples(trace_file, allow_no_kernels=no_op or args.capacity is not None)
     if len(device_samples) != args.repeats:
         raise RuntimeError("incomplete device trace")
     result = {"backend": args.backend[0], "field": args.field[0], "cells_per_axis": args.resolutions[0],
@@ -142,13 +143,17 @@ def worker(args):
               "median_device_activity_ms": float(np.median([
                   s["kernel_ms"] + s["memcpy_ms"] + s["memset_ms"] for s in device_samples])),
               "top_kernel_total_us": kernels, "trace": str(trace_file), "status": "ok"}
+    if args.capacity is not None:
+        # CUPTI omits conditional graph bodies; observed kernel sums are incomplete.
+        result.update(device_activity_coverage="partial_conditional_graph",
+                      median_kernel_ms=None, median_device_activity_ms=None)
     (case_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
 
 
 def source_digest():
     digest = hashlib.sha256()
     for folder in (ROOT / "meshExtractor", ROOT / "surfaces/implicit", Path(__file__).parent):
-        for path in sorted(folder.rglob("*.py")):
+        for path in sorted(p for p in folder.rglob("*") if p.suffix in {".py", ".h", ".cpp", ".cu"}):
             digest.update(str(path.relative_to(ROOT)).encode())
             digest.update(path.read_bytes())
     return digest.hexdigest()
@@ -164,6 +169,10 @@ def main():
     parser.add_argument("--phase", nargs="+", choices=("pipeline", "extraction"), default=["pipeline"])
     parser.add_argument("--level", type=float, default=0.)
     parser.add_argument("--batch-size", type=int, default=65536)
+    parser.add_argument("--root-steps", type=int, default=0, help="dual-contouring edge refinement passes")
+    parser.add_argument("--capacity", nargs=3, type=int, metavar=("C", "E", "T"))
+    parser.add_argument("--sparse-capacity", nargs=2, type=int, metavar=("F", "K"))
+    parser.add_argument("--resident", action="store_true", help="measure padded dual-contouring output")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--gpu", default="0", help="physical GPU index or UUID")
@@ -172,6 +181,17 @@ def main():
     args = parser.parse_args()
     if min(*args.resolutions, args.batch_size, args.repeats) < 1 or args.warmup < 1:
         parser.error("resolutions, batch size, repeats and warmup must be positive")
+    if args.root_steps < 0 or (args.root_steps and any(not b.startswith("dual-") for b in args.backend)):
+        parser.error("root steps must be nonnegative and require dual-contouring backends")
+    if args.capacity is not None:
+        if args.phase != ["pipeline"] or any(not b.startswith("dual-") for b in args.backend):
+            parser.error("capacities require dual-contouring pipeline benchmarks")
+        if min(args.capacity) < 1 or (args.sparse_capacity is not None and min(args.sparse_capacity) < 1):
+            parser.error("capacities must be positive")
+        if ("dual-sparse" in args.backend) != (args.sparse_capacity is not None):
+            parser.error("dual-sparse with capacities requires --sparse-capacity")
+    elif args.resident or args.sparse_capacity is not None:
+        parser.error("--resident and --sparse-capacity require --capacity")
     args.output = args.output.resolve()
     if args.worker:
         worker(args)
@@ -182,6 +202,8 @@ def main():
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=args.gpu, XLA_PYTHON_CLIENT_PREALLOCATE="false",
                PYTHONDONTWRITEBYTECODE="1")
     env.setdefault("WARP_CACHE_PATH", str(args.output.parent / "warp_cache"))
+    if args.capacity is not None:
+        env["XLA_FLAGS"] = env.get("XLA_FLAGS", "") + " --xla_enable_command_buffers_during_profiling=true"
     manifest = {"source_sha256": source_digest(), "started_utc": datetime.now(timezone.utc).isoformat(),
                 "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
                 "gpu_info": subprocess.check_output(["nvidia-smi", "--id", args.gpu,
@@ -199,7 +221,14 @@ def main():
                     command = [sys.executable, "-m", "scripts.bench.mesh_extraction.benchmark", "--worker",
                                "--backend", backend, "--field", name, "--resolutions", str(resolution),
                                "--phase", phase, "--level", str(args.level), "--batch-size", str(args.batch_size),
+                               "--root-steps", str(args.root_steps),
                                "--repeats", str(args.repeats), "--warmup", str(args.warmup), "--output", str(folder)]
+                    if args.capacity is not None:
+                        command.extend(["--capacity", *map(str, args.capacity)])
+                    if args.sparse_capacity is not None and backend == "dual-sparse":
+                        command.extend(["--sparse-capacity", *map(str, args.sparse_capacity)])
+                    if args.resident:
+                        command.append("--resident")
                     with (folder / "run.log").open("w") as log:
                         process = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
                     if process.returncode:
@@ -209,11 +238,13 @@ def main():
                         print(f"{label}: FAILED ({folder / 'run.log'})", flush=True)
                     else:
                         result = json.loads((folder / "result.json").read_text())
-                        previous = triangle_counts.setdefault((name, resolution), result["mesh"]["triangles"])
+                        previous = triangle_counts.setdefault((name, resolution, "dual" if backend.startswith("dual-") else "marching-cubes"), result["mesh"]["triangles"])
                         if previous != result["mesh"]["triangles"]:
                             failed = True
                             result.update(status="failed", error=f"triangle count differs from peer: {previous}")
-                        print(f"{label}: device activity {result['median_device_activity_ms']:.3f} ms, "
+                        device_ms = result['median_device_activity_ms']
+                        activity = "unavailable" if device_ms is None else f"{device_ms:.3f} ms"
+                        print(f"{label}: device activity {activity}, "
                               f"wall {result['median_wall_ms']:.3f} ms, "
                               f"{result['mesh']['triangles']} triangles", flush=True)
                     manifest["results"].append(result)

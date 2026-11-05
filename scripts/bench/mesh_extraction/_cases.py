@@ -7,10 +7,12 @@ import numpy as np
 import warp as wp
 import warp.geometry as geometry
 
-from meshExtractor.warp import _FieldEvaluator, _extract_dense, _extract_sparse
+from meshExtractor._field import _FieldEvaluator
+from meshExtractor.warp import _extract_dense, _extract_sparse
 
 FIELDS = ("sphere", "torus", "neural", "gyroid")
-BACKENDS = ("legacy", "warp-dense", "warp-sparse", "compact-dense")
+MC_BACKENDS = ("legacy", "warp-dense", "warp-sparse", "compact-dense")
+BACKENDS = MC_BACKENDS + ("dual-dense", "dual-sparse")
 LOWER, UPPER = (-1., -1., -1.), (1., 1., 1.)
 
 
@@ -58,11 +60,44 @@ def fixture(name, level=0.):
     return Fixture(name, tuple(params), float(bound), level)
 
 
-def make_runner(backend, scene, cells, phase, batch_size):
+def make_runner(backend, scene, cells, phase, batch_size, root_steps=0, *,
+                capacity=None, sparse_capacity=None, resident=False):
     """Prepare resident inputs and return the measured operation."""
     evaluate = _FieldEvaluator(scene, batch_size)
     sample = partial(evaluate, scene.params)
     details = {"input": "implicit_function", "field_evaluation_in_timed_region": True}
+    if backend in ("dual-dense", "dual-sparse"):
+        import jax
+        from meshExtractor.dual import (
+            _sample_grid, _extract_samples, _make_pruner, _make_refiner, make_dual_contouring,
+        )
+        bound = scene.lipschitz if backend == "dual-sparse" else None
+        if phase == "pipeline":
+            factory = make_dual_contouring
+            if resident:
+                from meshExtractor.dual import make_dual_contouring_resident, DC_COMPILER_OPTIONS
+                factory = make_dual_contouring_resident
+            extract = factory(scene, (LOWER, UPPER), cells,
+                          lipschitz_bound=bound, level=scene.level, batch_size=batch_size,
+                          root_steps=root_steps, capacity=capacity, sparse_capacity=sparse_capacity)
+            if resident:
+                extract = jax.jit(extract, compiler_options=DC_COMPILER_OPTIONS)
+            run = partial(extract, scene.params)
+        else:
+            # Resident corners omit sampling, but Hermite gradients remain timed.
+            prune = _make_pruner(evaluate, (cells,)*3, LOWER, UPPER, scene.level, bound) if bound is not None else None
+            samples = _sample_grid(evaluate, prune, scene.params, (cells,)*3,
+                                   LOWER, UPPER, scene.level, bound)
+            normals = _FieldEvaluator(jax.grad(scene, argnums=1), batch_size, output_shape=(3,))
+            dense_grid = ((cells+1,)*3, tuple(samples[4]), tuple(samples[5])) if bound is None else None
+            refiner = _make_refiner(evaluate, normals, scene.level, root_steps, dense_grid) if root_steps else None
+            run = partial(_extract_samples, samples, normals, scene.params, scene.level, refiner)
+            details.update(input="resident_cells_unique_corners_and_values",
+                           field_evaluation_in_timed_region=bool(root_steps))
+        details.update(gradient_evaluation_in_timed_region=True, root_steps=root_steps,
+                       topology="dual_contouring", capacity=capacity,
+                       sparse_capacity=sparse_capacity, resident=resident)
+        return run, details
     if backend == "legacy":
         from meshExtractor.extractors.marching_cubes import MarchingCubes
         from meshExtractor.trees.octree import Octree
@@ -122,6 +157,11 @@ def make_runner(backend, scene, cells, phase, batch_size):
 
 
 def host_mesh(mesh):
+    if hasattr(mesh, "counts"):
+        counts = np.asarray(mesh.counts)
+        if counts[3]:
+            raise RuntimeError(f"resident mesh capacity exceeded: {counts.tolist()}")
+        mesh = mesh.vertices[:int(counts[0])], mesh.faces[:int(counts[2])]
     return tuple((x.numpy() if isinstance(x, wp.array) else np.asarray(x)).reshape(-1, 3) for x in mesh)
 
 
