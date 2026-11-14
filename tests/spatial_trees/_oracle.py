@@ -1,10 +1,8 @@
 """Layer-2 reference: external-library oracle (`trimesh`, `scipy`).
 
-Independent implementation of each query, used to catch bugs that fool
-both the project's `Primitives` callbacks and `_brute.py` (they share
-the same callbacks; if the callback is wrong, both fail equally).
-trimesh and scipy are independent codebases — disagreement points at
-our code with high confidence.
+Independent external implementations complement the float64 NumPy
+geometry references in `_warp_helpers.py`. Neither uses the production
+Warp traversal or primitive query callbacks.
 
 All oracle functions take a `trimesh.Trimesh` and NumPy queries; they
 return NumPy results. Tests convert to/from jnp at boundaries.

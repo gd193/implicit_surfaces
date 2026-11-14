@@ -1,11 +1,9 @@
 """Mesh-accelerator protocol.
 
-A `MeshAccelerator` is a static spatial index plus a `Primitives`
-backend. The spatial-partition logic (`SpatialTree` topology, traversal
-kernels) is shared across primitive types; the leaf-level math —
-closest-point, ray intersection, AABB — comes from the injected
-`Primitives` object. New primitive types (point cloud, splines, ...)
-plug in without touching accelerator code.
+A `MeshAccelerator` combines a static spatial index and primitive data.
+Warp query factories specialize traversal and geometric operations for
+each supported primitive type. `Primitives` supplies construction bounds
+and surface normals.
 
 The accelerator answers two query primitives consumed by
 `ExplicitSurface` (`closest_point`, `first_hit`) plus an AABB-overlap
@@ -26,9 +24,8 @@ from surfaces.explicit.primitives import Primitives
 class MeshAccelerator(abc.ABC):
     """Spatial accelerator over a `Primitives` collection.
 
-    Concrete subclasses (BVH, kd, octree, uniform grid) build their own
-    `SpatialTree` payload from the primitives' AABBs and traverse it,
-    delegating leaf-level primitive math to `self.primitives`.
+    The BVH implementation builds from primitive AABBs and delegates
+    queries to its Warp backend.
     """
 
     # Capability flags — surface-level flags propagate from these.
@@ -41,9 +38,7 @@ class MeshAccelerator(abc.ABC):
                                           #   so future layouts can advertise
                                           #   weaker support.
 
-    # Each concrete accelerator stores its primitive backend here.
-    # The `Primitives` object owns per-primitive data + leaf-level callbacks;
-    # the accelerator owns spatial-partition data + traversal.
+    # Construction bounds and surface normals, separate from Warp query data.
     primitives: Primitives
 
     # =====================================================================

@@ -1,8 +1,39 @@
 # GPU BVH queries with Warp and JAX
 
-`bvh.sah.warp` builds static binary SAH trees on the CPU and queries them on
-the GPU. `bvh.snch.warp` adds normal cones, silhouette queries and boundary
-sampling. Geometry stays shared under JIT and nested `vmap`.
+`bvh.sah.warp` builds static binary SAH trees on the host and executes queries
+with Warp on CPU or GPU. `bvh.snch.warp` adds normal cones, silhouette queries
+and boundary sampling. Geometry stays shared under JIT and nested `vmap`.
+
+## Query scope and retained builders
+
+The supported explicit query backends are `bvh.sah.warp` and `bvh.snch.warp`.
+Use `BVHAccelerator`, `Config` and the static factories in
+`surfaces.explicit.accelerators.bvh.warp` as shown below. JAX arrays, pytrees,
+FFI, `jax.jit` and nested `jax.vmap` remain supported, including Warp execution
+on CPU. There is no pure-JAX explicit tree traversal fallback. Without Warp,
+query discovery returns no backends.
+
+The removed query registrations are `bvh.lbvh.jax`, `bvh.sah.jax`,
+`bvh.snch.jax`, `kd.left_balanced.jax`, `kd.sah.jax` and
+`octree.morton_explicit.jax`. Their host construction algorithms remain
+available independently of query discovery:
+
+```python
+from surfaces.explicit.accelerators import Config
+from surfaces.explicit.accelerators.bvh import build_lbvh, build_sah, build_snch
+from surfaces.explicit.accelerators.kd import build_left_balanced, build_sah as build_kd_sah
+from surfaces.explicit.accelerators.octree import build_morton_explicit
+
+payload = build_lbvh(primitives, Config(leaf_size_threshold=8))
+```
+
+These functions retain their construction algorithms, primitive ordering,
+payload layouts and build configuration behavior. They return build payloads
+with JAX arrays and do not register query backends. The kd and octree query
+accelerator wrappers have been removed; their builders and payload types remain.
+Legacy query-only distance-bounds tests and benchmark targets are retired.
+Construction and implicit-surface spatial trees are separate from this query
+cleanup.
 
 ## Setup
 
@@ -247,6 +278,10 @@ clang-tidy "$native_dir/query.h" -- -x c++ -std=c++17 \
 
 ```sh
 python -m pytest -q tests
+# GPU validation also needs the CPU device for explicit CPU-interop checks:
+JAX_PLATFORMS=cuda,cpu python -m pytest -q tests/spatial_trees
+# Host builders remain testable independently of query registration:
+JAX_PLATFORMS=cpu python -m pytest -q tests/spatial_trees/test_build_invariants.py
 
 python -m scripts.bench.spatial_trees.warp_bvh_device \
     --backend bvh.snch.warp --queries closest_silhouette \
@@ -288,3 +323,9 @@ Recorded [ray](benchmarks/warp_bvh_device.json),
 timing scope and source hashes. WoSX’s `insideDomain` uses closest point and
 normal orientation, allowing sign to reuse closest-point work; it uses no parity
 test in the measured GPU path.
+
+Recorded benchmark reports are historical provenance and retain their original
+source hashes. Current harnesses still hash retained `sah_jax.py` and
+`snch_jax.py` construction code where used; those filenames do not indicate
+pure-JAX query execution. Optimized Warp matrix, device and external-reference
+benchmark entry points remain available.
