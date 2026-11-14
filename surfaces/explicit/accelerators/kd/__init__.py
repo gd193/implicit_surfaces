@@ -1,9 +1,4 @@
-"""Kd-tree-flavored mesh accelerator.
-
-Top-down split-plane tree with standalone mesh builders in ``backends/``.
-The reserved ``bridges.from_spatial_tree`` adapter for implicit-tree reuse
-is not implemented yet.
-"""
-from .accelerator import KdAccelerator  # noqa: F401
+"""Host-side kd-tree construction; no kd query backends are registered."""
 from .payload import KdPayload  # noqa: F401
-from . import backends  # noqa: F401
+from .backends.left_balanced_jax import build as build_left_balanced  # noqa: F401
+from .backends.sah_jax import build as build_sah  # noqa: F401

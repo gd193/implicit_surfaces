@@ -6,7 +6,7 @@ from .registry import (  # noqa: F401
     get_backend,
     list_backends,
 )
-from .bvh import BVHAccelerator, BVHPayload  # noqa: F401
-from .kd import KdAccelerator, KdPayload  # noqa: F401
-from .octree import OctreeAccelerator, OctreePayload  # noqa: F401
+from .bvh import BVHAccelerator, BVHPayload, WarpBVHPayload  # noqa: F401
+from .kd import KdPayload  # noqa: F401
+from .octree import OctreePayload  # noqa: F401
 from . import bridges  # noqa: F401

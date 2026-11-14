@@ -4,11 +4,10 @@ from __future__ import annotations
 import jax
 import numpy as np
 
-from ._brute import brute_first_hit_batch
 from ._oracle import oracle_first_hit
+from ._warp_helpers import _oracle_ray
 from ._invariants import assert_first_hit_consistent
 from ._harness import (parametrize_backends, build_accelerator,
-                       skip_if_primitive_math_missing,
                        T_RTOL, T_ATOL)
 
 
@@ -17,10 +16,8 @@ def _backend_first_hit_batch(accel, ros, rds, max_t):
 
 
 @parametrize_backends()
-def test_first_hit_matches_oracle_and_brute(tri_fixture, backend_name):
+def test_first_hit_matches_trimesh_and_numpy(tri_fixture, backend_name):
     flavor = backend_name.split(".")[0]
-    skip_if_primitive_math_missing("ray_primitive_intersect",
-                                   tri_fixture.primitives)
 
     accel = build_accelerator(flavor, backend_name, tri_fixture.primitives)
     ros = tri_fixture.query_ray_origins
@@ -29,16 +26,20 @@ def test_first_hit_matches_oracle_and_brute(tri_fixture, backend_name):
 
     t_t, idx_t, hit_t = _backend_first_hit_batch(accel, ros, rds, mts)
 
-    t_b, idx_b, hit_b = brute_first_hit_batch(tri_fixture.primitives,
-                                              ros, rds, mts)
+    mesh = tri_fixture.tri_mesh
+    vertices = np.asarray(mesh.vertices, np.float64)
+    t_b = np.asarray([_oracle_ray(vertices, mesh.faces, o, d, cap)[0]
+                      for o, d, cap in zip(np.asarray(ros, np.float64),
+                                           np.asarray(rds, np.float64), np.asarray(mts))])
+    hit_b = np.isfinite(t_b)
     np.testing.assert_array_equal(np.asarray(hit_t), np.asarray(hit_b),
-                                  err_msg="hit-mask disagrees with brute")
+                                  err_msg="hit-mask disagrees with NumPy oracle")
     mask = np.asarray(hit_t) & np.asarray(hit_b)
     if mask.any():
         np.testing.assert_allclose(
             np.asarray(t_t)[mask], np.asarray(t_b)[mask],
             rtol=T_RTOL, atol=T_ATOL,
-            err_msg="t disagrees with brute on common hits")
+            err_msg="t disagrees with NumPy oracle on common hits")
 
     ros_np = np.asarray(ros)
     rds_np = np.asarray(rds)

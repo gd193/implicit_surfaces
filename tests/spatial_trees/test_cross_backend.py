@@ -4,10 +4,10 @@ import numpy as np
 import pytest
 
 from surfaces.explicit.accelerators import list_backends
-from ._harness import build_accelerator, skip_if_primitive_math_missing
+from ._harness import build_accelerator
 
 
-_BACKENDS = list_backends("bvh")
+_BACKENDS = list_backends("bvh", runtime="warp")
 _PAIRS = [(_BACKENDS[0], name) for name in _BACKENDS[1:]]
 
 
@@ -15,9 +15,6 @@ _PAIRS = [(_BACKENDS[0], name) for name in _BACKENDS[1:]]
 @pytest.mark.parametrize("query", ["closest_point", "first_hit", "aabb_overlap"])
 def test_bvh_backends_agree(tri_fixture_sphere_320, a, b, query):
     fixture = tri_fixture_sphere_320
-    callback = {"closest_point": "closest_point_on_primitive", "first_hit": "ray_primitive_intersect",
-                "aabb_overlap": "primitive_aabb"}[query]
-    skip_if_primitive_math_missing(callback, fixture.primitives)
     args = {"closest_point": (fixture.query_points,),
             "first_hit": (fixture.query_ray_origins, fixture.query_ray_dirs, fixture.query_ray_max_t),
             "aabb_overlap": (fixture.query_aabb_lo, fixture.query_aabb_hi)}[query]

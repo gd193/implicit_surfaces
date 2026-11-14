@@ -4,6 +4,11 @@ FCPW: 2D closest point, first hit, occlusion and Euclidean silhouette.
 cuBQL: 2D/3D point nearest. Each uses upstream query code and its own tree.
 cuBQL uses spatial median in 2D; its SAH builder supports only float3.
 
+Project queries use the supported Warp factories through JAX FFI. Host tree
+construction remains separate; retained builder sources with `_jax.py` names
+are included in source hashes, but no legacy pure-JAX tree traversal is timed.
+Existing reports and generated reference provenance remain historical records.
+
 Build against an existing FCPW CUDA/Slang-RHI build and cuBQL checkout:
 
 ```sh

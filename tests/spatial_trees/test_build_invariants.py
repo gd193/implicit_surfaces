@@ -1,20 +1,62 @@
 """Layer-4 (structural): build outputs are well-formed.
 
-Per-backend assertions on the payload arrays produced by `Backend.build`:
+Assertions on retained host builders and supported Warp backend builds:
   * SoA arrays have correct shapes/dtypes.
-  * Every primitive index appears in exactly one leaf.
+  * Every primitive is covered (spatial SAH kd splits may duplicate references).
   * Per-node AABBs satisfy `lower <= upper`.
   * Internal-node AABBs cover their child AABBs.
   * Leaf vs internal flags are consistent (`leaf_count > 0 ↔ leaf`).
 
-Decoupled from query correctness: structural invariants must hold even
-when primitive math (closest_point_on_primitive, ...) is unimplemented.
+Structural invariants do not depend on query backends or primitive query math.
 """
 from __future__ import annotations
 
+from importlib import import_module
+
 import numpy as np
+import pytest
 
 from ._harness import parametrize_backends, build_accelerator
+
+
+# These are construction algorithms, independent of query registration.
+_HOST_BUILDERS = {
+    "bvh": ("lbvh", "sah", "snch"),
+    "kd": ("left_balanced", "sah"),
+    "octree": ("morton_explicit",),
+}
+
+
+def _build_host(flavor, algorithm, primitives):
+    module = import_module(f"surfaces.explicit.accelerators.{flavor}")
+    return getattr(module, f"build_{algorithm}")(primitives)
+
+
+def _check_array_contract(payload):
+    for name, value in zip(payload._fields, payload):
+        array = np.asarray(value)
+        if name == "node_is_leaf":
+            assert array.dtype == np.bool_, name
+        elif (name.startswith(("node_cone_", "silhouette_v", "silhouette_n"))
+              or name in ("node_lower", "node_upper", "node_split_pos")):
+            assert array.dtype == np.float32, name
+        else:
+            assert array.dtype == np.int32, name
+    assert np.asarray(payload.root).shape == ()
+    assert int(payload.root) == 0
+
+
+def _check_primitive_coverage(payload, n_primitives, *, duplicates=False):
+    offsets = np.asarray(payload.node_leaf_offset)
+    counts = np.asarray(payload.node_leaf_count)
+    ids = np.asarray(payload.prim_ids)
+    seen = []
+    for offset, count in zip(offsets, counts):
+        assert 0 <= offset <= len(ids)
+        assert 0 <= count <= len(ids)-offset
+        seen.extend(ids[offset:offset+count].tolist())
+    # Spatial SAH kd splits may duplicate references. Preserve that layout.
+    assert sorted(set(seen) if duplicates else seen) == list(range(n_primitives))
 
 
 # =====================================================================
@@ -82,6 +124,13 @@ def test_bvh_build_invariants(tri_fixture, backend_name):
     _check_bvh_payload(accel.payload, int(tri_fixture.primitives.n_primitives))
 
 
+@pytest.mark.parametrize("algorithm", _HOST_BUILDERS["bvh"])
+def test_host_bvh_build_invariants(tri_fixture, algorithm):
+    payload = _build_host("bvh", algorithm, tri_fixture.primitives)
+    _check_array_contract(payload)
+    _check_bvh_payload(payload, int(tri_fixture.primitives.n_primitives))
+
+
 # =====================================================================
 # Kd structural invariants.
 # =====================================================================
@@ -107,10 +156,13 @@ def _check_kd_payload(payload, n_primitives: int):
     assert not (bad & populated).any(), "node_split_axis out of bounds"
 
 
-@parametrize_backends("kd")
-def test_kd_build_invariants(tri_fixture, backend_name):
-    accel = build_accelerator("kd", backend_name, tri_fixture.primitives)
-    _check_kd_payload(accel.payload, int(tri_fixture.primitives.n_primitives))
+@pytest.mark.parametrize("algorithm", _HOST_BUILDERS["kd"])
+def test_kd_build_invariants(tri_fixture, algorithm):
+    payload = _build_host("kd", algorithm, tri_fixture.primitives)
+    n = int(tri_fixture.primitives.n_primitives)
+    _check_array_contract(payload)
+    _check_kd_payload(payload, n)
+    _check_primitive_coverage(payload, n, duplicates=algorithm == "sah")
 
 
 # =====================================================================
@@ -130,8 +182,10 @@ def _check_octree_payload(payload, n_primitives: int):
     assert not ((nl > nu) & populated[:, None]).any()
 
 
-@parametrize_backends("octree")
-def test_octree_build_invariants(tri_fixture, backend_name):
-    accel = build_accelerator("octree", backend_name, tri_fixture.primitives)
-    _check_octree_payload(accel.payload,
-                          int(tri_fixture.primitives.n_primitives))
+@pytest.mark.parametrize("algorithm", _HOST_BUILDERS["octree"])
+def test_octree_build_invariants(tri_fixture, algorithm):
+    payload = _build_host("octree", algorithm, tri_fixture.primitives)
+    n = int(tri_fixture.primitives.n_primitives)
+    _check_array_contract(payload)
+    _check_octree_payload(payload, n)
+    _check_primitive_coverage(payload, n)
