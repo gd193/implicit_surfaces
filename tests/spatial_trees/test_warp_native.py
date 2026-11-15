@@ -8,10 +8,10 @@ wp = pytest.importorskip("warp")
 
 
 def test_header_edit_invalidates_loaded_cpu_kernel(tmp_path):
-    from surfaces.explicit.accelerators.bvh.backends import _warp_traversal
+    from surfaces.explicit.accelerators.bvh.backends.warp_queries import native as _warp_traversal
     from surfaces.explicit.accelerators.bvh.warp import Euclidean, Points, make_nearest
 
-    shipped = set(Path(_warp_traversal.__file__).with_name("native").glob("*.h"))
+    shipped = set(_warp_traversal._NATIVE_DIR.glob("*.h"))
     configured = wp.get_module_options(make_nearest(Points(2), Euclidean()).kernel.module)["extra_build_options"]
     assert shipped and shipped <= set(map(Path, configured.extra_build_dependencies))
     header = tmp_path / "dependency.h"

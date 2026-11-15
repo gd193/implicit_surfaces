@@ -80,7 +80,7 @@ CUDA_CALLABLE inline void knn_insert(KnnCandidates<K, Small, TrackSlots>& c, flo
             int p = n;
             c.size = n+1;
             while (p > 0) {
-                const int parent = (p-1)/2;
+                const int parent = (p-1)/4;
                 if (value <= c.entries[parent]) break;
                 c.entries[p] = c.entries[parent];
                 if constexpr (TrackSlots) c.slots[p] = c.slots[parent];
@@ -91,11 +91,24 @@ CUDA_CALLABLE inline void knn_insert(KnnCandidates<K, Small, TrackSlots>& c, flo
         } else {
             if (value >= c.entries[0]) return;
             int p = 0;
-            while (2*p+1 < K) {
-                int child = 2*p+1;
-                if (child+1 < K && c.entries[child+1] > c.entries[child]) ++child;
-                if (c.entries[child] <= value) break;
-                c.entries[p] = c.entries[child];
+            // Four children shorten the sift. Retain the selected value to
+            // avoid reloading it through a runtime-selected local index.
+            while (4*p+1 < K) {
+                int child = 4*p+1;
+                uint64_t child_value = c.entries[child];
+                #pragma unroll
+                for (int offset = 1; offset < 4; ++offset) {
+                    const int other = 4*p+1+offset;
+                    if (other < K) {
+                        const uint64_t other_value = c.entries[other];
+                        if (other_value > child_value) {
+                            child = other;
+                            child_value = other_value;
+                        }
+                    }
+                }
+                if (child_value <= value) break;
+                c.entries[p] = child_value;
                 if constexpr (TrackSlots) c.slots[p] = c.slots[child];
                 p = child;
             }
@@ -131,11 +144,22 @@ CUDA_CALLABLE inline void knn_sort(KnnCandidates<K, Small, TrackSlots>& c) {
             }
             c.entries[end] = c.entries[0];
             int p = 0;
-            while (2*p+1 < end) {
-                int child = 2*p+1;
-                if (child+1 < end && c.entries[child+1] > c.entries[child]) ++child;
-                if (c.entries[child] <= value) break;
-                c.entries[p] = c.entries[child];
+            while (4*p+1 < end) {
+                int child = 4*p+1;
+                uint64_t child_value = c.entries[child];
+                #pragma unroll
+                for (int offset = 1; offset < 4; ++offset) {
+                    const int other = 4*p+1+offset;
+                    if (other < end) {
+                        const uint64_t other_value = c.entries[other];
+                        if (other_value > child_value) {
+                            child = other;
+                            child_value = other_value;
+                        }
+                    }
+                }
+                if (child_value <= value) break;
+                c.entries[p] = child_value;
                 if constexpr (TrackSlots) c.slots[p] = c.slots[child];
                 p = child;
             }

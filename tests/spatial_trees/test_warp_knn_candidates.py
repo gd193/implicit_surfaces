@@ -22,20 +22,25 @@ def zero_bound(query: wp.vec3, lower: wp.vec3, upper: wp.vec3):
     return 0.0
 
 
-@pytest.mark.parametrize("k", [16, 64, 65, 128])
+@pytest.mark.parametrize("k", [16, 64, 65, 66, 67, 68, 128, 256])
 @pytest.mark.parametrize("cache_bounds", [False, True])
-def test_signed_zero_ties_across_candidate_storage_sizes(k, cache_bounds):
+@pytest.mark.parametrize("return_points", [False, True])
+def test_signed_zero_ties_across_candidate_storage_sizes(k, cache_bounds, return_points):
     primitive = Points()
     rng = np.random.default_rng(248)
     points = rng.normal(size=(97, 3)).astype(np.float32)
     tree, data = build_tree(primitive, primitive.data(points), Config(leaf_size_threshold=1))
     query = make_knn(primitive, k, evaluate=signed_zero_score, lower_bound=zero_bound,
-                     cache_bounds=cache_bounds)
-    scores, ids, counts, status = map(np.asarray, jax.jit(query)(tree, data, jnp.zeros((2, 3)), jnp.array([0., jnp.inf])))
+                     cache_bounds=cache_bounds, return_points=return_points)
+    scores, neighbors, counts, status = map(np.asarray, jax.jit(query)(tree, data, jnp.zeros((2, 3)), jnp.array([0., jnp.inf])))
     count = min(k, len(points))
-    np.testing.assert_array_equal(ids[:, :count], np.tile(np.arange(count), (2, 1)))
+    if return_points:
+        np.testing.assert_array_equal(neighbors[:, :count], np.broadcast_to(points[:count], (2, count, 3)))
+        np.testing.assert_array_equal(neighbors[:, count:], 0.)
+    else:
+        np.testing.assert_array_equal(neighbors[:, :count], np.tile(np.arange(count), (2, 1)))
+        np.testing.assert_array_equal(neighbors[:, count:], -1)
     np.testing.assert_array_equal(scores[:, :count], 0.)
-    np.testing.assert_array_equal(ids[:, count:], -1)
     assert np.isposinf(scores[:, count:]).all()
     np.testing.assert_array_equal(counts, count)
     np.testing.assert_array_equal(status, 1)

@@ -215,9 +215,7 @@ def _factory_case(query, primitive, tree, geometry, payload, query_args, n, bloc
         make_silhouette, make_boundary_sample, make_robin_radius,
     )
     from surfaces.explicit.accelerators.bvh.backends.sah_warp import _factory_boundary
-    from surfaces.explicit.accelerators.bvh.backends._warp_boundary_queries import (
-        SamplingData, CoefficientData, RobinData,
-    )
+    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.boundary import SamplingData, CoefficientData, RobinData
 
 
     capacity, metadata = 64, []
@@ -297,7 +295,7 @@ def main():
     wp.init()
     warp_device = wp.device_from_jax(device)
     backend_dir = ROOT/"surfaces/explicit/accelerators/bvh/backends"
-    source_paths = sorted(backend_dir.glob("*warp*.py")) + sorted((backend_dir/"native").glob("*.h"))
+    source_paths = sorted(backend_dir.glob("*warp*.py")) + sorted((backend_dir/"warp_queries").rglob("*.py")) + sorted((backend_dir/"native").glob("*.h"))
     source_paths += [backend_dir/"snch_jax.py", backend_dir/"sah_jax.py", Path(__file__), Path(__file__).with_name("_warp_fixtures.py"), Path(__file__).with_name("_warp_timing.py")]
     source_paths.append(backend_dir.parent/"warp.py")
     sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths}

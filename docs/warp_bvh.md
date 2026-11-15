@@ -285,7 +285,7 @@ threshold; retained leaves can exceed it. Tree depth must fit
 automatic differentiation are not supported.
 
 Warp's built-in `wp.jax_kernel` handles FFI, compilation and ownership. The
-[batching adapter](../surfaces/explicit/accelerators/bvh/backends/_warp_jax.py)
+[batching adapter](../surfaces/explicit/accelerators/bvh/backends/warp_queries/ffi.py)
 flattens query axes without tiling geometry. Factories bind typed geometry and optional metadata through the same adapter;
 existing triangle backend methods delegate to them. SNCH cones enclose whole edges.
 Packed float4 nodes hold bounds and topology for cached nearest, ray, overlap and
@@ -750,6 +750,9 @@ padding from a valid point at the origin. A nonfinite selected coordinate fails
 and clears the whole row to infinity scores, zero coordinates, count 0 and
 status -1.
 
+Above k=64, candidates use a four-child max heap; smaller lists use unrolled
+sorted storage. This selection is internal and applies to both output modes.
+
 Point output retains one extra int32 packed primitive slot per candidate, then
 reevaluates the selected primitives inside the same fused kernel. Callbacks must
 be deterministic and free of side effects: the evaluator runs again for each
@@ -781,3 +784,67 @@ packed heap above that. Larger k can increase register pressure and local-memory
 traffic. `cache_bounds=False` reduces traversal storage by recomputing deferred
 bounds; whether that helps depends on the callback cost and workload. See the
 [GPU comparison report](benchmarks/warp_knn.md) for measured settings and limits.
+
+
+## Static kernel composition
+
+The query implementation lives in `bvh/backends/warp_queries`. Python factories
+resolve options and capabilities into concrete Warp functions before compilation.
+Immutable host bundles carry those functions and their device state types. The
+bundles themselves never enter device execution. The public `bvh.warp` factories
+and the contracts for external primitives and metric callbacks remain the entry
+points; no registration or inheritance is required for extensions.
+
+Responsibilities are separated as follows:
+
+- `contracts.py`, `domain.py`, and `metrics.py` define typed extension contracts
+  and the existing scoring, ray, and classification policies.
+- `primitives/` contains builtin item/data types, host preparation, item loading,
+  and geometry operations. Item loaders are selected in Python by primitive kind.
+- `io/arrays.py` owns native array addressing; `io/nodes.py` selects indexed or
+  packed node access. `io/results.py` selects kNN ID or coordinate emission,
+  including output validation and failure clearing.
+- `traversal/callbacks.py` adapts query callbacks; `traversal/deferred.py` owns
+  deferred stack entries and restoring nodes; `traversal/scheduling.py` selects
+  flat or grouped-leaf traversal. Packed ray entries, cached node bounds, and
+  recomputed node bounds are distinct deferred-state policies.
+- `selection/candidates.py` binds kNN candidate operations and their native ABI.
+  Candidate storage remains an unrolled list through k=64 and a heap above it.
+- `queries/` assembles each query's state, operations, traversal, and output.
+  Ray modes and optional Robin operations resolve during Python construction.
+- `launch.py` supplies the thin array kernel entry point; `ffi.py` handles JAX
+  batching. `native.py` centralizes native registration and build dependencies.
+  The native C++ headers remain in `backends/native/`.
+
+Node access (`packed_nodes`), deferred bound storage (`cache_bounds`), and leaf
+scheduling (`group_leaves`) are independent choices for nearest/kNN. The
+internal packed ray/overlap traversal contract also changes what is stored on
+the stack; it is not another spelling of packed node access. Resolution checks
+unsupported combinations during construction. Local `wp.static` decisions for
+fixed dimensions, loop unrolling, and small numerical variants are intentional.
+The cached deferred-pop loop stays in each scheduler: moving its early exits
+into a helper changed CUDA reconvergence and caused a measured slowdown. The
+selected stack operations and node metadata accessor remain separate components.
+
+Bound factory queries provide a host-only `describe()` method. For example:
+
+```python
+query = make_knn(Points(), 16, Euclidean(), packed_nodes=False)
+print(query.describe())
+# components: node_access=indexed, scheduling=grouped,
+# deferred=cached_bound, selection=unrolled, output=ids
+```
+
+This does not compile or launch a kernel. Wrapper queries such as silhouette
+expose their underlying bound query through `.query`. Descriptions identify the
+chosen components; they are not performance predictions or device cache keys.
+Factories cache normalized selections and concrete callback identities. Host
+schema markers remain excluded from kernel specialization.
+
+Changes to an access, traversal, selection, or output component must preserve
+fused execution and be checked against matched query results and compiled GPU
+resources. Extracting a function can affect CUDA inlining and register lifetimes,
+so modular source alone does not guarantee identical performance. Benchmark
+provenance includes the nested package's sources as well as native headers.
+Host tree construction algorithms and payload layouts are independent of this
+query composition layer.

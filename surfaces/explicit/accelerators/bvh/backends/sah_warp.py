@@ -16,7 +16,7 @@ from .sah_jax import _build_payload
 
 
 def _factory_data(payload):
-    from ._warp_primitives import Triangles
+    from .warp_queries.primitives.builtin import Triangles
     from ._warp_tree import TreeData
 
     primitive = Triangles()
@@ -38,7 +38,7 @@ def _factory_boundary(payload):
 
 
 def _ray_query(payload, mode, *args, **kwargs):
-    from ._warp_rays import make_ray_query
+    from .warp_queries.queries.rays import make_ray_query
 
     primitive, tree, geometry = _factory_data(payload)
     return make_ray_query(primitive, mode)(tree, geometry, *args, **kwargs)
@@ -80,8 +80,8 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
         return self.closest_point_with_status(payload, x)[:3]
 
     def closest_point_with_status(self, payload: WarpBVHPayload, x: jnp.ndarray):
-        from ._warp_metrics import Euclidean
-        from ._warp_nearest import make_nearest
+        from .warp_queries.metrics import Euclidean
+        from .warp_queries.queries.nearest import make_nearest
         primitive, tree, geometry = _factory_data(payload)
         return make_nearest(primitive, Euclidean())(tree, geometry, x)
 
@@ -89,7 +89,7 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
         return self.classify_point_with_status(payload, x)[0]
 
     def classify_point_with_status(self, payload: WarpBVHPayload, x: jnp.ndarray):
-        from ._warp_inside import make_classify
+        from .warp_queries.queries.classification import make_classify
 
         primitive, tree, geometry = _factory_data(payload)
         return make_classify(primitive)(tree, geometry, _factory_boundary(payload), x)
@@ -145,7 +145,7 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
 
     def aabb_overlap_with_status(self, payload: WarpBVHPayload,
                                  lower: jnp.ndarray, upper: jnp.ndarray):
-        from ._warp_overlap import make_overlap
+        from .warp_queries.queries.overlap import make_overlap
 
         primitive, tree, geometry = _factory_data(payload)
         return make_overlap(primitive)(tree, geometry, lower, upper)

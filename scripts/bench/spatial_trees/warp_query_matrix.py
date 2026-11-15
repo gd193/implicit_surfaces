@@ -14,7 +14,7 @@ import warp as wp
 from scripts.bench.spatial_trees._warp_cases import CASES, RAYS, arguments, query_factory, scene
 from scripts.bench.spatial_trees._warp_timing import _array_digest, _make_case, _measure
 
-from surfaces.explicit.accelerators.bvh.backends._warp_factory import struct_arrays
+from surfaces.explicit.accelerators.bvh.backends.warp_queries.launch import struct_arrays
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -62,6 +62,7 @@ def main():
         parser.error("CUDA-event timings require a GPU")
     device = wp.device_from_jax(jax.devices()[0])
     paths = [*sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends").glob("*warp*.py")),
+             *sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends/warp_queries").rglob("*.py")),
              *sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends/native").glob("*.h")),
              ROOT/"surfaces/explicit/accelerators/bvh/backends/sah_jax.py",
              Path(__file__), Path(__file__).with_name("_warp_cases.py"), Path(__file__).with_name("_warp_timing.py")]

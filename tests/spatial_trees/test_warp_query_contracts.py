@@ -89,7 +89,7 @@ def test_external_robin_policy_compiles_and_fuses():
     from surfaces.explicit.accelerators.bvh.warp import (
         BoundaryCore, RobinData, RobinOps, SilhouetteMeta, make_robin_radius,
     )
-    from surfaces.explicit.accelerators.bvh.backends._warp_boundary_queries import prepare_robin_coefficients
+    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.boundary import prepare_robin_coefficients
     from tests.typing.warp_api.query_extension import (
         ExternalRobinMetric, radius_to_score, robin_feature, robin_node, robin_primitive,
         robin_valid, score_to_radius,

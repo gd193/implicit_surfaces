@@ -8,9 +8,9 @@ import jax.numpy as jnp
 import numpy as np
 import warp as wp
 
-from ._warp_types import PrimitiveSpec, warp_struct
+from .warp_queries.contracts import PrimitiveSpec, warp_struct
 from ._warp_host_metadata import triangle_boundary_features, triangle_metadata
-from ._warp_traversal import load_array
+from .warp_queries.io.arrays import load_array
 from ._warp_tree import DeviceTree, TreeData, build_tree
 
 
@@ -220,9 +220,9 @@ class _FeaturePrimitive:
 
 @lru_cache(maxsize=None)
 def _feature_primitive(dimension):
-    from ._warp_primitives import _struct
+    from .warp_queries.contracts import make_struct
     Vec = wp.vec2 if dimension == 2 else wp.vec3
-    Feature = _struct(f"SilhouetteFeature{dimension}", {"index": wp.int32, "data": SilhouetteMeta})
+    Feature = make_struct(f"SilhouetteFeature{dimension}", {"index": wp.int32, "data": SilhouetteMeta})
 
     @wp.func
     def load(data: SilhouetteMeta, slot: int):
@@ -275,14 +275,14 @@ def _build_builtin_silhouette(core, tree, geometry):
 
 
 def _classification(primitive):
-    from ._warp_domain import builtin_classification
+    from .warp_queries.domain import builtin_classification
     return builtin_classification(primitive, BoundaryCore)
 
 
 @lru_cache(maxsize=None)
 def _builtin_adapter(dimension):
-    from ._warp_metrics import Silhouette
-    from ._warp_boundary_queries import _uniform_measure, _euclidean_robin
+    from .warp_queries.metrics import Silhouette
+    from .warp_queries.queries.boundary import _uniform_measure, _euclidean_robin
     return BoundaryAdapter(_segments_core if dimension == 2 else _triangles_core,
                            _pack_builtin_core, _feature_primitive(dimension),
                            _build_builtin_silhouette, cone_visibility,

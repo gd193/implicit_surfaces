@@ -251,6 +251,7 @@ def main():
     backend = repo / "surfaces/explicit/accelerators/bvh/backends"
     for f in [
         *backend.glob("*.py"),
+        *(backend / "warp_queries").rglob("*.py"),
         *(backend / "native").glob("*.h"),
         repo / "surfaces/explicit/accelerators/protocol.py",
     ]:

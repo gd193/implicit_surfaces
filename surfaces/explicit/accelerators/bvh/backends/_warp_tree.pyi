@@ -5,7 +5,7 @@ import jax
 import warp as wp
 
 from surfaces.explicit.accelerators.protocol import Config
-from ._warp_types import DeviceArray, PrimitiveSpec
+from .warp_queries.contracts import DeviceArray, PrimitiveSpec
 
 H = TypeVar("H")
 D = TypeVar("D")

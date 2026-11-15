@@ -10,7 +10,7 @@ import warp as wp
 from surfaces.explicit.accelerators.protocol import Config
 from ._warp_layout import _pack_ray_nodes, _validate_tree
 from .sah_jax import _build_payload
-from ._warp_types import warp_struct
+from .warp_queries.contracts import warp_struct
 
 
 STACK_CAPACITY = 64

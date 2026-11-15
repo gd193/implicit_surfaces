@@ -11,12 +11,9 @@ wp = pytest.importorskip("warp")
 
 from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
 from surfaces.explicit.accelerators.bvh.backends._warp_boundary import build_boundary  # noqa: E402
-from surfaces.explicit.accelerators.bvh.backends._warp_primitives import Points, Segments, Triangles  # noqa: E402
-from surfaces.explicit.accelerators.bvh.backends._warp_metrics import Angular  # noqa: E402
-from surfaces.explicit.accelerators.bvh.backends._warp_boundary_queries import (  # noqa: E402
-    MeasureOps, RegionOps, RobinOps, _euclidean_robin, make_boundary_sample, make_robin_radius, prepare_boundary_sample,
-    prepare_robin, prepare_robin_coefficients,
-)
+from surfaces.explicit.accelerators.bvh.backends.warp_queries.primitives.builtin import Points, Segments, Triangles  # noqa: E402
+from surfaces.explicit.accelerators.bvh.backends.warp_queries.metrics import Angular  # noqa: E402
+from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.boundary import MeasureOps, RegionOps, RobinOps, _euclidean_robin, make_boundary_sample, make_robin_radius, prepare_boundary_sample, prepare_robin, prepare_robin_coefficients  # noqa: E402
 
 
 def _boundary(dimension, large=False):
@@ -146,7 +143,7 @@ class _CustomRobinFeatures:
 
 
 def test_warp_custom_robin_policy_uses_conservative_closest_surface_ball():
-    from surfaces.explicit.accelerators.bvh.backends._warp_metrics import Euclidean
+    from surfaces.explicit.accelerators.bvh.backends.warp_queries.metrics import Euclidean
 
     primitive, tree, geometry, boundary = _boundary(3, large=True)
     nearest = Euclidean().bind(primitive)
