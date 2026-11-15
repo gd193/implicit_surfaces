@@ -31,6 +31,16 @@ class DeviceArray(Protocol[ElementT]):
     def __setitem__(self, index: int, value: ElementT) -> None: ...
 
 
+class DeviceArray2D(Protocol[ElementT]):
+    """Static view of a two-dimensional Warp output buffer."""
+
+    @property
+    def shape(self) -> tuple[int, ...]: ...
+
+    def __getitem__(self, index: tuple[int, int]) -> ElementT: ...
+    def __setitem__(self, index: tuple[int, int], value: ElementT) -> None: ...
+
+
 class WarpFunction(Protocol[P, R]):
     """A genuine Warp Function with a statically known device signature."""
 

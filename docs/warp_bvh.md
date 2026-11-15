@@ -848,3 +848,122 @@ so modular source alone does not guarantee identical performance. Benchmark
 provenance includes the nested package's sources as well as native headers.
 Host tree construction algorithms and payload layouts are independent of this
 query composition layer.
+
+## Calling queries from a Warp kernel
+
+Every query factory exposes a `.device` Warp function. Select the primitive,
+metric/callbacks, traversal options, and **static `k`** on the host, then capture
+that function in your own `@wp.func` or `@wp.kernel`. The function performs one
+query per invocation; it never launches another kernel or invokes JAX.
+Nearest, kNN, classification, overlap, sampling, and Robin reuse the same device
+implementation as their host query object. Ray adapters expose only the buffers
+used by the selected mode. Silhouette prepares the feature-tree view on device;
+star radius composes silhouette and clipping on device.
+
+Register the query dependencies with `configure_query_kernel(kernel, *queries)`
+before compiling or launching the caller's kernel. Include every query used,
+including indirect calls through other Warp functions. Registration merges native
+include paths, header cache dependencies, ABI declarations, and required unroll
+limits into the caller's module. It retains existing native preambles and other
+compiler settings. Multiple query types and static `k` values can share a kernel;
+repeating registration is safe. Use `enable_backward=False`: these operations do
+not provide differentiation rules.
+
+This complete example consumes a nearest result inside the caller's kernel:
+
+```python
+import numpy as np
+import warp as wp
+from surfaces.explicit.accelerators.bvh.warp import (
+    DeviceTree, Euclidean, Points, build_tree, configure_query_kernel, make_nearest,
+)
+
+primitive = Points(3)
+tree, geometry = build_tree(primitive, primitive.data([[0., 0., 0.], [3., 0., 0.]]))
+query = make_nearest(primitive, Euclidean())
+nearest = query.device
+Geometry = primitive.data_type
+
+@wp.kernel(module="unique", enable_backward=False)
+def evaluate(tree: DeviceTree, geometry: Geometry,
+             points: wp.array(dtype=wp.vec3), out: wp.array(dtype=float)):
+    i = wp.tid()
+    closest, distance, primitive_id, status = wp.static(nearest)(points[i], wp.inf, tree, geometry)
+    if status == 1:
+        out[i] = distance + wp.length(closest)
+    else:
+        out[i] = wp.inf
+
+configure_query_kernel(evaluate, query)
+device = wp.get_preferred_device()
+
+# Upload the already packed host arrays. Allocation/copying happens outside the kernel.
+def upload(schema, arrays):
+    payload = schema()
+    for name, field in schema.vars.items():
+        setattr(payload, name, wp.array(np.asarray(getattr(arrays, name)),
+                                       dtype=field.type.dtype, device=device))
+    return payload
+
+points = wp.array([[1., 0., 0.]], dtype=wp.vec3, device=device)
+out = wp.empty(1, dtype=float, device=device)
+wp.launch(evaluate, dim=1,
+          inputs=[upload(DeviceTree, tree), upload(Geometry, geometry), points],
+          outputs=[out], device=device)
+np.testing.assert_array_equal(out.numpy(), [1.])
+```
+
+Existing Warp arrays can be assigned directly to the payload fields. For shared
+JAX arrays, use `wp.from_jax(array, dtype=field.type.dtype)` and manage ownership
+and stream synchronization according to Warp's interop contract. The query API
+does not upload arrays or synchronize runtimes inside a device call.
+
+Device signatures use scalar query values and device structs, with explicit caps:
+
+| Factory | `.device(...)` arguments | Return |
+|---|---|---|
+| `make_nearest` | `query, cap, tree, geometry` | point, value, original ID, status |
+| `make_knn` | `query, cap, tree, geometry, values, neighbors, row` | count, status |
+| `make_overlap` | `lower, upper, tree, geometry` | overlap as int32, status |
+| `make_classify` | `point, tree, geometry, core` | sign, status |
+| `make_silhouette` | `query, cap, tree, feature_metadata` | point, value, original feature ID, status |
+| `make_star_radius` | `point, cap, tree, feature_metadata` | radius, status |
+| `make_robin_radius` | `query, cap, tree, geometry, core, feature_metadata, coefficients` | radius, status |
+| `make_boundary_sample` | `query, radius, random_vec3, tree, geometry, sampling_metadata` | point, normal, PDF, original ID, status |
+
+kNN writes `values` and `neighbors`, both **dense contiguous `(rows, k)` Warp
+arrays with exactly the specialized `k` columns**. Values have float32 dtype;
+neighbors have int32 dtype for IDs or the primitive's vector dtype for
+`return_points=True`. Coordinate output therefore has NumPy shape `(rows, k, D)`.
+`k` is never a device argument. Count, padding, caps, custom score units, tie
+ordering, and failure clearing follow the host API's contract.
+
+Ray device functions write caller-provided buffers and return no value:
+
+```text
+first/all:
+    device(origin, direction, min_t, max_t, excluded_id, tree, geometry,
+           times, ids, counts, statuses, row)
+any/count:
+    device(origin, direction, min_t, max_t, excluded_id, tree, geometry,
+           counts, statuses, row)
+```
+
+For `first`, all buffers are one-dimensional; `counts[row]` is the 0/1 hit flag.
+For `all`, `times` and `ids` have matching `(rows, max_hits)` shapes; counts and
+statuses remain one-dimensional. For `any`, counts contain 0/1. Time buffers use
+float32 and ID/count/status buffers use int32. Pass `excluded_id=-1` for no
+exclusion; other IDs take effect only when the specialization enables exclusion.
+All-hit overflow still reports the total count and status -2.
+
+The caller supplies valid device structs, matching metadata, dense contiguous
+arrays on the same device, in-range row indices, and nonoverlapping writable rows
+for concurrent invocations. These are device-call preconditions, not per-query
+host checks. The query retains its numerical validation and status reporting.
+No intermediate output arrays are needed for scalar-return queries; kNN and ray
+modes use the supplied buffers inside the caller's kernel.
+
+Typed `.device` signatures distinguish host payloads from device structs and
+one-dimensional arrays from `DeviceArray2D`. Buffer extents and some dynamically
+resolved metadata/output variants remain runtime Warp contracts, as with the
+existing host factories.

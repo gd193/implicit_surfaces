@@ -72,11 +72,13 @@ class RobinMetric(Protocol[D, ItemT, PointContra, Q, CD, FD]):
     def bind_robin(self, primitive: PrimitiveSpec[H, D, ItemT, PointContra]) -> RobinOps[Q, D, ItemT, CD, FD]: ...
 
 class BoundarySampleQuery(BoundQuery, Generic[H, D, ItemT, P, Q]):
+    device: WarpFunction[[Q, float, wp.vec3, DeviceTree, D, SamplingMeta], tuple[P, P, float, int, int]]
     region: RegionOps[Q, P]
     def __call__(self, tree: object, geometry: H, metadata: SamplingData,
                  queries: ArrayLike, radii: ArrayLike, randoms: ArrayLike
                  ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]: ...
 class RobinQuery(BoundQuery, Generic[H, D, ItemT, Q, CH, CD, FH, FD]):
+    device: WarpFunction[[Q, float, DeviceTree, D, CD, FD, CoefficientMeta], tuple[float, int]]
     ops: RobinOps[Q, D, ItemT, CD, FD]
     def __call__(self, tree: object, geometry: H, metadata: RobinData[CH, FH],
                  queries: ArrayLike, cap: ArrayLike = ...

@@ -135,4 +135,4 @@ def _make_nearest(primitive, metric, *, predicate=None,
                   ("deferred", "cached_bound" if cache_bounds else "recomputed_bound"),
                   ("selection", "single"), ("output", "coordinates"))
     return bind_query(NearestQuery, "nearest_kernel", primitive, inputs, outputs, body, {"nearest": nearest},
-                       block_dim, ops=ops, components=components)
+                       block_dim, device=nearest, ops=ops, components=components)

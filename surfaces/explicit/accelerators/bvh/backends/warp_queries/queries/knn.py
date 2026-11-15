@@ -147,6 +147,6 @@ def _make_knn(primitive, k, metric, *, predicate=None,
                   ("selection", "unrolled" if k <= REGISTER_LIMIT else "heap"),
                   ("output", "coordinates" if return_points else "ids"))
     query = bind_query(KnnQuery, "knn_kernel", primitive, inputs, outputs, body, {"knn": knn},
-                       block_dim, ops=ops, k=k, return_points=return_points, components=components)
+                       block_dim, device=knn, ops=ops, k=k, return_points=return_points, components=components)
     configure_candidate_module(query.kernel.module, candidates, k, return_points)
     return query

@@ -1,4 +1,5 @@
 """Caller-specialized Warp BVH queries; primitive and metric arguments are static."""
+from .backends.warp_queries.device import configure_query_kernel
 from .backends.warp_queries.metrics import (
     Angular, AngularQuery, Euclidean, MetricSpec, NearestCallbacks, NearestOps, NearestPolicy,
     NearestPredicate, Silhouette,
@@ -6,7 +7,7 @@ from .backends.warp_queries.metrics import (
 from .backends.warp_queries.queries.nearest import NearestQuery, make_nearest
 from .backends.warp_queries.queries.knn import KnnQuery, make_knn
 from .backends.warp_queries.contracts import (
-    DeviceArray, PrimitiveSpec, WarpFunction, WarpType, as_warp_function, warp_func, warp_struct,
+    DeviceArray, DeviceArray2D, PrimitiveSpec, WarpFunction, WarpType, as_warp_function, warp_func, warp_struct,
 )
 from .backends.warp_queries.primitives.builtin import (
     Points, Primitive, Segments, SilhouetteEdges, Triangles,
@@ -40,7 +41,7 @@ from .backends.warp_queries.queries.silhouette import (
 __all__ = [
     "Angular", "AngularQuery", "BoundaryAdapter", "BoundaryCore", "BoundaryCoreData",
     "BoundaryData", "BoundaryPrimitive", "BoundarySampleQuery", "ClassificationOps", "ClassifyQuery",
-    "CoefficientData", "CoefficientMeta", "DeviceArray", "DeviceTree", "Euclidean", "MeasureOps",
+    "CoefficientData", "CoefficientMeta", "DeviceArray", "DeviceArray2D", "DeviceTree", "Euclidean", "MeasureOps",
     "KnnQuery", "MetricSpec", "NearestCallbacks", "NearestOps", "NearestPolicy", "NearestPredicate",
     "NearestQuery", "OverlapQuery", "PointItem2", "PointItem3", "Points", "PointsArrays2",
     "PointsArrays3", "PointsData2", "PointsData3", "Primitive", "PrimitiveSpec", "Ray", "RayOps",
@@ -50,7 +51,7 @@ __all__ = [
     "SilhouetteEdges", "SilhouetteEdgesArrays3", "SilhouetteEdgesData3", "SilhouetteItem3",
     "SilhouetteMeta", "SilhouetteQuery", "StarRadiusQuery", "TreeData", "TriangleItem3",
     "Triangles", "TrianglesArrays3", "TrianglesData3", "WarpFunction", "WarpType",
-    "as_warp_function", "build_boundary", "build_tree", "make_boundary_sample", "make_classify",
+    "as_warp_function", "build_boundary", "build_tree", "configure_query_kernel", "make_boundary_sample", "make_classify",
     "make_knn", "make_nearest", "make_overlap", "make_ray_query", "make_robin_radius", "make_silhouette",
     "make_star_radius", "prepare_boundary_sample", "prepare_robin", "warp_func", "warp_struct",
 ]

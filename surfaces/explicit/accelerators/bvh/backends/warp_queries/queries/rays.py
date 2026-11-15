@@ -231,6 +231,25 @@ def _make_ray_query(primitive, mode, ops, exclude, stack_capacity, block_dim):
                 if state.count > times.shape[1]:
                     store_array(out_status, qi, -2)
 
+    if store_times:
+        Times = wp.array2d(dtype=wp.float32) if mode == "all" else wp.array(dtype=wp.float32)
+        Faces = wp.array2d(dtype=wp.int32) if mode == "all" else wp.array(dtype=wp.int32)
+
+        @wp.func
+        def device(origin: Vec, direction: Vec, minimum: float, maximum: float,
+                   excluded: int, tree: DeviceTree, geometry: Geometry,
+                   times: Times, faces: Faces, counts: wp.array(dtype=wp.int32),
+                   statuses: wp.array(dtype=wp.int32), row: int):
+            wp.static(ray_query)(row, origin, direction, minimum, maximum, excluded,
+                                 tree, geometry, times, faces, counts, statuses)
+    else:
+        @wp.func
+        def device(origin: Vec, direction: Vec, minimum: float, maximum: float,
+                   excluded: int, tree: DeviceTree, geometry: Geometry,
+                   counts: wp.array(dtype=wp.int32), statuses: wp.array(dtype=wp.int32), row: int):
+            wp.static(ray_query)(row, origin, direction, minimum, maximum, excluded,
+                                 tree, geometry, counts, statuses, counts, statuses)
+
     outputs = [("out_count", wp.array(dtype=wp.int32)), ("out_status", wp.array(dtype=wp.int32))]
     times, faces = "out_count", "out_status"
     if store_times:
@@ -245,7 +264,7 @@ def _make_ray_query(primitive, mode, ops, exclude, stack_capacity, block_dim):
     body = [f"wp.static(ray_query)(i, load_array(origins, i), load_array(directions, i), load_array(minimum, i), load_array(maximum, i), {excluded}, "
             f"tree, geometry, {times}, {faces}, out_count, out_status)"]
     return bind_query(RayQuery, "ray_kernel", primitive, inputs, outputs, body,
-                      {"ray_query": ray_query}, block_dim, mode=mode, exclusion=exclusion, handlers=handlers,
+                      {"ray_query": ray_query}, block_dim, device=device, mode=mode, exclusion=exclusion, handlers=handlers,
                       components=(("mode", mode),
                                   ("hit_evaluation", handlers.evaluation),
                                   ("output", "times_and_faces" if store_times else "count_and_status")))

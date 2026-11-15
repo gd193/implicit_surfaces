@@ -20,7 +20,8 @@
     "surfaces/explicit/accelerators/bvh/backends/warp_queries/primitives/data.py",
     "surfaces/explicit/accelerators/bvh/backends/_warp_tree.pyi",
     "surfaces/explicit/accelerators/bvh/backends/warp_queries/queries/knn.pyi",
-    "tests/typing/warp_api/knn_valid.py"
+    "tests/typing/warp_api/knn_valid.py",
+    "tests/typing/warp_api/device_valid.py"
   ],
   "typeCheckingMode": "strict",
   "pythonVersion": "3.11",
