@@ -30,7 +30,6 @@ class Backend(abc.ABC, Generic[P]):
 
     payload_type: Type[P]
     is_differentiable: bool = False
-    has_distance_bounds: bool = False
     has_silhouette_query: bool = False
     has_ray_interval: bool = False
     has_boundary_sampling: bool = False
@@ -57,14 +56,6 @@ class Backend(abc.ABC, Generic[P]):
     def aabb_overlap(self, payload: P,
                      lower: jnp.ndarray, upper: jnp.ndarray) -> jnp.ndarray:
         """Whether any primitive AABB overlaps [lower, upper]."""
-
-    def distance_bounds(self, payload: P,
-                        lower: jnp.ndarray, upper: jnp.ndarray
-                        ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """(minimum, maximum) distance over the query AABB."""
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement distance_bounds"
-        )
 
     def classify_point(self, payload: P, x: jnp.ndarray) -> jnp.ndarray:
         """Sign: -1 inside, 0 on boundary, +1 outside, NaN on failure."""

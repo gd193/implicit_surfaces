@@ -28,7 +28,6 @@ class BVHAccelerator(MeshAccelerator):
         self.primitives = primitives
         self.payload = payload
         self.backend = backend
-        self.has_distance_bounds = bool(backend.has_distance_bounds)
         self.has_silhouette_query = bool(backend.has_silhouette_query)
         self.has_boundary_sampling = bool(backend.has_boundary_sampling)
         self.has_ray_interval = bool(backend.has_ray_interval)
@@ -161,10 +160,6 @@ class BVHAccelerator(MeshAccelerator):
     def aabb_overlap(self, lower: jnp.ndarray, upper: jnp.ndarray
                      ) -> jnp.ndarray:
         return self.backend.aabb_overlap(self.payload, lower, upper)
-
-    def distance_bounds(self, lower: jnp.ndarray, upper: jnp.ndarray
-                        ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        return self.backend.distance_bounds(self.payload, lower, upper)
 
     def closest_silhouette(self, x: jnp.ndarray,
                            *, max_distance: jnp.ndarray | float = jnp.inf,

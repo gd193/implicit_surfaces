@@ -7,8 +7,7 @@ and surface normals.
 
 The accelerator answers two query primitives consumed by
 `ExplicitSurface` (`closest_point`, `first_hit`) plus an AABB-overlap
-test used by `classify_box`. Optional `distance_bounds` unlocks tighter
-`box_bounds`. Capability flags advertise optional support; consumers
+test used by `classify_box`. Capability flags advertise optional support; consumers
 branch on these, not on accelerator type.
 """
 from __future__ import annotations
@@ -29,7 +28,6 @@ class MeshAccelerator(abc.ABC):
     """
 
     # Capability flags — surface-level flags propagate from these.
-    has_distance_bounds: bool = False     # tight (d_min, d_max) over an AABB
     has_silhouette_query: bool = False    # closest-silhouette-point query
     has_all_hits: bool = False
     has_point_classification: bool = False
@@ -68,15 +66,6 @@ class MeshAccelerator(abc.ABC):
     # =====================================================================
     # Optional queries — gated by capability flags.
     # =====================================================================
-
-    def distance_bounds(self, lower: jnp.ndarray, upper: jnp.ndarray
-                        ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """Tight `(d_min, d_max)` of unsigned distance over the AABB.
-        Default raises; flip `has_distance_bounds = True` when implementing.
-        """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement distance_bounds"
-        )
 
     def classify_point(self, x: jnp.ndarray) -> jnp.ndarray:
         """Sign: -1 inside, 0 on boundary, +1 outside, NaN on failure."""

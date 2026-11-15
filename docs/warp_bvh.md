@@ -31,7 +31,10 @@ These functions retain their construction algorithms, primitive ordering,
 payload layouts and build configuration behavior. They return build payloads
 with JAX arrays and do not register query backends. The kd and octree query
 accelerator wrappers have been removed; their builders and payload types remain.
-Legacy query-only distance-bounds tests and benchmark targets are retired.
+The legacy accelerator `distance_bounds(box)` API is removed. Surface-level
+`box_bounds` remains available through the conservative signed-distance Lipschitz
+enclosure. BVH traversal bounds, query caps, and numerical validity checks remain
+part of the Warp queries.
 Construction and implicit-surface spatial trees are separate from this query
 cleanup.
 
