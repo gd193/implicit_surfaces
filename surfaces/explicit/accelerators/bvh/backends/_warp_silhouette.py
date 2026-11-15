@@ -1,11 +1,24 @@
 """Bounded closest silhouette with box-support cone pruning."""
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from typing import Generic, TypeVar
 
 import jax.numpy as jnp
 import warp as wp
 
 from ._warp_tree import STACK_CAPACITY
+
+
+H = TypeVar("H")
+D = TypeVar("D")
+ItemT = TypeVar("ItemT")
+P = TypeVar("P")
+Q = TypeVar("Q")
+CH = TypeVar("CH")
+CD = TypeVar("CD")
+FH = TypeVar("FH")
+FD = TypeVar("FD")
+FI = TypeVar("FI")
 
 
 @dataclass(frozen=True)
@@ -36,7 +49,7 @@ class _SilhouetteMetric:
 
 
 @dataclass(frozen=True)
-class SilhouetteQuery:
+class SilhouetteQuery(Generic[H, D, ItemT, P, Q, CH, CD, FH, FD, FI]):
     query: object
 
     @property
@@ -60,6 +73,8 @@ def make_silhouette(primitive, metric=None, *, adapter=None, stack_capacity=STAC
 
     metric = Euclidean() if metric is None else metric
     adapter = resolve_boundary_adapter(primitive, adapter)
+    if adapter.visibility is not None and not isinstance(adapter.visibility, wp.Function):
+        raise TypeError("silhouette visibility must be a decorated Warp Function")
     feature = adapter.feature_primitive
     if feature is None:
         raise TypeError("boundary adapter has no silhouette feature operations")
@@ -69,7 +84,7 @@ def make_silhouette(primitive, metric=None, *, adapter=None, stack_capacity=STAC
 
 
 @dataclass(frozen=True)
-class StarRadiusQuery:
+class StarRadiusQuery(Generic[H, D, ItemT, P, CH, CD, FH, FD, FI]):
     silhouette: object
 
     def __call__(self, tree, geometry, boundary, points, cap):

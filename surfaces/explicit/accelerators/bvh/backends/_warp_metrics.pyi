@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from typing import Generic, Protocol, TypeVar
 import warp as wp
 from ._warp_types import PrimitiveSpec, WarpFunction, WarpType
+from ._warp_boundary import BoundaryCore, SilhouetteMeta
+from ._warp_boundary_queries import RobinOps
 
 HostDataT = TypeVar("HostDataT")
 DeviceDataT = TypeVar("DeviceDataT")
@@ -52,6 +54,8 @@ class NearestCallbacks(Generic[ItemT, PointT]):
 
 @dataclass(frozen=True)
 class Euclidean:
+    def bind_robin(self, primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]
+                   ) -> RobinOps[PointT, DeviceDataT, ItemT, BoundaryCore, SilhouetteMeta]: ...
     def bind(self, primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]) -> NearestOps[PointT, ItemT, PointT]: ...
 
 @dataclass(frozen=True)

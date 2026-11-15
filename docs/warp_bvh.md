@@ -586,3 +586,62 @@ incomplete. The extension itself has no `Any` callback or item annotations.
 Array fields use a `TYPE_CHECKING` indexing protocol with a concrete return type
 and a runtime `wp.array(dtype=...)` annotation; the data/item classes and device
 functions are the same objects exercised by the CPU tests.
+
+### Typed policies across query families
+
+Every query factory carries the primitive's host payload type into its returned
+callable. Device callbacks retain separate geometry, item, point, state, and
+metadata types. `RayOps[DeviceData, State]` supports both `intersect` and
+`next_hit`; the latter returns `(State, float, int)`. All four ray modes use the
+same contract. `ClassificationOps[Point, DeviceData, DeviceMetadata]` connects
+both metadata callbacks. When the host metadata record differs from the device
+struct, pass `metadata_host_type=HostMetadata` to `make_classify`. That marker
+only supplies host typing; it shares the same cached specialization and kernel.
+
+`MeasureOps[Item, Point, HostCore]` connects sampling and host weights;
+`RegionOps[Query, Point]` connects validity, conservative box overlap, and exact
+sample membership. `RobinOps[Query, DeviceData, Item, DeviceCore, DeviceFeature]`
+also types its optional data-aware callbacks and score conversions. Explicit
+Robin host schemas can be supplied with `core_host_type` and
+`feature_host_type`. A metric can implement the `RobinMetric.bind_robin(primitive)`
+capability to supply its own conservative `RobinOps`; `Euclidean` uses this
+same route. A metric without this capability must supply an explicit policy.
+Boundary adapters declare sampling and Robin factories alongside classification
+and silhouette operations. Star radius composes silhouette with ordinary JAX operations.
+Overlap remains conservative primitive-AABB overlap.
+
+The executable examples in `tests/typing/warp_api/query_extension.py` are used
+unchanged by strict Pyright fixtures and CPU Warp compilation tests. For example,
+this runs the external struct-state ray policy through the public API:
+
+```python
+import jax
+import jax.numpy as jnp
+from surfaces.explicit.accelerators.bvh.warp import RayOps, build_tree, make_ray_query
+from tests.typing.warp_api.real_extension import ExternalArrays, ExternalPoints
+from tests.typing.warp_api.query_extension import Cursor, next_hit
+
+primitive = ExternalPoints()
+tree, payload = build_tree(primitive, ExternalArrays(jnp.array([[0., 0., 0.]])))
+query = make_ray_query(primitive, "all", ops=RayOps(state_type=Cursor, next_hit=next_hit))
+times, ids, count, status = jax.jit(query, static_argnames=("max_hits",))(
+    tree, payload, jnp.array([[-1., 0., 0.]]), jnp.array([[1., 0., 0.]]), max_hits=4)
+assert int(count[0]) == 2
+```
+
+The deliberately small external point policy emits two events per primitive;
+it illustrates iterator state without relying on a built-in intersection
+implementation. The same module includes concrete classification, sampling,
+region, Robin, silhouette-adapter, and built-in `PointsData3` ray callbacks.
+Run all of these examples on CPU with:
+
+```bash
+JAX_PLATFORMS=cpu python -m pytest tests/spatial_trees/test_warp_query_contracts.py -q
+```
+
+Built-in device payloads (`PointsData3`, `SegmentsData2`, `TrianglesData3`, and
+others) and their host `*Arrays` records are public. A built-in primitive and an
+external primitive use identical callback contracts; a callback for the wrong
+payload is a type error. Optional capability availability is still validated
+when constructing a query. Typed callback compatibility does not imply that an
+optional capability is present.

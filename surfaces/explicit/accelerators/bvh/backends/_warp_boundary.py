@@ -1,18 +1,19 @@
 """Indexed boundary adapters and optional silhouette metadata."""
-from collections import namedtuple
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, NamedTuple
+from typing import Generic, NamedTuple, Protocol, TypeVar
 
+from jax.typing import ArrayLike
 import jax.numpy as jnp
 import numpy as np
 import warp as wp
 
+from ._warp_types import PrimitiveSpec, warp_struct
 from ._warp_traversal import load_array
 from ._warp_tree import DeviceTree, build_tree
 
 
-@wp.struct
+@warp_struct
 class BoundaryCore:
     vertices: wp.array(dtype=wp.vec3)
     indices: wp.array2d(dtype=wp.int32)
@@ -21,7 +22,7 @@ class BoundaryCore:
     primitive_measure: wp.array(dtype=wp.float32)
 
 
-@wp.struct
+@warp_struct
 class SilhouetteMeta:
     feature_a: wp.array(dtype=wp.vec3)
     feature_b: wp.array(dtype=wp.vec3)
@@ -35,23 +36,60 @@ class SilhouetteMeta:
     node_cone_radius: wp.array(dtype=wp.float32)
 
 
-BoundaryCoreData = namedtuple("BoundaryCoreData", BoundaryCore.vars)
-SilhouetteData = namedtuple("SilhouetteData", SilhouetteMeta.vars)
+class BoundaryCoreData(NamedTuple):
+    vertices: ArrayLike
+    indices: ArrayLike
+    closed: ArrayLike
+    primitive_normal: ArrayLike
+    primitive_measure: ArrayLike
 
 
-class BoundaryData(NamedTuple):
-    core: Any
-    silhouette: Any = None
+class SilhouetteData(NamedTuple):
+    feature_a: ArrayLike
+    feature_b: ArrayLike
+    feature_n0: ArrayLike
+    feature_n1: ArrayLike
+    feature_refs: ArrayLike
+    node_feature_offset: ArrayLike
+    node_feature_count: ArrayLike
+    node_cone_axis: ArrayLike
+    node_cone_sin_cos: ArrayLike
+    node_cone_radius: ArrayLike
+
+
+H = TypeVar("H")
+D = TypeVar("D")
+ItemT = TypeVar("ItemT")
+P = TypeVar("P")
+CH = TypeVar("CH")
+CD = TypeVar("CD")
+FH = TypeVar("FH")
+FD = TypeVar("FD")
+FI = TypeVar("FI")
+
+
+class BoundaryData(NamedTuple, Generic[CH, FH]):
+    core: CH
+    silhouette: FH | None = None
 
 
 @dataclass(frozen=True)
-class BoundaryAdapter:
+class BoundaryAdapter(Generic[H, D, ItemT, P, CH, CD, FH, FD, FI]):
     prepare: object
     feature_primitive: object = None
     build_silhouette: object = None
     visibility: object = None
     classification: object = None
     predicate: object = None
+    measure: object = None
+    robin: object = None
+
+
+class BoundaryPrimitive(PrimitiveSpec[H, D, ItemT, P], Protocol[H, D, ItemT, P, CH, CD, FH, FD, FI]):
+    """A declared adapter retains the primitive and metadata type connections."""
+
+    @property
+    def boundary_adapter(self) -> BoundaryAdapter[H, D, ItemT, P, CH, CD, FH, FD, FI] | None: ...
 
 
 def _core(primitive, data, dimension):
@@ -224,9 +262,10 @@ def _classification(primitive):
 @lru_cache(maxsize=None)
 def _builtin_adapter(dimension):
     from ._warp_metrics import Silhouette
+    from ._warp_boundary_queries import _uniform_measure, _euclidean_robin
     return BoundaryAdapter(_segments_core if dimension == 2 else _triangles_core,
                            _feature_primitive(dimension), _features, cone_visibility,
-                           _classification, Silhouette())
+                           _classification, Silhouette(), _uniform_measure, _euclidean_robin)
 
 
 def resolve_boundary_adapter(primitive, adapter=None):

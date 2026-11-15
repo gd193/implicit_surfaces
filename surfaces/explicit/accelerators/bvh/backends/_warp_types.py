@@ -18,6 +18,17 @@ ItemT = TypeVar("ItemT")
 PointT = TypeVar("PointT", covariant=True)
 T_co = TypeVar("T_co", covariant=True)
 StructT = TypeVar("StructT")
+ElementT = TypeVar("ElementT")
+
+
+class DeviceArray(Protocol[ElementT]):
+    """Static view of a one-dimensional Warp array; runtime dtype stays explicit."""
+
+    @property
+    def shape(self) -> tuple[int, ...]: ...
+
+    def __getitem__(self, index: int) -> ElementT: ...
+    def __setitem__(self, index: int, value: ElementT) -> None: ...
 
 
 class WarpFunction(Protocol[P, R]):

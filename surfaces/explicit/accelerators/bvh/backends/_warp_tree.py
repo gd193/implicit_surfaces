@@ -10,12 +10,13 @@ import warp as wp
 from surfaces.explicit.accelerators.protocol import Config
 from ._warp_layout import _pack_ray_nodes, _validate_tree
 from .sah_jax import _build_payload
+from ._warp_types import warp_struct
 
 
 STACK_CAPACITY = 64
 
 
-@wp.struct
+@warp_struct
 class DeviceTree:
     node_lower: wp.array(dtype=wp.vec3)
     node_upper: wp.array(dtype=wp.vec3)
