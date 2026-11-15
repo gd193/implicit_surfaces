@@ -6,6 +6,9 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# Generated kNN benchmark samples stay outside version control.
+/docs/benchmarks/warp_knn.json
+
 # --- Jupyter Notebooks ---
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
@@ -39,6 +42,8 @@ scripts/bench/spatial_trees/*
 !scripts/bench/spatial_trees/_warp_timing.py
 !scripts/bench/spatial_trees/build_references.py
 !scripts/bench/spatial_trees/warp_reference_queries.py
+!scripts/bench/spatial_trees/build_knn_references.py
+!scripts/bench/spatial_trees/warp_knn_reference.py
 !scripts/bench/spatial_trees/references/
 !scripts/bench/mesh_extraction/
 !scripts/bench/pressure/

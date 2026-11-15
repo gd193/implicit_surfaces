@@ -4,6 +4,7 @@ from .backends._warp_metrics import (
     NearestPolicy, NearestPredicate, Silhouette,
 )
 from .backends._warp_nearest import NearestQuery, make_nearest
+from .backends._warp_knn import KnnQuery, make_knn
 from .backends._warp_types import DeviceArray, PrimitiveSpec, WarpFunction, WarpType, as_warp_function, warp_func, warp_struct
 from .backends._warp_primitives import (
     Points, Primitive, Segments, SilhouetteEdges, Triangles,
@@ -37,7 +38,7 @@ __all__ = [
     "Angular", "AngularQuery", "BoundaryAdapter", "BoundaryCore", "BoundaryCoreData",
     "BoundaryData", "BoundaryPrimitive", "BoundarySampleQuery", "ClassificationOps", "ClassifyQuery",
     "CoefficientData", "CoefficientMeta", "DeviceArray", "DeviceTree", "Euclidean", "MeasureOps",
-    "MetricSpec", "NearestCallbacks", "NearestOps", "NearestPolicy", "NearestPredicate",
+    "KnnQuery", "MetricSpec", "NearestCallbacks", "NearestOps", "NearestPolicy", "NearestPredicate",
     "NearestQuery", "OverlapQuery", "PointItem2", "PointItem3", "Points", "PointsArrays2",
     "PointsArrays3", "PointsData2", "PointsData3", "Primitive", "PrimitiveSpec", "Ray", "RayOps",
     "RayQuery", "RegionOps", "RobinData", "RobinMetric", "RobinOps", "RobinPolicy", "RobinQuery", "SamplingData",
@@ -47,6 +48,6 @@ __all__ = [
     "SilhouetteMeta", "SilhouetteQuery", "StarRadiusQuery", "TreeData", "TriangleItem3",
     "Triangles", "TrianglesArrays3", "TrianglesData3", "WarpFunction", "WarpType",
     "as_warp_function", "build_boundary", "build_tree", "make_boundary_sample", "make_classify",
-    "make_nearest", "make_overlap", "make_ray_query", "make_robin_radius", "make_silhouette",
+    "make_knn", "make_nearest", "make_overlap", "make_ray_query", "make_robin_radius", "make_silhouette",
     "make_star_radius", "prepare_boundary_sample", "prepare_robin", "warp_func", "warp_struct",
 ]
