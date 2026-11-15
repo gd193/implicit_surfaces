@@ -33,7 +33,6 @@ class TriMeshSurface(ExplicitSurface):
             )
 
         self.is_differentiable_wrt_params = vertex_velocity_fn is not None
-        self.has_box_bounds = accelerator.has_distance_bounds
 
     def closest_point(self, params: Any, x: jnp.ndarray
                       ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -55,19 +54,6 @@ class TriMeshSurface(ExplicitSurface):
         sign = self._inside_sign(params, center)
         sign = jnp.where(jnp.isfinite(sign), sign, 0).astype(jnp.int8)
         return jnp.where(overlaps, jnp.int8(0), sign)
-
-    def box_bounds(self, params: Any,
-                   lower: jnp.ndarray, upper: jnp.ndarray
-                   ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """Use native distance bounds, or the Lipschitz enclosure."""
-        if self.accelerator.has_distance_bounds:
-            d_min, d_max = self.accelerator.distance_bounds(lower, upper)
-            # Sign-extend by querying the center; tightness depends on
-            # whether the surface crosses the AABB.
-            center = 0.5 * (lower + upper)
-            sign = jnp.sign(self.signed_value(params, center))
-            return sign * d_min, sign * d_max
-        return super().box_bounds(params, lower, upper)
 
     def _inside_sign(self, params: Any, x: jnp.ndarray) -> jnp.ndarray:
         return self.accelerator.classify_point(x)

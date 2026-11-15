@@ -22,7 +22,7 @@ from surfaces.base import Surface
 
 class ExplicitSurface(Surface):
     # Capability flags — explicit reps have explicit normals (no autograd
-    # for shading) and tight box bounds via the accelerator.
+    # for shading) and conservative signed-distance box bounds.
     needs_grad_for_normals: bool = False
     has_box_bounds: bool = True
     has_classify_subcubes: bool = False
@@ -122,7 +122,6 @@ class ExplicitSurface(Surface):
         """Conservative interval via Lipschitz argument: any explicit
         surface is 1-Lipschitz in the signed-distance sense, so
         `[f(c) - half_diag, f(c) + half_diag]` is a valid enclosure.
-        Subclasses with an accelerator distance-bound query should override.
         """
         center = 0.5 * (lower + upper)
         half_diag = 0.5 * jnp.linalg.norm(upper - lower)

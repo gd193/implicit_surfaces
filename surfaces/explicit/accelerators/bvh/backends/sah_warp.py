@@ -53,7 +53,6 @@ class BVHSahWarpBackend(Backend[WarpBVHPayload]):
     runtime = "warp"
     payload_type = WarpBVHPayload
     is_differentiable = False
-    has_distance_bounds = False
     has_silhouette_query = False
     has_ray_interval = True
     has_boundary_sampling = False
