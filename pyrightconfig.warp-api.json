@@ -1,0 +1,18 @@
+{
+  "include": [
+    "surfaces/explicit/accelerators/bvh/backends/_warp_types.py",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_builtin_items.py",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_metrics.pyi",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_nearest.pyi",
+    "tests/typing/warp_api/valid.py",
+    "tests/typing/warp_api/extension.py",
+    "tests/typing/warp_api/real_extension.py",
+    "tests/typing/warp_api/native_math.pyi"
+  ],
+  "typeCheckingMode": "strict",
+  "pythonVersion": "3.11",
+  "extraPaths": [
+    "."
+  ],
+  "reportMissingTypeStubs": false
+}

@@ -232,18 +232,13 @@ def _builtin_adapter(dimension):
 def resolve_boundary_adapter(primitive, adapter=None):
     if adapter is not None:
         return adapter
-    from ._warp_primitives import Primitive, Segments, Triangles
-    if type(primitive) is Primitive:
-        if primitive == Triangles():
-            return _builtin_adapter(3)
-        if primitive == Segments(2):
-            return _builtin_adapter(2)
+    declared = getattr(primitive, "boundary_adapter", None)
+    if declared is not None:
+        return declared
     raise TypeError("boundary queries require an explicit BoundaryAdapter")
 
 
 def build_boundary(primitive, data, config=None, *, adapter=None, silhouettes=True):
-    from ._warp_primitives import Primitive, Segments, Triangles
-
     adapter = resolve_boundary_adapter(primitive, adapter)
     tree, geometry = build_tree(primitive, data, config)
     core = adapter.prepare(primitive, data)
@@ -254,10 +249,11 @@ def build_boundary(primitive, data, config=None, *, adapter=None, silhouettes=Tr
         meta = adapter.build_silhouette(core, tree, geometry)
         meta = type(meta)(*(jnp.asarray(v) for v in meta))
     ids = tree.prim_ids
-    shared = (type(primitive) is Primitive and primitive in (Segments(2), Triangles())
-              and adapter.prepare in (_segments_core, _triangles_core))
-    indices = (geometry.indices if shared
-               else jnp.asarray(core.indices)[ids])
+    # Reuse the packed connectivity only when the adapter kept the input
+    # connectivity itself. Equal arrays may describe a different topology.
+    shared = (core.indices is getattr(data, "indices", None)
+              and hasattr(geometry, "indices"))
+    indices = geometry.indices if shared else jnp.asarray(core.indices)[ids]
     core = BoundaryCoreData(jnp.asarray(core.vertices), indices, jnp.asarray(core.closed),
                             jnp.asarray(core.primitive_normal)[ids], jnp.asarray(core.primitive_measure)[ids])
     return tree, geometry, BoundaryData(core, meta)

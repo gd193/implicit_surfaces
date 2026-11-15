@@ -329,3 +329,260 @@ source hashes. Current harnesses still hash retained `sah_jax.py` and
 `snch_jax.py` construction code where used; those filenames do not indicate
 pure-JAX query execution. Optimized Warp matrix, device and external-reference
 benchmark entry points remain available.
+
+## Nearest queries with user callbacks
+
+For a custom score, pass both callbacks instead of a metric:
+
+```python
+nearest = make_nearest(primitive, evaluate=evaluate, lower_bound=lower_bound)
+point, score, original_id, status = jax.jit(nearest)(
+    tree, data, queries, max_distance=score_cap,
+)
+```
+
+`evaluate(query, item)` returns `(closest_point, score)`, minimizing the score
+on that item. `lower_bound(query, lo, hi)` returns a conservative lower bound
+on every item's score in the box. Both must be Warp device functions decorated
+with `@wp.func` (or compatible Warp native functions), not arbitrary Python or
+JAX functions. The query uses `primitive.point_type` and has trailing shape
+`(primitive.dimension,)`. Box endpoints are always `wp.vec3`; 2D boxes have zero
+z. The returned closest point uses the primitive's point type.
+
+Candidate scores must be finite and nonnegative. Bounds and candidate scores
+must use the same units. An overestimated bound can prune the true winner and
+silently give a wrong result; zero is a safe bound for nonnegative scores but
+reduces pruning. Bounds must cover the entire primitive, not only its center.
+Choose formulas that remain conservative under floating-point rounding; callback
+mode adds no Euclidean rounding slack. Negative conservative bounds are allowed,
+although evaluated candidate scores must remain nonnegative.
+
+Callback mode returns **raw scores**, and `max_distance` is a raw score cap:
+there is no square root or squaring conversion. A squared Euclidean callback
+returns 9 for a separation of 3; use a cap of 9 to include it. The cap is closed,
+so an exact equality is accepted. Existing `make_nearest(primitive, Euclidean())`
+continues to return Euclidean distances and accept distance caps.
+Both callbacks are required, and neither may be combined with `metric`.
+
+The result retains the normal nearest-query status convention: 1 for a hit,
+0 for a miss or empty geometry, and -1 for invalid input/failure. Misses return
+score infinity and ID -1. Equal computed scores choose the smaller original ID.
+Negative or NaN caps and nonfinite queries are invalid; an infinite cap is allowed.
+
+The complete example below implements two extensions using only public imports:
+
+- A weighted squared point score with weights `(0.01, 16)`. At the origin,
+  `(5, 0)` wins with score `0.25`, while ordinary Euclidean distance prefers
+  `(0, 1)`. The box callback applies the same weights to coordinate gaps.
+- A custom solid-ball primitive with center/radius arrays, host bounds/packing,
+  a Warp item loader, and device bounds. Its evaluator projects onto the ball
+  (returning the query for interior points); its bound uses squared distance
+  to the enclosing box. No `closest_euclidean` hook or metric binding is needed.
+
+Save the following example as `nearest_callbacks_example.py` and run from the
+repository root with the project's Python environment:
+
+```sh
+JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES='' XLA_PYTHON_CLIENT_PREALLOCATE=false \
+  WARP_CACHE_PATH=/tmp/nearest-callback-example-warp \
+  python nearest_callbacks_example.py
+```
+
+Create the callbacks and factory once, outside JIT. The factory statically
+specializes the existing walker on callback identity and primitive; repeated
+calls with the same specialization reuse its kernel. Changing either callback
+creates a separate specialization. The example uses `@wp.func(module="unique")`
+for functions created inside a Python factory so each closure keeps its own
+weights and Warp identity. Geometry and queries remain dynamic, and JIT and
+nested `vmap` work as for built-in metrics.
+
+```python
+from dataclasses import dataclass
+from typing import Any, NamedTuple
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import warp as wp
+
+from surfaces.explicit.accelerators.bvh.warp import (
+    NearestCallbacks, Points, PrimitiveSpec, WarpFunction, WarpType,
+    build_tree, make_nearest, warp_func, warp_struct,
+)
+
+def weighted_callbacks(dimension, weights):
+    Vec = wp.vec2 if dimension == 2 else wp.vec3
+    weights = Vec(*weights)
+
+    @wp.func(module="unique")
+    def evaluate(q: Vec, item: Any):
+        d = q-item.a
+        score = float(0.0)
+        for axis in range(wp.static(dimension)):
+            score += d[axis]*d[axis]*wp.static(weights)[axis]
+        return item.a, score
+
+    @wp.func(module="unique")
+    def lower_bound(q: Vec, lo: wp.vec3, hi: wp.vec3):
+        score = float(0.0)
+        for axis in range(wp.static(dimension)):
+            d = wp.max(wp.max(lo[axis]-q[axis], 0.0), q[axis]-hi[axis])
+            score += d*d*wp.static(weights)[axis]
+        return score
+
+    return evaluate, lower_bound
+
+
+@warp_struct
+class BallData:
+    centers: wp.array(dtype=wp.vec3)
+    radii: wp.array(dtype=wp.float32)
+
+
+@warp_struct
+class Ball:
+    center: wp.vec3
+    radius: float
+
+
+@warp_func
+def ball_load(data: BallData, slot: int) -> Ball:
+    item = Ball()
+    item.center = data.centers[slot]
+    item.radius = data.radii[slot]
+    return item
+
+
+@warp_func
+def ball_bounds(item: Ball) -> tuple[wp.vec3, wp.vec3]:
+    return item.center-wp.vec3(item.radius), item.center+wp.vec3(item.radius)
+
+
+@warp_func
+def ball_evaluate(query: wp.vec3, item: Ball) -> tuple[wp.vec3, float]:
+    delta = query-item.center
+    length = wp.length(delta)
+    point = query
+    if length > item.radius:
+        point = item.center+delta*(item.radius/length)
+    return point, wp.length_sq(query-point)
+
+
+@warp_func
+def ball_lower_bound(query: wp.vec3, lo: wp.vec3, hi: wp.vec3) -> float:
+    delta = wp.max(wp.max(lo-query, wp.vec3(0.0)), query-hi)
+    return wp.length_sq(delta)
+
+
+class BallArrays(NamedTuple):
+    centers: jax.Array
+    radii: jax.Array
+
+
+@dataclass(frozen=True)
+class Balls:
+    dimension: int = 3
+    point_type: WarpType[wp.vec3] = wp.vec3
+    data_type: WarpType[BallData] = BallData
+    load: WarpFunction[[BallData, int], Ball] = ball_load
+    bounds_of_item: WarpFunction[[Ball], tuple[wp.vec3, wp.vec3]] = ball_bounds
+
+    def bounds(self, data: BallArrays) -> tuple[np.ndarray, np.ndarray]:
+        centers, radii = np.asarray(data.centers), np.asarray(data.radii)
+        return centers-radii[:, None], centers+radii[:, None]
+
+    def pack(self, data: BallArrays, ids: np.ndarray | jax.Array) -> BallArrays:
+        return BallArrays(data.centers[ids], data.radii[ids])
+
+
+def main():
+    primitive = Points(2)
+    evaluate, lower_bound = weighted_callbacks(2, (.01, 16.))
+    tree, data = build_tree(primitive, primitive.data([[0., 1.], [5., 0.]]))
+    nearest = jax.jit(make_nearest(primitive, evaluate=evaluate, lower_bound=lower_bound))
+    point, score, index, status = nearest(tree, data, jnp.zeros(2), max_distance=.25)
+    np.testing.assert_allclose(point, [5., 0.])
+    np.testing.assert_allclose(score, .25)
+    assert int(index) == 1 and int(status) == 1
+    print("Weighted point:", point, "raw score:", score)
+
+    primitive: PrimitiveSpec[BallArrays, BallData, Ball, wp.vec3] = Balls()
+    raw = BallArrays(jnp.array([[0., 0., 0.], [4., 0., 0.]]), jnp.array([1., .5]))
+    tree, data = build_tree(primitive, raw)
+    callbacks: NearestCallbacks[Ball, wp.vec3] = NearestCallbacks(ball_evaluate, ball_lower_bound)
+    query = make_nearest(primitive, callbacks)
+    assert query.kernel is make_nearest(
+        primitive, evaluate=ball_evaluate, lower_bound=ball_lower_bound).kernel
+    nearest = jax.jit(query)
+    point, score, index, status = nearest(tree, data, jnp.array([2., 0., 0.]), max_distance=1.)
+    np.testing.assert_allclose(point, [1., 0., 0.])
+    np.testing.assert_allclose(score, 1.)
+    assert int(index) == 0 and int(status) == 1
+    print("Solid ball:", point, "raw squared distance:", score)
+
+
+if __name__ == "__main__":
+    main()
+```
+
+### Typed extension contract
+
+The public `PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]` protocol
+connects host bounds/packing, the device payload, the loaded item, and query
+points. An external class can implement it structurally, as `Balls` does above;
+`Primitive[...]` also provides an immutable descriptor accepting `host_bounds`
+and `host_pack` functions. Neither path requires registration or inheritance.
+`NearestCallbacks[ItemT, PointT]` uses the same `bind(primitive)` contract as
+`Euclidean` and `Angular`. Callback keyword arguments normalize to this policy,
+so both spellings share the same cached query and kernel.
+
+Use `@warp_struct` for concrete device structs and `@warp_func` on concretely annotated device functions to retain their
+signature in Python checking. It returns the original `wp.Function`, with no
+runtime wrapper. For an existing `@wp.func` or native function, annotate its
+callable signature before passing it through `as_warp_function`; that bridge
+checks Warp identity and preserves it. Avoid `Any` in an extension's item and
+callback annotations: it would remove the connections the checker verifies.
+Dynamic JAX array dimensions and dtypes still require runtime validation.
+
+Focused strict checks cover the shared contracts and representative external
+extensions, including expected failures for mismatched items, queries, scores,
+bounds, and primitive/policy combinations. They do not change repository-wide
+typing settings. With Pyright installed outside the shared Python environment:
+
+```bash
+PYRIGHT=/path/to/pyright \
+PYRIGHT_PYTHONPATH="$(command -v python)" \
+  python tests/typing/check_warp_api.py
+```
+
+The runner first requires zero diagnostics for valid fixtures, then requires
+exact diagnostic rules on every marked negative line. Negative examples use
+ordinary invalid expressions, without `type: ignore` or expected-error
+suppression.
+
+Built-in item structs are public runtime Warp types, so a typed callback can
+annotate them directly. For example, this evaluator compiles with `Points(3)`:
+
+```python
+from surfaces.explicit.accelerators.bvh.warp import PointItem3, NearestCallbacks, warp_func
+
+@warp_func
+def constant_score(query: wp.vec3, item: PointItem3) -> tuple[wp.vec3, float]:
+    return item.a, 1.0
+
+@warp_func
+def constant_bound(query: wp.vec3, lo: wp.vec3, hi: wp.vec3) -> float:
+    return 1.0
+
+nearest = make_nearest(Points(3), NearestCallbacks(constant_score, constant_bound))
+```
+
+This score intentionally treats all points as tied; smallest original ID wins.
+The compiled, strictly checked Euclidean-score example lives in
+`tests/typing/warp_api/real_extension.py`, used directly by
+`tests/spatial_trees/test_warp_typed_api.py`. Its small native math helper has a
+narrow `.pyi` signature because upstream Warp vector arithmetic typing is
+incomplete. The extension itself has no `Any` callback or item annotations.
+Array fields use a `TYPE_CHECKING` indexing protocol with a concrete return type
+and a runtime `wp.array(dtype=...)` annotation; the data/item classes and device
+functions are the same objects exercised by the CPU tests.
