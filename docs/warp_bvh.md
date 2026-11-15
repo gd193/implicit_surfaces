@@ -661,3 +661,69 @@ external primitive use identical callback contracts; a callback for the wrong
 payload is a type error. Optional capability availability is still validated
 when constructing a query. Typed callback compatibility does not imply that an
 optional capability is present.
+
+## Generic k-nearest queries
+
+`make_knn(primitive, k, metric=None, *, evaluate=None, lower_bound=None,
+stack_capacity=64, block_dim=64, cache_bounds=True, predicate=None)` specializes
+one fused traversal kernel for a positive static **Python integer** `k` (booleans
+are rejected). Construct the factory outside JIT. `k` can exceed the number of
+primitives; each primitive contributes at most one candidate.
+
+```python
+import jax
+import jax.numpy as jnp
+from surfaces.explicit.accelerators.bvh.warp import Points, Euclidean, build_tree, make_knn
+
+primitive = Points(2)
+tree, geometry = build_tree(primitive, primitive.data([[0., 0.], [2., 0.], [-2., 0.]]))
+knn = jax.jit(make_knn(primitive, 4, Euclidean()))
+distances, ids, count, status = knn(tree, geometry, jnp.array([[1., 0.]]), max_distance=1.)
+# distances = [[1., 1., inf, inf]], ids = [[0, 1, -1, -1]]
+# count = [2], status = [1]
+```
+
+A query has shape `batch + (primitive.dimension,)` for ordinary point policies;
+custom policies retain their own query shape. Results are `(values, ids, count,
+status)`, with shapes `batch + (k,)`, `batch + (k,)`, `batch`, and `batch`.
+Candidates sort by internal score, then **original primitive ID**, independently
+of BVH packing. Unfilled entries contain positive infinity and ID -1. `count`
+is the number returned, at most `k`. Status is 1 when any candidate is found,
+0 for no candidates (including an empty tree), and -1 for invalid input,
+numerical failure, or stack exhaustion. Failure clears the entire row to padding
+and sets count to zero. Nonfinite queries, negative/NaN caps, and evaluated scores
+that are negative or nonfinite are invalid; positive-infinite caps are allowed.
+Caps broadcast over query batch dimensions and include exact equality.
+
+An explicit metric or **both** callbacks are required; there is no implicit
+Euclidean metric. `NearestPolicy` and `NearestCallbacks` are exactly the policies
+used by `make_nearest`. Explicit metrics apply their `to_score` cap conversion
+and `to_distance` result conversion. Callback shorthand uses raw score units for
+both outputs and caps. For example, a squared-distance callback needs cap 9 to
+include separation 3. The evaluator returns `(point, score)` for each primitive;
+kNN ignores the point and ranks the score. A predicate can reject candidates.
+
+For example, reuse the `weighted_callbacks` functions defined above with either
+factory; changing the callbacks creates a new compiled specialization:
+
+```python
+evaluate, lower_bound = weighted_callbacks(2, (.01, 16.))
+knn = jax.jit(make_knn(primitive, 4, evaluate=evaluate, lower_bound=lower_bound))
+scores, ids, count, status = knn(tree, geometry, jnp.array([[1., 0.]]), max_distance=.01)
+# scores = [[.01, .01, inf, inf]], ids = [[0, 1, -1, -1]]
+```
+
+The callback requirements in the preceding section apply unchanged: callbacks
+are Warp device functions; the bound must conservatively bound every primitive
+in its box, in the same units as the evaluated score. An overestimated bound can
+silently prune a valid neighbor. Zero is safe for nonnegative scores but prunes
+less. Callback shorthand and `NearestCallbacks(evaluate, lower_bound)` share the
+same cached kernel. JIT and nested `vmap` preserve the single fused custom call;
+selection and ordering happen inside that traversal, without repeated nearest
+queries or a separate sorting kernel.
+
+Candidate storage uses an unrolled register list for k up to 64 and an in-place
+packed heap above that. Larger k can increase register pressure and local-memory
+traffic. `cache_bounds=False` reduces traversal storage by recomputing deferred
+bounds; whether that helps depends on the callback cost and workload. See the
+[GPU comparison report](benchmarks/warp_knn.md) for measured settings and limits.

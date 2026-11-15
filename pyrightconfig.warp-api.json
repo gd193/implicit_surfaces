@@ -18,7 +18,9 @@
     "surfaces/explicit/accelerators/bvh/backends/_warp_inside.pyi",
     "surfaces/explicit/accelerators/bvh/backends/_warp_boundary.pyi",
     "surfaces/explicit/accelerators/bvh/backends/_warp_builtin_data.py",
-    "surfaces/explicit/accelerators/bvh/backends/_warp_tree.pyi"
+    "surfaces/explicit/accelerators/bvh/backends/_warp_tree.pyi",
+    "surfaces/explicit/accelerators/bvh/backends/_warp_knn.pyi",
+    "tests/typing/warp_api/knn_valid.py"
   ],
   "typeCheckingMode": "strict",
   "pythonVersion": "3.11",
