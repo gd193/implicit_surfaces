@@ -21,7 +21,7 @@ from ._warp_builtin_data import (
 
 from ._warp_traversal import load_array
 
-from ._warp_domain import Ray, RayOps
+from ._warp_domain import Ray
 
 if TYPE_CHECKING:
     from ._warp_boundary import BoundaryAdapter
@@ -62,7 +62,6 @@ class Primitive(Generic[HostDataT, DeviceDataT, ItemT, PointT]):
     prepare_data: Callable[..., HostDataT] | None = None
     prepare_indexed: Callable[[Any, Any], HostDataT] | None = None
     boundary_adapter: "BoundaryAdapter[HostDataT, DeviceDataT, ItemT, PointT, Any, Any, Any, Any, Any] | None" = None
-    ray_ops: "RayOps[DeviceDataT, Any] | None" = None
 
     def data(self, *arrays: Any) -> HostDataT:
         if self.prepare_data is None:

@@ -6,6 +6,8 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
+from ._warp_host_metadata import reduce_nodes, triangle_mesh_closed, triangle_metadata
+
 
 _PACKED_PAYLOAD_LIMIT = 1 << 31
 
@@ -147,17 +149,6 @@ def _pack_ray_nodes(node_lower, node_upper, left, right, offset, count):
     return ray_lower, ray_upper
 
 
-def _is_closed(vertices, faces):
-    triangles = vertices[faces].astype(np.float64)
-    normals = np.cross(triangles[:, 1] - triangles[:, 0],
-                       triangles[:, 2] - triangles[:, 0])
-    if np.any(np.all(normals == 0, axis=1)):
-        return False
-    edges = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
-    _, counts = np.unique(edges, axis=0, return_counts=True)
-    return bool(np.all(counts == 2))
-
-
 def make_warp_payload(tree, vertices_np, faces_np, snch=None, *, mesh_vertices=None):
     """Pack triangles in leaf order; preserve original face IDs."""
     vertices = np.asarray(vertices_np, dtype=np.float32)
@@ -193,10 +184,7 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None, *, mesh_vertices=N
         v0 = tris[:, 0]
         e1 = tris[:, 1] - v0
         e2 = tris[:, 2] - v0
-        cross = np.cross(e1, e2)
-        double_area = np.linalg.norm(cross, axis=1)
-        area = 0.5 * double_area
-        normal = cross / np.maximum(double_area[:, None], np.float32(1e-30))
+        normal, area, _ = triangle_metadata(e1, e2)
         if not all(np.isfinite(a).all() for a in (v0, e1, e2, normal, area)):
             raise ValueError("packed triangle geometry overflows float32")
     else:
@@ -208,13 +196,9 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None, *, mesh_vertices=N
     right = tree_arrays["node_right"]
     offset = tree_arrays["node_leaf_offset"]
     count = tree_arrays["node_leaf_count"]
-    node_area = np.zeros((n_nodes,), dtype=np.float32)
-    for node in postorder:
-        if count[node] > 0:
-            a, b = int(offset[node]), int(offset[node] + count[node])
-            node_area[node] = np.sum(area[a:b], dtype=np.float32)
-        elif left[node] >= 0 and right[node] >= 0:
-            node_area[node] = node_area[left[node]] + node_area[right[node]]
+    node_area = reduce_nodes(
+        area, left, right, offset, count, postorder,
+        lambda values: np.sum(values, axis=0, dtype=np.float32))
     if not np.isfinite(node_area).all():
         raise ValueError("subtree triangle area overflows float32")
 
@@ -283,7 +267,7 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None, *, mesh_vertices=N
         mesh_vertices=jnp.asarray(vertices if mesh_vertices is None else mesh_vertices,
                                   dtype=jnp.float32),
         tri_indices=jnp.asarray(faces[prim_ids]),
-        mesh_closed=jnp.asarray([_is_closed(vertices, faces)], jnp.int32),
+        mesh_closed=jnp.asarray([triangle_mesh_closed(vertices, faces)], jnp.int32),
         tri_robin_bounds=jnp.zeros((0, 2), jnp.float32),
         node_robin_bounds=jnp.zeros((0, 2), jnp.float32),
     ), int(depths.max(initial=0))

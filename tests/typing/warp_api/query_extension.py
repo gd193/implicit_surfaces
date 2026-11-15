@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 from surfaces.explicit.accelerators.bvh.warp import (
     BoundaryAdapter, BoundaryCore, BoundaryCoreData, PrimitiveSpec, RobinOps, SilhouetteMeta,
-    WarpFunction, WarpType,
+    TreeData, WarpFunction, WarpType,
 )
 from tests.typing.warp_api.real_extension import (
     ExternalArrays, VectorArray, external_bounds,
@@ -186,6 +186,14 @@ def prepare_core(primitive: PrimitiveSpec[ExternalArrays, ExternalData, External
         np.ones((1,), dtype=np.int32), np.zeros(data.positions.shape, dtype=np.float32), np.ones((count,)))
 
 
+def pack_core(core: BoundaryCoreData, data: ExternalArrays, tree: TreeData,
+              geometry: ExternalArrays) -> BoundaryCoreData:
+    ids = tree.prim_ids
+    return BoundaryCoreData(np.asarray(core.vertices), np.asarray(core.indices)[ids],
+        np.asarray(core.closed), np.asarray(core.primitive_normal)[ids],
+        np.asarray(core.primitive_measure)[ids])
+
+
 # This small adapter describes a single-leaf point boundary. Production adapters
 # would construct feature references for each tree node, as the builtins do.
 def build_single_leaf_features(core: BoundaryCoreData, tree: object,
@@ -197,7 +205,7 @@ def build_single_leaf_features(core: BoundaryCoreData, tree: object,
 external_adapter: BoundaryAdapter[
     ExternalArrays, ExternalData, ExternalItem, wp.vec3,
     BoundaryCoreData, BoundaryCore, FeatureArrays, FeatureData, ExternalItem,
-] = BoundaryAdapter(prepare_core, ExternalFeatures(), build_single_leaf_features)
+] = BoundaryAdapter(prepare_core, pack_core, ExternalFeatures(), build_single_leaf_features)
 
 
 

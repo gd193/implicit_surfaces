@@ -156,9 +156,19 @@ Classification requires closed, non-degenerate connectivity and detects exact
 contact separately from parity crossings. A geometric tangent hit need not cross.
 
 Custom `BoundaryAdapter` objects supply topology, feature construction, visibility,
-leaf predicates and classification operations. `MeasureOps` supplies local samples,
+leaf predicates and classification operations. Each adapter provides
+`prepare(primitive, data)` and `pack_core(core, data, tree, geometry)`. Preparation
+returns its own host core schema; packing preserves that schema and reorders
+per-primitive arrays using `tree.prim_ids`. Global arrays stay in their original
+order. `data` is the original geometry and `geometry` is the packed geometry, so
+an adapter can reuse shared arrays. Feature construction receives the unpacked
+core and returns ready-to-use metadata, including any needed array conversions.
+Generic construction preserves both custom schemas without replacing fields.
+`MeasureOps` supplies local samples,
 normals and densities, plus optional selection weights; use the same policy with
-`prepare_boundary_sample` and `make_boundary_sample`. `RegionOps` separates
+`prepare_boundary_sample` and `make_boundary_sample`. A custom core without
+`primitive_measure` supplies `MeasureOps.weights(core)` in packed primitive order.
+`RegionOps` separates
 conservative overlap from exact sample membership. PDFs include path, primitive
 selection and local density factors; rejected samples remain null events.
 
@@ -593,7 +603,10 @@ Every query factory carries the primitive's host payload type into its returned
 callable. Device callbacks retain separate geometry, item, point, state, and
 metadata types. `RayOps[DeviceData, State]` supports both `intersect` and
 `next_hit`; the latter returns `(State, float, int)`. All four ray modes use the
-same contract. `ClassificationOps[Point, DeviceData, DeviceMetadata]` connects
+same contract. A primitive declares its default single-event callback through
+`intersect`. Pass `ops=RayOps(...)` to the query factory for an explicit or
+stateful policy. Equivalent default and explicit policies share a cached kernel.
+`ClassificationOps[Point, DeviceData, DeviceMetadata]` connects
 both metadata callbacks. When the host metadata record differs from the device
 struct, pass `metadata_host_type=HostMetadata` to `make_classify`. That marker
 only supplies host typing; it shares the same cached specialization and kernel.

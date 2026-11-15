@@ -62,14 +62,18 @@ def valid_ray(origin: Any, direction: Any, minimum: float, maximum: float,
     return bool(False)  # Generic native return-type inference.
 
 
-@lru_cache(maxsize=None)
 def make_ray_query(primitive, mode="first", *, ops=None, exclude=False,
                    stack_capacity=STACK_CAPACITY, block_dim=128):
+    ops = RayOps(intersect=getattr(primitive, "intersect", None)) if ops is None else ops
+    return _make_ray_query(primitive, mode, ops, exclude, stack_capacity, block_dim)
+
+
+@lru_cache(maxsize=None)
+def _make_ray_query(primitive, mode, ops, exclude, stack_capacity, block_dim):
     if mode not in ("first", "any", "count", "all"):
         raise ValueError("ray mode must be first, any, count, or all")
     if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
         raise ValueError("invalid stack capacity or block dimension")
-    ops = ops or getattr(primitive, "ray_ops", None) or RayOps(intersect=getattr(primitive, "intersect", None))
     if ops.intersect is None and ops.next_hit is None:
         raise TypeError("primitive has no ray intersection operation")
     multiple = ops.next_hit is not None and (mode in ("count", "all") or ops.intersect is None)
