@@ -13,6 +13,7 @@ from ._warp_factory import BoundQuery, bind_query
 from ._warp_metrics import Euclidean
 from ._warp_nearest import prepare_nearest
 from ._warp_layout import _validate_tree
+from ._warp_host_metadata import reduce_nodes
 from ._warp_traversal import load_array, make_walk
 from ._warp_primitives import _struct
 from ._warp_tree import DeviceTree, STACK_CAPACITY
@@ -107,24 +108,17 @@ class RobinMetric(Protocol[D, ItemT, PointContra, Q, CD, FD]):
 
 
 def _reduce_nodes(tree, primitive, combine):
-    result = np.empty((tree.node_left.shape[0],)+primitive.shape[1:], np.float32)
-    if not len(result):
-        return result
+    if not tree.node_left.shape[0]:
+        return np.empty((0,)+primitive.shape[1:], np.float32)
     arrays, _, order = _validate_tree(tree, len(primitive))
     left, right, offset, count = (arrays[name] for name in
         ("node_left", "node_right", "node_leaf_offset", "node_leaf_count"))
-    for node in order:
-        if count[node]:
-            result[node] = combine(primitive[offset[node]:offset[node]+count[node]])
-        else:
-            result[node] = combine(result[[left[node], right[node]]])
-    return result
+    return reduce_nodes(primitive, left, right, offset, count, order, combine)
 
 
 def prepare_boundary_sample(tree, boundary, measure=None):
     """Use the same static measure policy when preparing and querying."""
     core = boundary.core if hasattr(boundary, "core") else boundary
-    primitive_weight = core.primitive_measure
     if measure is not None and measure.weights is not None:
         raw = measure.weights(core)
         if np.iscomplexobj(raw):
@@ -134,6 +128,8 @@ def prepare_boundary_sample(tree, boundary, measure=None):
                 or np.any(raw > np.finfo(np.float32).max)):
             raise ValueError("sampling weights must have one finite float32 value per leaf primitive")
         primitive_weight = jnp.asarray(raw, jnp.float32, device=tree.node_lower.sharding)
+    else:
+        primitive_weight = core.primitive_measure
     values = np.asarray(primitive_weight)
     if values.shape != tree.prim_ids.shape or not np.isfinite(values).all() or np.any(values < 0):
         raise ValueError("primitive measure must be finite, nonnegative and match tree slots")
@@ -245,12 +241,16 @@ class BoundarySampleQuery(BoundQuery, Generic[H, D, ItemT, P, Q]):
         return self.launch(tree, geometry, shape, queries, caps, randoms, metadata=(metadata,))
 
 
-@lru_cache(maxsize=None)
 def make_boundary_sample(primitive, measure=None, region=None, *, block_dim=256):
-    if not 1 <= block_dim <= 1024:
-        raise ValueError("invalid block dimension")
     measure = _adapter_policy(primitive, "measure") if measure is None else measure
     region = _ball_region(primitive) if region is None else region
+    return _make_boundary_sample(primitive, measure, region, block_dim)
+
+
+@lru_cache(maxsize=None)
+def _make_boundary_sample(primitive, measure, region, block_dim):
+    if not 1 <= block_dim <= 1024:
+        raise ValueError("invalid block dimension")
     _check_functions(measure.sample, region.valid, region.overlaps, region.contains)
     Vec, Query, Geometry = primitive.point_type, region.query_type, primitive.data_type
 
@@ -446,17 +446,7 @@ class RobinQuery(BoundQuery, Generic[H, D, ItemT, Q, CH, CD, FH, FD]):
 
 def make_robin_radius(primitive, policy=None, metric=None, *, core_host_type=None,
                       feature_host_type=None, stack_capacity=STACK_CAPACITY, block_dim=64):
-    # Static host schema markers do not create extra device specializations.
-    return _make_robin_radius(primitive, policy, metric,
-                             stack_capacity=stack_capacity, block_dim=block_dim)
-
-
-@lru_cache(maxsize=None)
-def _make_robin_radius(primitive, policy=None, metric=None, *, stack_capacity=STACK_CAPACITY, block_dim=64):
-    from ._warp_boundary import BoundaryCore, SilhouetteMeta
-
-    if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
-        raise ValueError("invalid stack capacity or block dimension")
+    # Resolve defaults and bind policies before caching; host schema markers are typing only.
     metric = Euclidean() if metric is None else metric
     if policy is None:
         bind_robin = getattr(metric, "bind_robin", None)
@@ -467,6 +457,15 @@ def _make_robin_radius(primitive, policy=None, metric=None, *, stack_capacity=ST
         ops = policy
     if hasattr(ops, "bind"):
         ops = ops.bind(primitive, metric)
+    return _make_robin_radius(primitive, ops, stack_capacity, block_dim)
+
+
+@lru_cache(maxsize=None)
+def _make_robin_radius(primitive, ops, stack_capacity, block_dim):
+    from ._warp_boundary import BoundaryCore, SilhouetteMeta
+
+    if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
+        raise ValueError("invalid stack capacity or block dimension")
     required = (ops.valid, ops.leaf_bound_with_data or ops.primitive_bound,
                 ops.node_visit or ops.node_bound_with_data or ops.node_bound,
                 ops.feature_bound_with_data or ops.feature_bound)

@@ -65,14 +65,19 @@ class SilhouetteQuery(Generic[H, D, ItemT, P, Q, CH, CD, FH, FD, FI]):
         return self.query(feature_tree, meta, queries, max_distance)
 
 
-@lru_cache(maxsize=None)
 def make_silhouette(primitive, metric=None, *, adapter=None, stack_capacity=STACK_CAPACITY, block_dim=64):
     from ._warp_boundary import resolve_boundary_adapter
     from ._warp_metrics import Euclidean
-    from ._warp_nearest import make_nearest
 
     metric = Euclidean() if metric is None else metric
     adapter = resolve_boundary_adapter(primitive, adapter)
+    return _make_silhouette(primitive, metric, adapter, stack_capacity, block_dim)
+
+
+@lru_cache(maxsize=None)
+def _make_silhouette(primitive, metric, adapter, stack_capacity, block_dim):
+    from ._warp_nearest import make_nearest
+
     if adapter.visibility is not None and not isinstance(adapter.visibility, wp.Function):
         raise TypeError("silhouette visibility must be a decorated Warp Function")
     feature = adapter.feature_primitive
@@ -95,7 +100,11 @@ class StarRadiusQuery(Generic[H, D, ItemT, P, CH, CD, FH, FD, FI]):
                 jnp.where(valid, 1, -1).astype(jnp.int32))
 
 
-@lru_cache(maxsize=None)
 def make_star_radius(primitive, *, adapter=None, stack_capacity=STACK_CAPACITY, block_dim=64):
-    return StarRadiusQuery(make_silhouette(primitive, adapter=adapter,
+    return _make_star_radius(make_silhouette(primitive, adapter=adapter,
         stack_capacity=stack_capacity, block_dim=block_dim))
+
+
+@lru_cache(maxsize=None)
+def _make_star_radius(silhouette):
+    return StarRadiusQuery(silhouette)

@@ -1,7 +1,7 @@
 """Indexed boundary adapters and optional silhouette metadata."""
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Generic, NamedTuple, Protocol, TypeVar
+from typing import Callable, Generic, NamedTuple, Protocol, TypeVar
 
 from jax.typing import ArrayLike
 import jax.numpy as jnp
@@ -9,8 +9,9 @@ import numpy as np
 import warp as wp
 
 from ._warp_types import PrimitiveSpec, warp_struct
+from ._warp_host_metadata import triangle_boundary_features, triangle_metadata
 from ._warp_traversal import load_array
-from ._warp_tree import DeviceTree, build_tree
+from ._warp_tree import DeviceTree, TreeData, build_tree
 
 
 @warp_struct
@@ -75,9 +76,15 @@ class BoundaryData(NamedTuple, Generic[CH, FH]):
 
 @dataclass(frozen=True)
 class BoundaryAdapter(Generic[H, D, ItemT, P, CH, CD, FH, FD, FI]):
-    prepare: object
+    """Prepare source-order core, then explicitly pack it into tree leaf order.
+
+    build_silhouette returns ready-to-use host metadata, retaining its schema.
+    """
+
+    prepare: Callable[[PrimitiveSpec[H, D, ItemT, P], H], CH]
+    pack_core: Callable[[CH, H, TreeData, H], CH]
     feature_primitive: object = None
-    build_silhouette: object = None
+    build_silhouette: Callable[[CH, TreeData, H], FH] | None = None
     visibility: object = None
     classification: object = None
     predicate: object = None
@@ -103,14 +110,12 @@ def _core(primitive, data, dimension):
         edge = facets[:, 1]-facets[:, 0]
         cross = np.column_stack((edge[:, 1], -edge[:, 0]))
         boundary_features = indices.reshape(-1, 1)
+        lengths = np.linalg.norm(cross, axis=1)
+        measure = lengths * 1.
+        normal = cross/np.where(lengths[:, None] > 0, lengths[:, None], 1.)
     else:
-        cross = np.cross(np.asarray(data.e1, np.float32), np.asarray(data.e2, np.float32))
-        original_cross = np.cross(facets[:, 1]-facets[:, 0], facets[:, 2]-facets[:, 0])
-        cross[np.all(original_cross == 0.0, axis=1)] = 0.0
-        boundary_features = np.sort(indices[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
-    lengths = np.linalg.norm(cross, axis=1)
-    measure = lengths*(.5 if dimension == 3 else 1.)
-    normal = cross/np.where(lengths[:, None] > 0, lengths[:, None], 1.)
+        normal, measure, lengths = triangle_metadata(data.e1, data.e2, original_facets=facets)
+        boundary_features = triangle_boundary_features(indices)
     if (not np.isfinite(normal).all() or not np.isfinite(measure).all()
             or np.any(measure > np.finfo(np.float32).max)):
         raise ValueError("boundary normals and measures must be finite float32")
@@ -254,6 +259,21 @@ def _feature_primitive(dimension):
     return _FeaturePrimitive(dimension, Vec, SilhouetteMeta, load, bounds, closest, endpoints, sides)
 
 
+def _pack_builtin_core(core, data, tree, geometry):
+    ids = tree.prim_ids
+    # Identity matters: equal arrays may describe a different topology.
+    shared = (core.indices is getattr(data, "indices", None)
+              and hasattr(geometry, "indices"))
+    indices = geometry.indices if shared else jnp.asarray(core.indices)[ids]
+    return BoundaryCoreData(jnp.asarray(core.vertices), indices, jnp.asarray(core.closed),
+                            jnp.asarray(core.primitive_normal)[ids],
+                            jnp.asarray(core.primitive_measure)[ids])
+
+
+def _build_builtin_silhouette(core, tree, geometry):
+    return SilhouetteData(*(jnp.asarray(v) for v in _features(core, tree, geometry)))
+
+
 def _classification(primitive):
     from ._warp_domain import builtin_classification
     return builtin_classification(primitive, BoundaryCore)
@@ -264,7 +284,8 @@ def _builtin_adapter(dimension):
     from ._warp_metrics import Silhouette
     from ._warp_boundary_queries import _uniform_measure, _euclidean_robin
     return BoundaryAdapter(_segments_core if dimension == 2 else _triangles_core,
-                           _feature_primitive(dimension), _features, cone_visibility,
+                           _pack_builtin_core, _feature_primitive(dimension),
+                           _build_builtin_silhouette, cone_visibility,
                            _classification, Silhouette(), _uniform_measure, _euclidean_robin)
 
 
@@ -286,13 +307,5 @@ def build_boundary(primitive, data, config=None, *, adapter=None, silhouettes=Tr
         if adapter.build_silhouette is None or adapter.feature_primitive is None:
             raise TypeError("boundary adapter has no silhouette construction")
         meta = adapter.build_silhouette(core, tree, geometry)
-        meta = type(meta)(*(jnp.asarray(v) for v in meta))
-    ids = tree.prim_ids
-    # Reuse the packed connectivity only when the adapter kept the input
-    # connectivity itself. Equal arrays may describe a different topology.
-    shared = (core.indices is getattr(data, "indices", None)
-              and hasattr(geometry, "indices"))
-    indices = geometry.indices if shared else jnp.asarray(core.indices)[ids]
-    core = BoundaryCoreData(jnp.asarray(core.vertices), indices, jnp.asarray(core.closed),
-                            jnp.asarray(core.primitive_normal)[ids], jnp.asarray(core.primitive_measure)[ids])
+    core = adapter.pack_core(core, data, tree, geometry)
     return tree, geometry, BoundaryData(core, meta)

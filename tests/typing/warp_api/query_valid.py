@@ -23,7 +23,7 @@ from tests.typing.warp_api.query_extension import external_adapter, FeatureArray
 from tests.typing.warp_api.real_extension import external_bound, external_evaluate
 from surfaces.explicit.accelerators.bvh.warp import Points, PointsData3
 from tests.typing.warp_api.query_extension import builtin_intersect
-from surfaces.explicit.accelerators.bvh.warp import BoundaryCoreData, SilhouetteData, RobinData
+from surfaces.explicit.accelerators.bvh.warp import BoundaryCoreData, SilhouetteData, RobinData, build_boundary
 
 single: RayOps[ExternalData, int] = RayOps(intersect=intersect)
 multiple: RayOps[ExternalData, Cursor] = RayOps(state_type=Cursor, next_hit=next_hit)
@@ -69,3 +69,8 @@ def invoke_robin(tree: object, geometry: ExternalArrays, metadata: RobinData[Bou
                  arrays: jax.Array) -> None:
     robin_query(tree, geometry, metadata, arrays)
     robin_from_metric(tree, geometry, metadata, arrays)
+
+
+def construct_boundary(geometry: ExternalArrays) -> tuple[BoundaryCoreData, FeatureArrays | None]:
+    _, _, boundary = build_boundary(primitive, geometry, adapter=external_adapter)
+    return boundary.core, boundary.silhouette
