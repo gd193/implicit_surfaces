@@ -37,7 +37,7 @@ Warp is near cuBQL at k=1 and faster for k≥4 in this medium-size matrix. cudaK
 
 ## Bound caching and larger k
 
-The production default remains `cache_bounds=True`: arbitrary user bounds may be expensive. A separate matched comparison with `cache_bounds=False`, the same block/leaf sizes and all three baselines validates 48 additional 3D cases. Recomputing these inexpensive Euclidean bounds reduces traversal storage and helps moderate k.
+The production default remains `cache_bounds=True`: arbitrary user bounds may be expensive. The historical `cache_bounds=False` comparison used indexed node access and flat scheduling as well as recomputed bounds. These are now separate options: reproduce that combination with `cache_bounds=False, packed_nodes=False, group_leaves=False`. The same block/leaf sizes and all three baselines validate 48 additional 3D cases. Its measured gain cannot be attributed to bound caching alone.
 
 For 16,384 3D points and 32,768 queries, times below are milliseconds; the uncached Warp and reference columns were measured together. Cached Warp is from the separate default run.
 
@@ -76,4 +76,4 @@ CUDA_VISIBLE_DEVICES=0 JAX_PLATFORMS=cuda,cpu python -m scripts.bench.spatial_tr
   --dimensions 2 3 --sizes 16384 --queries 32768 --launches 10 --repeats 9
 ```
 
-Use `--sizes 1024 --queries 1024 --launches 30` for the small matrix; `--sizes 65536 --k 1 16 64` for the larger matrix. Add `--no-cache-bounds --dimensions 3 --k 4 16 64 128` for the separate cache comparison. The fixture seed is 619. Each report records input hashes, software versions, source and binary hashes, settings, GPU UUIDs, raw samples and validation outcomes.
+Use `--sizes 1024 --queries 1024 --launches 30` for the small matrix; `--sizes 65536 --k 1 16 64` for the larger matrix. Add `--no-cache-bounds --node-access indexed --scheduling flat --dimensions 3 --k 4 16 64 128` to reproduce the historical uncached combination. The fixture seed is 619. Each report records input hashes, software versions, source and binary hashes, settings, GPU UUIDs, raw samples and validation outcomes.

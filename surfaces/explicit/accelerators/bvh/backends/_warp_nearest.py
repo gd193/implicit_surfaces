@@ -13,6 +13,12 @@ from ._warp_primitives import _struct
 from ._warp_tree import DeviceTree, STACK_CAPACITY
 
 
+@lru_cache(maxsize=None)
+def _bind_nearest(primitive, metric):
+    """Bind once so default scheduling resolves before kernel-cache lookup."""
+    return metric.bind(primitive)
+
+
 def prepare_nearest(ops, queries, max_distance):
     queries = jnp.asarray(queries, jnp.float32)
     tail = ops.query_shape
@@ -40,7 +46,8 @@ class NearestQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, PointT, Qu
 
 
 def make_nearest(primitive, metric=None, *, evaluate=None, lower_bound=None, predicate=None,
-                 stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True):
+                 stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True,
+                 packed_nodes=True, group_leaves=None):
     """Specialize a fused nearest query using a metric or two static Warp callbacks.
 
     Callback scores and ``max_distance`` caps share units without conversion.
@@ -56,17 +63,21 @@ def make_nearest(primitive, metric=None, *, evaluate=None, lower_bound=None, pre
         if evaluate is None or lower_bound is None:
             raise TypeError("make_nearest requires a metric or both evaluate and lower_bound callbacks")
         metric = NearestCallbacks(evaluate, lower_bound)
+    if group_leaves is None:
+        group_leaves = _bind_nearest(primitive, metric).group_leaves
     return _make_nearest(primitive, metric, predicate=predicate,
                          stack_capacity=stack_capacity, block_dim=block_dim,
-                         cache_bounds=cache_bounds)
+                         cache_bounds=cache_bounds, packed_nodes=packed_nodes,
+                         group_leaves=group_leaves)
 
 
 @lru_cache(maxsize=None)
 def _make_nearest(primitive, metric, *, predicate=None,
-                  stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True):
+                  stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True,
+                  packed_nodes=True, group_leaves=False):
     if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
         raise ValueError("invalid stack capacity or block dimension")
-    ops = metric.bind(primitive)
+    ops = _bind_nearest(primitive, metric)
     accepts = predicate.bind(primitive, ops) if hasattr(predicate, "bind") else predicate
     Query, Point, Geometry = ops.query_type, primitive.point_type, primitive.data_type
     Context = _struct("NearestContext", {"query": Query, "geometry": Geometry, "initial": wp.float32})
@@ -117,8 +128,8 @@ def _make_nearest(primitive, metric, *, predicate=None,
         return wp.static(ops.node_bound)(ctx.query, lower, upper)
 
     walk = make_walk(Context, State, bounds, visit, stack_capacity=stack_capacity,
-                     packed_nodes=cache_bounds, resume=None if cache_bounds else resume,
-                     group_leaves=cache_bounds and getattr(ops, "group_leaves", False))
+                     packed_nodes=packed_nodes, resume=None if cache_bounds else resume,
+                     group_leaves=group_leaves)
 
     @wp.func
     def nearest(query: Query, cap: float, tree: DeviceTree, geometry: Geometry):

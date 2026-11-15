@@ -4,7 +4,7 @@ import jax
 import warp as wp
 from surfaces.explicit.accelerators.bvh.warp import (
     Euclidean, NearestCallbacks, NearestPolicy, Points, PrimitiveSpec,
-    make_knn, warp_func,
+    make_knn, make_nearest, warp_func,
 )
 from tests.typing.warp_api.real_extension import (
     ExternalArrays, ExternalData, ExternalItem, ExternalPoints,
@@ -26,3 +26,5 @@ def extension(primitive: PrimitiveSpec[ExternalArrays, ExternalData, ExternalIte
 
 make_knn(ExternalPoints(), 3, NearestCallbacks(external_evaluate, external_bound))
 make_knn(Points(3), 3, Euclidean())
+make_knn(Points(3), 3, Euclidean(), cache_bounds=False, packed_nodes=True, group_leaves=False)
+make_nearest(Points(3), Euclidean(), cache_bounds=True, packed_nodes=False, group_leaves=True)
