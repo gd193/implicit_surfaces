@@ -693,7 +693,7 @@ optional capability is present.
 
 `make_knn(primitive, k, metric=None, *, evaluate=None, lower_bound=None,
 stack_capacity=64, block_dim=64, cache_bounds=True, packed_nodes=True,
-group_leaves=None, predicate=None)` specializes
+group_leaves=None, predicate=None, return_points=False)` specializes
 one fused traversal kernel for a positive static **Python integer** `k` (booleans
 are rejected). Construct the factory outside JIT. `k` can exceed the number of
 primitives; each primitive contributes at most one candidate.
@@ -728,8 +728,34 @@ Euclidean metric. `NearestPolicy` and `NearestCallbacks` are exactly the policie
 used by `make_nearest`. Explicit metrics apply their `to_score` cap conversion
 and `to_distance` result conversion. Callback shorthand uses raw score units for
 both outputs and caps. For example, a squared-distance callback needs cap 9 to
-include separation 3. The evaluator returns `(point, score)` for each primitive;
-kNN ignores the point and ranks the score. A predicate can reject candidates.
+include separation 3. The evaluator returns `(point, score)` for each primitive.
+By default, kNN ignores the point and ranks the score. A predicate can reject candidates.
+
+Set the static factory option `return_points=True` to replace IDs with each
+neighbor's closest-point coordinates:
+
+```python
+knn_points = jax.jit(make_knn(primitive, 4, Euclidean(), return_points=True))
+distances, points, count, status = knn_points(tree, geometry, jnp.array([[1., 0.]]), max_distance=1.)
+# points = [[[0., 0.], [2., 0.], [0., 0.], [0., 0.]]]
+# count = [2]; the last two points are padding.
+```
+
+The coordinate array has shape `batch + (k, primitive.dimension)`; other outputs
+are unchanged. Coordinates come from the evaluator, so segments, triangles and
+custom primitives return their projected closest points rather than primitive
+centers. Ordering still uses score and original primitive ID, including ties.
+Missing entries contain zero coordinates; use `count` and `status` to distinguish
+padding from a valid point at the origin. A nonfinite selected coordinate fails
+and clears the whole row to infinity scores, zero coordinates, count 0 and
+status -1.
+
+Point output retains one extra int32 packed primitive slot per candidate, then
+reevaluates the selected primitives inside the same fused kernel. Callbacks must
+be deterministic and free of side effects: the evaluator runs again for each
+returned neighbor. This avoids moving coordinate vectors through candidate
+insertion and sorting, at the cost of up to `k` extra evaluator calls and larger
+output arrays. The default ID output has no slot storage or reevaluation.
 
 For example, reuse the `weighted_callbacks` functions defined above with either
 factory; changing the callbacks creates a new compiled specialization:

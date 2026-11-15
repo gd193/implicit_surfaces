@@ -212,7 +212,8 @@ def test_euclidean_numerical_overflow_matches_nearest_validity():
         np.testing.assert_array_equal(result[1], -1)
 
 
-def test_custom_scalar_query_policy():
+@pytest.mark.parametrize("return_points", [False, True])
+def test_custom_scalar_query_policy(return_points):
     from dataclasses import dataclass, replace
 
     @dataclass(frozen=True)
@@ -243,7 +244,11 @@ def test_custom_scalar_query_policy():
     primitive = Points()
     points = np.array([[4., 0, 0], [0, 0, 0], [-1, 0, 0]], np.float32)
     tree, data = build_tree(primitive, primitive.data(points))
-    query = make_knn(primitive, 4, AxisPolicy())
+    query = make_knn(primitive, 4, AxisPolicy(), return_points=return_points)
     queries = np.array([[0., 1., 3.], [-1., -2., 5.]], np.float32)
     scores = np.abs(queries[..., None]-points[:, 0])
-    assert_result(jax.jit(query)(tree, data, queries), reference(scores, 4))
+    expected = reference(scores, 4)
+    if return_points:
+        coordinates = np.where((expected[1] >= 0)[..., None], points[np.maximum(expected[1], 0)], 0.)
+        expected = (expected[0], coordinates, *expected[2:])
+    assert_result(jax.jit(query)(tree, data, queries), expected)
