@@ -1,8 +1,7 @@
 """Static primitive specifications and array payloads."""
-from collections import namedtuple
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Callable, Generic, Literal, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, cast, overload
 
 from ._warp_types import PrimitiveSpec as PrimitiveSpec, WarpFunction, WarpType, as_warp_function
 
@@ -14,10 +13,18 @@ import warp as wp
 from ._warp_builtin_items import (
     PointItem2, PointItem3, SegmentItem2, SegmentItem3, TriangleItem3, SilhouetteItem3,
 )
+from ._warp_builtin_data import (
+    PointsArrays2, PointsArrays3, PointsData2, PointsData3,
+    SegmentsArrays2, SegmentsArrays3, SegmentsData2, SegmentsData3,
+    TrianglesArrays3, TrianglesData3, SilhouetteEdgesArrays3, SilhouetteEdgesData3,
+)
 
 from ._warp_traversal import load_array
 
-from ._warp_domain import Ray
+from ._warp_domain import Ray, RayOps
+
+if TYPE_CHECKING:
+    from ._warp_boundary import BoundaryAdapter
 
 
 HostDataT = TypeVar("HostDataT")
@@ -46,7 +53,7 @@ class Primitive(Generic[HostDataT, DeviceDataT, ItemT, PointT]):
     host_pack: Callable[[HostDataT, np.ndarray | jax.Array], HostDataT]
     item_type: WarpType[ItemT] | None = None
     closest_euclidean: WarpFunction[[PointT, ItemT], PointT] | None = None
-    intersect: WarpFunction[[Any, float, float, DeviceDataT, int, bool, bool], wp.vec2] | None = None
+    intersect: WarpFunction[[Ray, float, float, DeviceDataT, int, bool, bool], wp.vec2] | None = None
     segment_endpoints: WarpFunction[[ItemT], tuple[PointT, PointT]] | None = None
     normal_sides: WarpFunction[[ItemT], tuple[PointT, wp.vec3, wp.vec3]] | None = None
     point_bounds: bool = False
@@ -54,7 +61,8 @@ class Primitive(Generic[HostDataT, DeviceDataT, ItemT, PointT]):
     payload_type: Any = None
     prepare_data: Callable[..., HostDataT] | None = None
     prepare_indexed: Callable[[Any, Any], HostDataT] | None = None
-    boundary_adapter: Any = None
+    boundary_adapter: "BoundaryAdapter[HostDataT, DeviceDataT, ItemT, PointT, Any, Any, Any, Any, Any] | None" = None
+    ray_ops: "RayOps[DeviceDataT, Any] | None" = None
 
     def data(self, *arrays: Any) -> HostDataT:
         if self.prepare_data is None:
@@ -139,16 +147,18 @@ def _primitive(kind, dimension):
     Vec = wp.vec2 if dimension == 2 else wp.vec3
     fields = {"points": ("a",), "segments": ("a", "b"), "triangles": ("a", "e1", "e2"),
               "silhouette_edges": ("a", "b", "n0", "n1")}[kind]
-    data_fields = {name: wp.array(dtype=Vec) for name in fields}
-    if kind in ("triangles", "segments"):
-        index_type = wp.vec3i if kind == "triangles" else wp.vec2i
-        data_fields.update(vertices=wp.array(dtype=Vec), indices=wp.array(dtype=index_type))
-    Data = _struct(f"{kind.title()}Data{dimension}", data_fields)
+    Data, Payload = {
+        ("points", 2): (PointsData2, PointsArrays2),
+        ("points", 3): (PointsData3, PointsArrays3),
+        ("segments", 2): (SegmentsData2, SegmentsArrays2),
+        ("segments", 3): (SegmentsData3, SegmentsArrays3),
+        ("triangles", 3): (TrianglesData3, TrianglesArrays3),
+        ("silhouette_edges", 3): (SilhouetteEdgesData3, SilhouetteEdgesArrays3),
+    }[kind, dimension]
     Item = {("points", 2): PointItem2, ("points", 3): PointItem3,
             ("segments", 2): SegmentItem2, ("segments", 3): SegmentItem3,
             ("triangles", 3): TriangleItem3,
             ("silhouette_edges", 3): SilhouetteItem3}[kind, dimension]
-    Payload = namedtuple(f"{kind.title()}Arrays{dimension}", data_fields)
 
     @wp.func
     def to_vec3(v: Vec):
@@ -262,9 +272,9 @@ def _primitive(kind, dimension):
 
 
 @overload
-def Points(dimension: Literal[2]) -> Primitive[Any, Any, PointItem2, wp.vec2]: ...
+def Points(dimension: Literal[2]) -> Primitive[PointsArrays2, PointsData2, PointItem2, wp.vec2]: ...
 @overload
-def Points(dimension: Literal[3] = 3) -> Primitive[Any, Any, PointItem3, wp.vec3]: ...
+def Points(dimension: Literal[3] = 3) -> Primitive[PointsArrays3, PointsData3, PointItem3, wp.vec3]: ...
 @overload
 def Points(dimension: int) -> Primitive[Any, Any, Any, Any]: ...
 def Points(dimension=3) -> Primitive[Any, Any, Any, Any]:
@@ -272,18 +282,18 @@ def Points(dimension=3) -> Primitive[Any, Any, Any, Any]:
 
 
 @overload
-def Segments(dimension: Literal[2]) -> Primitive[Any, Any, SegmentItem2, wp.vec2]: ...
+def Segments(dimension: Literal[2]) -> Primitive[SegmentsArrays2, SegmentsData2, SegmentItem2, wp.vec2]: ...
 @overload
-def Segments(dimension: Literal[3] = 3) -> Primitive[Any, Any, SegmentItem3, wp.vec3]: ...
+def Segments(dimension: Literal[3] = 3) -> Primitive[SegmentsArrays3, SegmentsData3, SegmentItem3, wp.vec3]: ...
 @overload
 def Segments(dimension: int) -> Primitive[Any, Any, Any, Any]: ...
 def Segments(dimension=3) -> Primitive[Any, Any, Any, Any]:
     return _primitive("segments", dimension)
 
 
-def Triangles() -> Primitive[Any, Any, TriangleItem3, wp.vec3]:
-    return cast(Primitive[Any, Any, TriangleItem3, wp.vec3], _primitive("triangles", 3))
+def Triangles() -> Primitive[TrianglesArrays3, TrianglesData3, TriangleItem3, wp.vec3]:
+    return cast(Primitive[TrianglesArrays3, TrianglesData3, TriangleItem3, wp.vec3], _primitive("triangles", 3))
 
 
-def SilhouetteEdges() -> Primitive[Any, Any, SilhouetteItem3, wp.vec3]:
-    return cast(Primitive[Any, Any, SilhouetteItem3, wp.vec3], _primitive("silhouette_edges", 3))
+def SilhouetteEdges() -> Primitive[SilhouetteEdgesArrays3, SilhouetteEdgesData3, SilhouetteItem3, wp.vec3]:
+    return cast(Primitive[SilhouetteEdgesArrays3, SilhouetteEdgesData3, SilhouetteItem3, wp.vec3], _primitive("silhouette_edges", 3))

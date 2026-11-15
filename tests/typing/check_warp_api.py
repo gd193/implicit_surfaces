@@ -31,23 +31,27 @@ def main():
     executable = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PYRIGHT", "pyright")
     valid = run(executable)
     assert not valid, json.dumps(valid, indent=2)
-    negative = FIXTURES / "invalid.py"
-    expected = collections.Counter(
-        (index, match.group(1))
-        for index, line in enumerate(negative.read_text().splitlines())
-        if (match := re.search(r"# expect: (\w+)", line))
-    )
-    diagnostics = run(executable, negative)
-    actual = collections.Counter(
-        (entry["range"]["start"]["line"], entry.get("rule"))
-        for entry in diagnostics if Path(entry["file"]) == negative
-    )
-    unexpected_files = [entry for entry in diagnostics if Path(entry["file"]) != negative]
-    assert not unexpected_files, json.dumps(unexpected_files, indent=2)
-    assert actual == expected, json.dumps({"expected": list(expected.elements()),
-                                           "actual": list(actual.elements()),
-                                           "diagnostics": diagnostics}, indent=2)
-    print(f"Strict valid contract: 0 diagnostics; negative contract: {sum(expected.values())} expected diagnostics")
+    total = 0
+    for negative in sorted(FIXTURES.glob("invalid*.py")):
+        expected = collections.Counter(
+            (index, match.group(1))
+            for index, line in enumerate(negative.read_text().splitlines())
+            for match in re.finditer(r"# expect: (\w+)", line)
+        )
+        assert expected, f"No expected diagnostics in {negative}"
+        diagnostics = run(executable, negative)
+        actual = collections.Counter(
+            (entry["range"]["start"]["line"], entry.get("rule"))
+            for entry in diagnostics if Path(entry["file"]) == negative
+        )
+        unexpected_files = [entry for entry in diagnostics if Path(entry["file"]) != negative]
+        assert not unexpected_files, json.dumps(unexpected_files, indent=2)
+        assert actual == expected, json.dumps({"fixture": negative.name,
+                                               "expected": list(expected.elements()),
+                                               "actual": list(actual.elements()),
+                                               "diagnostics": diagnostics}, indent=2)
+        total += sum(expected.values())
+    print(f"Strict valid contract: 0 diagnostics; negative contracts: {total} expected diagnostics")
 
 
 if __name__ == "__main__":

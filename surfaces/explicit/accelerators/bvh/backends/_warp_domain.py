@@ -1,11 +1,13 @@
 """Static crossing and classification operations."""
 from dataclasses import dataclass
-from typing import Any
+from typing import Generic, TypeVar, cast
+
+from ._warp_types import WarpFunction, WarpType, warp_func, warp_struct
 
 import warp as wp
 
 
-@wp.struct
+@warp_struct
 class Ray:
     origin: wp.vec3
     direction: wp.vec3
@@ -17,8 +19,8 @@ class Ray:
     shear: wp.vec2
 
 
-@wp.func
-def prepare_ray(origin: wp.vec3, direction: wp.vec3, dimension: int):
+@warp_func
+def prepare_ray(origin: wp.vec3, direction: wp.vec3, dimension: int) -> Ray:
     ray = Ray()
     ray.origin = origin
     ray.direction = direction
@@ -41,20 +43,26 @@ def prepare_ray(origin: wp.vec3, direction: wp.vec3, dimension: int):
     return ray
 
 
+DeviceDataT = TypeVar("DeviceDataT")
+StateT = TypeVar("StateT")
+PointT = TypeVar("PointT")
+MetaT = TypeVar("MetaT")
+
+
 @dataclass(frozen=True)
-class RayOps:
+class RayOps(Generic[DeviceDataT, StateT]):
     """Single hit or next_hit -> (state, t, flag): 1 hit, 0 done, -1 failure."""
-    intersect: Any = None
-    state_type: Any = wp.int32
-    next_hit: Any = None
+    intersect: WarpFunction[[Ray, float, float, DeviceDataT, int, bool, bool], wp.vec2] | None = None
+    state_type: WarpType[StateT] = cast(WarpType[StateT], wp.int32)
+    next_hit: WarpFunction[[Ray, float, float, DeviceDataT, int, StateT, bool, bool], tuple[StateT, float, int]] | None = None
 
 
 @dataclass(frozen=True)
-class ClassificationOps:
+class ClassificationOps(Generic[PointT, DeviceDataT, MetaT]):
     """event(point, data, slot, id, meta): 0 miss, 1 parity, 2 contact, -1 failure."""
-    metadata_type: Any
-    valid: Any
-    event: Any
+    metadata_type: WarpType[MetaT]
+    valid: WarpFunction[[MetaT], bool]
+    event: WarpFunction[[PointT, DeviceDataT, int, int, MetaT], int]
 
 
 def builtin_classification(primitive, metadata_type):

@@ -1,5 +1,6 @@
 """Primitive-AABB overlap queries."""
 from functools import lru_cache
+from typing import Generic, TypeVar
 
 import warp as wp
 
@@ -11,7 +12,10 @@ from ._warp_traversal import make_walk
 from ._warp_tree import DeviceTree, STACK_CAPACITY
 
 
-class OverlapQuery(BoundQuery):
+HostDataT = TypeVar("HostDataT")
+
+
+class OverlapQuery(BoundQuery, Generic[HostDataT]):
     def __call__(self, tree, geometry, lower, upper):
         lower, shape = _flatten_vec_queries(lower, self.primitive.dimension)
         upper, upper_shape = _flatten_vec_queries(upper, self.primitive.dimension)

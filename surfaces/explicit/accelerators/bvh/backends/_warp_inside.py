@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Generic, TypeVar
 
 import warp as wp
 
@@ -12,8 +13,16 @@ from ._warp_traversal import load_array, make_walk
 from ._warp_tree import DeviceTree, STACK_CAPACITY
 
 
+HostDataT = TypeVar("HostDataT")
+DeviceDataT = TypeVar("DeviceDataT")
+ItemT = TypeVar("ItemT")
+PointT = TypeVar("PointT")
+MetaT = TypeVar("MetaT")
+HostMetaT = TypeVar("HostMetaT")
+
+
 @dataclass(frozen=True)
-class ClassifyQuery(BoundQuery):
+class ClassifyQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, PointT, HostMetaT, MetaT]):
     policy: object
 
     def __call__(self, tree, geometry, boundary, points):
@@ -21,8 +30,15 @@ class ClassifyQuery(BoundQuery):
         return self.launch(tree, geometry, shape, queries, metadata=(getattr(boundary, "core", boundary),))
 
 
+def make_classify(primitive, policy=None, *, adapter=None, metadata_host_type=None, stack_capacity=STACK_CAPACITY, block_dim=128):
+    # metadata_host_type records the host array schema for static callers;
+    # device metadata is still materialized directly from policy.metadata_type.
+    return _make_classify(primitive, policy, adapter=adapter,
+                          stack_capacity=stack_capacity, block_dim=block_dim)
+
+
 @lru_cache(maxsize=None)
-def make_classify(primitive, policy=None, *, adapter=None, stack_capacity=STACK_CAPACITY, block_dim=128):
+def _make_classify(primitive, policy=None, *, adapter=None, stack_capacity=STACK_CAPACITY, block_dim=128):
     if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
         raise ValueError("invalid stack capacity or block dimension")
     if policy is None:

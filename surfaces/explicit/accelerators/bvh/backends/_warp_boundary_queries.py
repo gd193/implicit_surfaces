@@ -1,13 +1,14 @@
 """Static boundary sampling and Robin radius policies."""
-from collections import namedtuple
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Generic, NamedTuple, Protocol, TypeVar
 
+from jax.typing import ArrayLike
 import jax.numpy as jnp
 import numpy as np
 import warp as wp
 
+from ._warp_types import warp_struct
 from ._warp_factory import BoundQuery, bind_query
 from ._warp_metrics import Euclidean
 from ._warp_nearest import prepare_nearest
@@ -17,32 +18,55 @@ from ._warp_primitives import _struct
 from ._warp_tree import DeviceTree, STACK_CAPACITY
 
 
-@wp.struct
+@warp_struct
 class SamplingMeta:
     primitive_weight: wp.array(dtype=wp.float32)
     node_weight: wp.array(dtype=wp.float32)
 
 
-@wp.struct
+@warp_struct
 class CoefficientMeta:
     primitive_bounds: wp.array(dtype=wp.vec2)
     node_bounds: wp.array(dtype=wp.vec2)
 
 
-SamplingData = namedtuple("SamplingData", SamplingMeta.vars)
-CoefficientData = namedtuple("CoefficientData", CoefficientMeta.vars)
-RobinData = namedtuple("RobinData", "core silhouette coefficients")
+H = TypeVar("H")
+ItemT = TypeVar("ItemT")
+P = TypeVar("P")
+PointContra = TypeVar("PointContra", contravariant=True)
+CH = TypeVar("CH")
+Q = TypeVar("Q")
+D = TypeVar("D")
+CD = TypeVar("CD")
+FH = TypeVar("FH")
+FD = TypeVar("FD")
+
+
+class SamplingData(NamedTuple):
+    primitive_weight: ArrayLike
+    node_weight: ArrayLike
+
+
+class CoefficientData(NamedTuple):
+    primitive_bounds: ArrayLike
+    node_bounds: ArrayLike
+
+
+class RobinData(NamedTuple, Generic[CH, FH]):
+    core: CH
+    silhouette: FH
+    coefficients: CoefficientData
 
 
 @dataclass(frozen=True)
-class MeasureOps:
+class MeasureOps(Generic[ItemT, P, CH]):
     """sample(item, uniforms2) returns point, normal and conditional density."""
     sample: Any
     weights: Any = None
 
 
 @dataclass(frozen=True)
-class RegionOps:
+class RegionOps(Generic[Q, P]):
     """overlaps is conservative; contains tests the sampled point itself."""
     query_type: Any
     query_shape: tuple
@@ -52,7 +76,7 @@ class RegionOps:
 
 
 @dataclass(frozen=True)
-class RobinOps:
+class RobinOps(Generic[Q, D, ItemT, CD, FD]):
     """Node bounds include features; node_visit returns (score, limit, skip_features, accepted). Scores default to radii."""
     query_type: Any
     query_shape: tuple
@@ -68,6 +92,18 @@ class RobinOps:
     to_distance: Any = None
     leaf_bound_with_data: Any = None
     node_visit: Any = None
+
+
+class RobinPolicy(Protocol[D, ItemT, P, Q, CD, FD]):
+    """Static Robin policy binding, shared by external and builtin callers."""
+
+    def bind(self, primitive, metric): ...
+
+
+class RobinMetric(Protocol[D, ItemT, PointContra, Q, CD, FD]):
+    """Optional static metric capability for conservative Robin policies."""
+
+    def bind_robin(self, primitive): ...
 
 
 def _reduce_nodes(tree, primitive, combine):
@@ -158,14 +194,20 @@ def _ball_region(primitive):
 
 
 def _boundary_dimension(primitive):
-    from ._warp_primitives import Primitive, Segments, Triangles
+    return primitive.dimension
 
-    if type(primitive) is Primitive:
-        if primitive == Segments(2):
-            return 2
-        if primitive == Triangles():
-            return 3
-    raise TypeError("this primitive requires explicit boundary query policies")
+
+def _adapter_policy(primitive, name):
+    from ._warp_boundary import resolve_boundary_adapter
+    policy = getattr(resolve_boundary_adapter(primitive), name)
+    if policy is None:
+        raise TypeError(f"boundary adapter requires an explicit {name} policy")
+    return policy(primitive)
+
+
+def _check_functions(*functions):
+    if any(function is not None and not isinstance(function, wp.Function) for function in functions):
+        raise TypeError("boundary device callbacks must be decorated Warp Functions")
 
 
 @lru_cache(maxsize=None)
@@ -191,7 +233,7 @@ def _uniform_measure(primitive):
 
 
 @dataclass(frozen=True)
-class BoundarySampleQuery(BoundQuery):
+class BoundarySampleQuery(BoundQuery, Generic[H, D, ItemT, P, Q]):
     region: object
 
     def __call__(self, tree, geometry, metadata, queries, radii, randoms):
@@ -207,8 +249,9 @@ class BoundarySampleQuery(BoundQuery):
 def make_boundary_sample(primitive, measure=None, region=None, *, block_dim=256):
     if not 1 <= block_dim <= 1024:
         raise ValueError("invalid block dimension")
-    measure = _uniform_measure(primitive) if measure is None else measure
+    measure = _adapter_policy(primitive, "measure") if measure is None else measure
     region = _ball_region(primitive) if region is None else region
+    _check_functions(measure.sample, region.valid, region.overlaps, region.contains)
     Vec, Query, Geometry = primitive.point_type, region.query_type, primitive.data_type
 
     @wp.func
@@ -392,7 +435,7 @@ def _euclidean_robin(primitive):
 
 
 @dataclass(frozen=True)
-class RobinQuery(BoundQuery):
+class RobinQuery(BoundQuery, Generic[H, D, ItemT, Q, CH, CD, FH, FD]):
     ops: object
 
     def __call__(self, tree, geometry, metadata, queries, cap=jnp.inf):
@@ -401,16 +444,27 @@ class RobinQuery(BoundQuery):
                            metadata=(metadata.core, metadata.silhouette, metadata.coefficients))
 
 
+def make_robin_radius(primitive, policy=None, metric=None, *, core_host_type=None,
+                      feature_host_type=None, stack_capacity=STACK_CAPACITY, block_dim=64):
+    # Static host schema markers do not create extra device specializations.
+    return _make_robin_radius(primitive, policy, metric,
+                             stack_capacity=stack_capacity, block_dim=block_dim)
+
+
 @lru_cache(maxsize=None)
-def make_robin_radius(primitive, policy=None, metric=None, *, stack_capacity=STACK_CAPACITY, block_dim=64):
+def _make_robin_radius(primitive, policy=None, metric=None, *, stack_capacity=STACK_CAPACITY, block_dim=64):
     from ._warp_boundary import BoundaryCore, SilhouetteMeta
 
     if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
         raise ValueError("invalid stack capacity or block dimension")
     metric = Euclidean() if metric is None else metric
-    if policy is None and type(metric) is not Euclidean:
-        raise TypeError("this metric requires explicit conservative RobinOps")
-    ops = _euclidean_robin(primitive) if policy is None else policy
+    if policy is None:
+        bind_robin = getattr(metric, "bind_robin", None)
+        if bind_robin is None:
+            raise TypeError("this metric requires explicit conservative RobinOps or bind_robin")
+        ops = bind_robin(primitive)
+    else:
+        ops = policy
     if hasattr(ops, "bind"):
         ops = ops.bind(primitive, metric)
     required = (ops.valid, ops.leaf_bound_with_data or ops.primitive_bound,
@@ -418,6 +472,9 @@ def make_robin_radius(primitive, policy=None, metric=None, *, stack_capacity=STA
                 ops.feature_bound_with_data or ops.feature_bound)
     if not all(callable(operation) for operation in required):
         raise TypeError("RobinOps requires validity, primitive, node and feature callbacks")
+    _check_functions(ops.valid, ops.node_bound, ops.primitive_bound, ops.feature_bound,
+                     ops.node_bound_with_data, ops.feature_bound_with_data, ops.to_score,
+                     ops.to_distance, ops.leaf_bound_with_data, ops.node_visit)
     if (ops.to_score is None) != (ops.to_distance is None):
         raise TypeError("RobinOps score conversions must be supplied together")
     Core, Feature = ops.core_type or BoundaryCore, ops.feature_type or SilhouetteMeta

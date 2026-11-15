@@ -1,11 +1,15 @@
 """Static nearest-query policies; bounds and minimizers share score units."""
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Generic, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
 
 from ._warp_types import PrimitiveSpec, WarpFunction, WarpType
 
 import warp as wp
+
+if TYPE_CHECKING:
+    from ._warp_boundary import BoundaryCore, SilhouetteMeta
+    from ._warp_boundary_queries import RobinOps
 
 
 QueryT = TypeVar("QueryT")
@@ -25,10 +29,10 @@ class NearestOps(Generic[QueryT, ItemT, PointT]):
     to_score: WarpFunction[[float], float]
     to_distance: WarpFunction[[float], float]
     cull_limit: WarpFunction[[QueryT, float], float]
-    node_bound_with_data: Any = None
-    viewpoint: Any = None
+    node_bound_with_data: WarpFunction[..., float] | None = None
+    viewpoint: WarpFunction[[QueryT], wp.vec3] | None = None
     cull_items: bool = True
-    node_filter: Any = None
+    node_filter: WarpFunction[..., bool] | None = None
     group_leaves: bool = False
 
 
@@ -85,6 +89,12 @@ class NearestCallbacks(Generic[ItemT, PointT]):
 
 @dataclass(frozen=True)
 class Euclidean:
+    def bind_robin(self, primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]
+                   ) -> "RobinOps[PointT, DeviceDataT, ItemT, BoundaryCore, SilhouetteMeta]":
+        """Select the primitive's conservative Euclidean Robin capability."""
+        from ._warp_boundary_queries import _adapter_policy
+        return _adapter_policy(primitive, "robin")
+
     @lru_cache(maxsize=None)
     def bind(self, primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]) -> NearestOps[PointT, ItemT, PointT]:
         closest_primitive = getattr(primitive, "closest_euclidean", None)

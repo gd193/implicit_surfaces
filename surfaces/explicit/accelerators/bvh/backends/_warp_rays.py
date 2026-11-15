@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from functools import lru_cache
 from operator import index
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 import jax.numpy as jnp
 import warp as wp
@@ -15,8 +15,15 @@ from ._warp_traversal import load_array, store_array, make_walk
 from ._warp_tree import DeviceTree, STACK_CAPACITY
 
 
+HostDataT = TypeVar("HostDataT")
+DeviceDataT = TypeVar("DeviceDataT")
+ItemT = TypeVar("ItemT")
+PointT = TypeVar("PointT")
+ModeT = TypeVar("ModeT", bound=str)
+
+
 @dataclass(frozen=True)
-class RayQuery(BoundQuery):
+class RayQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, PointT, ModeT]):
     mode: str
     exclusion: bool
 
