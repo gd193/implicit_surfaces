@@ -22,7 +22,11 @@ def extension(primitive: PrimitiveSpec[ExternalArrays, ExternalData, ExternalIte
     policy: NearestPolicy[ExternalData, ExternalItem, wp.vec3, wp.vec3] = callbacks
     query = make_knn(primitive, 3, policy, predicate=accepts)
     assert_type(query(tree, data, queries), tuple[jax.Array, jax.Array, jax.Array, jax.Array])
+    points_query = make_knn(primitive, 3, policy, predicate=accepts, return_points=True)
+    assert_type(points_query.return_points, bool)
+    assert_type(points_query(tree, data, queries), tuple[jax.Array, jax.Array, jax.Array, jax.Array])
     make_knn(primitive, 3, evaluate=external_evaluate, lower_bound=external_bound, predicate=accepts)
+    make_knn(primitive, 3, evaluate=external_evaluate, lower_bound=external_bound, return_points=True)
 
 make_knn(ExternalPoints(), 3, NearestCallbacks(external_evaluate, external_bound))
 make_knn(Points(3), 3, Euclidean())
