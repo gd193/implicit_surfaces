@@ -1,7 +1,7 @@
 """Factory specialization against independent geometry and metric oracles."""
 from collections import namedtuple
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -510,3 +510,231 @@ def test_warp_factory_scalar_query_type():
     nearest = jax.jit(make_nearest(primitive, AxisQuery()))
     np.testing.assert_array_equal(nearest(tree, geometry, jnp.array([[0., 1., 2.]]))[2], [[0, 0, 1]])
     np.testing.assert_array_equal(nearest(tree, geometry, jnp.float32(3))[1], 1)
+
+
+# Nearest callback API: raw scores and independent brute-force references.
+def weighted_callbacks(dimension, weights):
+    Vec = wp.vec2 if dimension == 2 else wp.vec3
+    weights = Vec(*weights)
+
+    @wp.func(module="unique")
+    def evaluate(q: Vec, item: Any):
+        d = q-item.a
+        score = float(0.0)
+        for axis in range(wp.static(dimension)):
+            score += d[axis]*d[axis]*wp.static(weights)[axis]
+        return item.a, score
+
+    @wp.func(module="unique")
+    def lower_bound(q: Vec, lo: wp.vec3, hi: wp.vec3):
+        score = float(0.0)
+        for axis in range(wp.static(dimension)):
+            d = wp.max(wp.max(lo[axis]-q[axis], 0.0), q[axis]-hi[axis])
+            score += d*d*wp.static(weights)[axis]
+        return score
+
+    return evaluate, lower_bound
+
+
+@pytest.mark.parametrize("dimension", [2, 3])
+@pytest.mark.parametrize("cache_bounds", [False, True])
+def test_weighted_callbacks_pruning_and_nested_vmap(dimension, cache_bounds):
+    primitive = Points(dimension)
+    weights = np.array([.01, 16., .5][:dimension], np.float32)
+    rng = np.random.default_rng(2026)
+    points = rng.uniform(-15, 15, (97, dimension)).astype(np.float32)
+    # Euclidean prefers the first point; weighted score prefers the second.
+    # The second point's Euclidean box bound exceeds its weighted score.
+    points[:2] = np.array([[0., 1., 0.], [5., 0., 0.]], np.float32)[:, :dimension]
+    queries = rng.normal(size=(2, 7, dimension)).astype(np.float32)
+    queries[0, 0] = 0
+    scores = np.sum((queries[..., None, :]-points)**2*weights, axis=-1)
+    expected = scores.argmin(axis=-1)
+    euclidean = np.sum((queries[0, 0]-points)**2, axis=-1).argmin()
+    assert expected[0, 0] != euclidean
+    tree, data = build_tree(primitive, primitive.data(points), Config(leaf_size_threshold=1))
+    assert len(tree.node_left) > 3
+    evaluate, bound = weighted_callbacks(dimension, tuple(float(w) for w in weights))
+    nearest = make_nearest(primitive, evaluate=evaluate, lower_bound=bound, cache_bounds=cache_bounds)
+    run = jax.jit(jax.vmap(jax.vmap(nearest, in_axes=(None, None, 0)), in_axes=(None, None, 0)))
+    point, score, ids, status = run(tree, data, queries)
+    np.testing.assert_array_equal(ids, expected)
+    np.testing.assert_allclose(score, scores.min(axis=-1), rtol=3e-6)
+    np.testing.assert_allclose(point, points[expected])
+    np.testing.assert_array_equal(status, 1)
+
+
+def test_callback_raw_cap_closed_boundary_ties_and_invalid():
+    primitive = Points(2)
+    evaluate, bound = weighted_callbacks(2, (1., 4.))
+    nearest = make_nearest(primitive, evaluate=evaluate, lower_bound=bound)
+    tree, data = build_tree(primitive, primitive.data([[0., 1.], [0., -1.]]), Config(leaf_size_threshold=1))
+    queries = np.zeros((8, 2), np.float32)
+    queries[-1, 0] = np.nan
+    caps = np.array([0., 2., np.nextafter(np.float32(4), np.float32(0)), 4., np.inf, -1., np.nan, 4.], np.float32)
+    point, score, ids, status = jax.jit(nearest)(tree, data, queries, caps)
+    np.testing.assert_array_equal(status, [0, 0, 0, 1, 1, -1, -1, -1])
+    np.testing.assert_array_equal(ids, [-1, -1, -1, 0, 0, -1, -1, -1])
+    np.testing.assert_array_equal(score[3:5], 4.)
+    assert np.isposinf(np.asarray(score)[[0, 1, 2, 5, 6, 7]]).all()
+    np.testing.assert_array_equal(point[3:5], [[0., 1.], [0., 1.]])
+    empty_tree, empty = build_tree(primitive, primitive.data(np.empty((0, 2))))
+    result = nearest(empty_tree, empty, jnp.zeros(2))
+    assert int(result[2]) == -1 and int(result[3]) == 0 and np.isposinf(result[1])
+    assert nearest(tree, data, jnp.empty((2, 0, 2)))[0].shape == (2, 0, 2)
+    with pytest.raises(ValueError, match="trailing shape"):
+        nearest(tree, data, jnp.zeros(3))
+
+
+def test_callback_specialization_identity_and_separation():
+    primitive = Points(2)
+    evaluate, bound = weighted_callbacks(2, (.01, 16.))
+    other_evaluate, other_bound = weighted_callbacks(2, (16., .01))
+    first = make_nearest(primitive, evaluate=evaluate, lower_bound=bound)
+    assert first.kernel is make_nearest(primitive, evaluate=evaluate, lower_bound=bound).kernel
+    variants = [make_nearest(primitive, evaluate=e, lower_bound=b) for e, b in
+                [(other_evaluate, bound), (evaluate, other_bound), (other_evaluate, other_bound)]]
+    assert all(v.kernel is not first.kernel for v in variants)
+    assert first.kernel is not make_nearest(primitive, Euclidean()).kernel
+    tree, data = build_tree(primitive, primitive.data([[0., 1.], [5., 0.]]))
+    for query, expected in [(first, 1), (variants[-1], 0), (first, 1)]:
+        assert int(jax.jit(query)(tree, data, jnp.zeros(2))[2]) == expected
+
+
+def test_callback_argument_errors():
+    evaluate, bound = weighted_callbacks(2, (1., 1.))
+    for kwargs in ({}, {"evaluate": evaluate}, {"lower_bound": bound},
+                   {"metric": Euclidean(), "evaluate": evaluate, "lower_bound": bound},
+                   {"metric": Euclidean(), "evaluate": evaluate},
+                   {"metric": Euclidean(), "lower_bound": bound}):
+        with pytest.raises((TypeError, ValueError)):
+            make_nearest(Points(2), **kwargs)
+
+
+@wp.struct
+class BallData:
+    centers: wp.array(dtype=wp.vec3)
+    radii: wp.array(dtype=wp.float32)
+
+
+@wp.struct
+class Ball:
+    center: wp.vec3
+    radius: float
+
+
+@wp.func
+def ball_load(data: BallData, slot: int):
+    item = Ball()
+    item.center = data.centers[slot]
+    item.radius = data.radii[slot]
+    return item
+
+
+@wp.func
+def ball_bounds(item: Ball):
+    return item.center-wp.vec3(item.radius), item.center+wp.vec3(item.radius)
+
+
+@wp.func
+def ball_evaluate(query: wp.vec3, item: Ball):
+    delta = query-item.center
+    length = wp.length(delta)
+    point = query
+    if length > item.radius:
+        point = item.center+delta*(item.radius/length)
+    return point, wp.length_sq(query-point)
+
+
+@wp.func
+def ball_lower_bound(query: wp.vec3, lo: wp.vec3, hi: wp.vec3):
+    delta = wp.max(wp.max(lo-query, wp.vec3(0.0)), query-hi)
+    return wp.length_sq(delta)
+
+
+class BallArrays(NamedTuple):
+    centers: Any
+    radii: Any
+
+
+@dataclass(frozen=True)
+class Balls:
+    dimension: int = 3
+    point_type: Any = wp.vec3
+    data_type: Any = BallData
+    load: Any = ball_load
+    bounds_of_item: Any = ball_bounds
+
+    def bounds(self, data):
+        return data.centers-data.radii[:, None], data.centers+data.radii[:, None]
+
+    def pack(self, data, ids):
+        return BallArrays(data.centers[ids], data.radii[ids])
+
+
+def test_custom_balls_without_euclidean_hook():
+    rng = np.random.default_rng(77)
+    centers = rng.normal(size=(41, 3)).astype(np.float32)*4
+    radii = rng.uniform(.1, 1., 41).astype(np.float32)
+    queries = rng.normal(size=(19, 3)).astype(np.float32)*4
+    queries[0] = centers[0]  # Interior: closest point is the query itself.
+    delta = queries[:, None]-centers
+    lengths = np.linalg.norm(delta, axis=-1)
+    scores = np.maximum(lengths-radii, 0)**2
+    ids = scores.argmin(axis=-1)
+    factors = np.minimum(1., radii/np.maximum(lengths, np.finfo(np.float32).tiny))
+    candidates = centers+delta*factors[..., None]
+    tree, data = build_tree(Balls(), BallArrays(jnp.asarray(centers), jnp.asarray(radii)), Config(leaf_size_threshold=1))
+    nearest = jax.jit(make_nearest(Balls(), evaluate=ball_evaluate, lower_bound=ball_lower_bound))
+    point, score, index, status = nearest(tree, data, queries)
+    np.testing.assert_array_equal(index, ids)
+    np.testing.assert_array_equal(status, 1)
+    np.testing.assert_allclose(score, scores.min(axis=-1), rtol=4e-6, atol=2e-6)
+    np.testing.assert_allclose(point, candidates[np.arange(len(ids)), ids], rtol=3e-6, atol=2e-6)
+
+
+@pytest.mark.parametrize("kind", ["negative", "infinite", "nan"])
+def test_callback_invalid_candidate_scores(kind):
+    @wp.func(module="unique")
+    def evaluate(q: wp.vec2, item: Any):
+        score = float(-1.0)
+        if wp.static(kind == "infinite"):
+            score = wp.inf
+        if wp.static(kind == "nan"):
+            score = wp.nan
+        return item.a, score
+
+    @wp.func
+    def lower_bound(q: wp.vec2, lo: wp.vec3, hi: wp.vec3):
+        return 0.0
+
+    primitive = Points(2)
+    tree, data = build_tree(primitive, primitive.data([[0., 0.]]))
+    nearest = make_nearest(primitive, evaluate=evaluate, lower_bound=lower_bound)
+    _, score, index, status = jax.jit(nearest)(tree, data, jnp.zeros(2))
+    assert int(status) == -1 and int(index) == -1 and np.isposinf(score)
+
+
+@wp.func_native("""
+float dx = lo[0] > q[0] ? lo[0]-q[0] : (q[0] > hi[0] ? q[0]-hi[0] : 0.0f);
+float dy = lo[1] > q[1] ? lo[1]-q[1] : (q[1] > hi[1] ? q[1]-hi[1] : 0.0f);
+return 0.01f*dx*dx + 16.0f*dy*dy;
+""")
+def native_weighted_bound(q: wp.vec2, lo: wp.vec3, hi: wp.vec3) -> float: ...
+
+
+def test_callback_native_bound_and_single_fused_batched_launch():
+    primitive = Points(2)
+    evaluate, _ = weighted_callbacks(2, (.01, 16.))
+    tree, data = build_tree(primitive, primitive.data([[0., 1.], [5., 0.]]),
+                            Config(leaf_size_threshold=1))
+    nearest = jax.jit(make_nearest(primitive, evaluate=evaluate, lower_bound=native_weighted_bound))
+    queries = jnp.zeros((2, 3, 2))
+    # A whole query batch must remain one fused Warp FFI launch.
+    lowered = nearest.lower(tree, data, queries, .25)
+    assert lowered.as_text().count("stablehlo.custom_call") == 1
+    point, score, index, status = nearest(tree, data, queries, .25)
+    np.testing.assert_array_equal(index, np.ones((2, 3), np.int32))
+    np.testing.assert_array_equal(status, 1)
+    np.testing.assert_allclose(score, .25)
+    np.testing.assert_allclose(point, np.broadcast_to([5., 0.], (2, 3, 2)))

@@ -1,11 +1,13 @@
 """Nearest queries with static primitive and metric callbacks."""
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Generic, TypeVar
 
 import jax.numpy as jnp
 import warp as wp
 
 from ._warp_factory import BoundQuery, bind_query
+from ._warp_metrics import NearestCallbacks
 from ._warp_traversal import load_array, make_walk
 from ._warp_primitives import _struct
 from ._warp_tree import DeviceTree, STACK_CAPACITY
@@ -21,8 +23,15 @@ def prepare_nearest(ops, queries, max_distance):
     return queries.reshape((-1,)+tail), cap, shape
 
 
+HostDataT = TypeVar("HostDataT")
+DeviceDataT = TypeVar("DeviceDataT")
+ItemT = TypeVar("ItemT")
+PointT = TypeVar("PointT")
+QueryT = TypeVar("QueryT")
+
+
 @dataclass(frozen=True)
-class NearestQuery(BoundQuery):
+class NearestQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, PointT, QueryT]):
     ops: object
 
     def __call__(self, tree, geometry, queries, max_distance=jnp.inf):
@@ -30,8 +39,31 @@ class NearestQuery(BoundQuery):
         return self.launch(tree, geometry, shape, queries, cap)
 
 
+def make_nearest(primitive, metric=None, *, evaluate=None, lower_bound=None, predicate=None,
+                 stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True):
+    """Specialize a fused nearest query using a metric or two static Warp callbacks.
+
+    Callback scores and ``max_distance`` caps share units without conversion.
+    ``evaluate(query, item)`` returns a point and a finite nonnegative score;
+    ``lower_bound(query, box_lower, box_upper)`` must conservatively bound that
+    score, including float32 rounding. Box endpoints are always ``wp.vec3``.
+    Queries use the primitive's point type and dimension.
+    """
+    if metric is not None:
+        if evaluate is not None or lower_bound is not None:
+            raise TypeError("make_nearest accepts either metric or evaluate/lower_bound callbacks, not both")
+    else:
+        if evaluate is None or lower_bound is None:
+            raise TypeError("make_nearest requires a metric or both evaluate and lower_bound callbacks")
+        metric = NearestCallbacks(evaluate, lower_bound)
+    return _make_nearest(primitive, metric, predicate=predicate,
+                         stack_capacity=stack_capacity, block_dim=block_dim,
+                         cache_bounds=cache_bounds)
+
+
 @lru_cache(maxsize=None)
-def make_nearest(primitive, metric, *, predicate=None, stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True):
+def _make_nearest(primitive, metric, *, predicate=None,
+                  stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True):
     if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
         raise ValueError("invalid stack capacity or block dimension")
     ops = metric.bind(primitive)

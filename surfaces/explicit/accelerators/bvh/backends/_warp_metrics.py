@@ -1,21 +1,30 @@
 """Static nearest-query policies; bounds and minimizers share score units."""
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar
+
+from ._warp_types import PrimitiveSpec, WarpFunction, WarpType
 
 import warp as wp
 
 
+QueryT = TypeVar("QueryT")
+ItemT = TypeVar("ItemT")
+PointT = TypeVar("PointT")
+DeviceDataT = TypeVar("DeviceDataT")
+HostDataT = TypeVar("HostDataT")
+
+
 @dataclass(frozen=True)
-class NearestOps:
-    query_type: Any
+class NearestOps(Generic[QueryT, ItemT, PointT]):
+    query_type: WarpType[QueryT]
     query_shape: tuple[int, ...]
-    valid: Any
-    node_bound: Any
-    closest: Any
-    to_score: Any
-    to_distance: Any
-    cull_limit: Any
+    valid: WarpFunction[[QueryT], bool]
+    node_bound: WarpFunction[[QueryT, wp.vec3, wp.vec3], float]
+    closest: WarpFunction[[QueryT, ItemT], tuple[PointT, float]]
+    to_score: WarpFunction[[float], float]
+    to_distance: WarpFunction[[float], float]
+    cull_limit: WarpFunction[[QueryT, float], float]
     node_bound_with_data: Any = None
     viewpoint: Any = None
     cull_items: bool = True
@@ -23,17 +32,61 @@ class NearestOps:
     group_leaves: bool = False
 
 
-PrimitiveT = TypeVar("PrimitiveT", contravariant=True)
+class NearestPolicy(Protocol[DeviceDataT, ItemT, PointT, QueryT]):
+    def bind(self, primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]) -> NearestOps[QueryT, ItemT, PointT]: ...
 
 
-class MetricSpec(Protocol[PrimitiveT]):
-    def bind(self, primitive: PrimitiveT) -> NearestOps: ...
+class AngularQuery(Protocol):
+    """Angular matrix value; its dimensions are checked at specialization."""
+
+    def __getitem__(self, index: tuple[int, int]) -> float: ...
+
+
+class NearestPredicate(Protocol[DeviceDataT, ItemT, PointT, QueryT]):
+    def bind(self, primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT],
+             ops: NearestOps[QueryT, ItemT, PointT]) -> WarpFunction[[QueryT, ItemT], bool]: ...
+
+
+MetricSpec = NearestPolicy
+
+
+@dataclass(frozen=True)
+class NearestCallbacks(Generic[ItemT, PointT]):
+    """Immutable nearest policy; scores and distance caps use callback units."""
+    evaluate: WarpFunction[[PointT, ItemT], tuple[PointT, float]]
+    lower_bound: WarpFunction[[PointT, wp.vec3, wp.vec3], float]
+
+    @lru_cache(maxsize=None)
+    def bind(self, primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]) -> NearestOps[PointT, ItemT, PointT]:
+        Vec, dimension = primitive.point_type, primitive.dimension
+        evaluate = self.evaluate
+
+        @wp.func
+        def valid(query: Vec):
+            return wp.isfinite(query)
+
+        @wp.func
+        def closest(query: Vec, item: Any):
+            point, score = wp.static(evaluate)(query, item)
+            return point, wp.where(wp.isfinite(score) and score >= 0.0, score, wp.nan)
+
+        @wp.func
+        def identity(score: float):
+            return score
+
+        @wp.func
+        def cull_limit(query: Vec, score: float):
+            return score
+
+        return NearestOps(Vec, (dimension,), valid, self.lower_bound, closest,
+                          identity, identity, cull_limit,
+                          group_leaves=getattr(primitive, "point_bounds", False))
 
 
 @dataclass(frozen=True)
 class Euclidean:
     @lru_cache(maxsize=None)
-    def bind(self, primitive):
+    def bind(self, primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]) -> NearestOps[PointT, ItemT, PointT]:
         closest_primitive = getattr(primitive, "closest_euclidean", None)
         if closest_primitive is None:
             raise TypeError("primitive has no Euclidean minimizer")
