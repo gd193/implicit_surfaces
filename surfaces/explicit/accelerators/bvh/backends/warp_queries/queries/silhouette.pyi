@@ -1,8 +1,9 @@
+from ..._warp_tree import DeviceTree
 from dataclasses import dataclass
 from typing import Generic, TypeVar, overload
 import jax
 from jax.typing import ArrayLike
-from ..contracts import PrimitiveSpec
+from ..contracts import PrimitiveSpec, WarpFunction
 from ..._warp_boundary import BoundaryAdapter, BoundaryData, BoundaryPrimitive
 from ..metrics import NearestPolicy
 from .nearest import NearestQuery
@@ -19,6 +20,9 @@ FI = TypeVar("FI")
 
 @dataclass(frozen=True)
 class SilhouetteQuery(Generic[H, D, ItemT, P, Q, CH, CD, FH, FD, FI]):
+    device: WarpFunction[[Q, float, DeviceTree, FD], tuple[P, float, int, int]]
+    @property
+    def _device_kernel(self) -> object: ...
     query: NearestQuery[FH, FD, FI, P, Q]
     @property
     def kernel(self) -> object: ...
@@ -27,6 +31,9 @@ class SilhouetteQuery(Generic[H, D, ItemT, P, Q, CH, CD, FH, FD, FI]):
                  ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]: ...
 @dataclass(frozen=True)
 class StarRadiusQuery(Generic[H, D, ItemT, P, CH, CD, FH, FD, FI]):
+    device: WarpFunction[[P, float, DeviceTree, FD], tuple[float, int]]
+    @property
+    def _device_kernel(self) -> object: ...
     silhouette: SilhouetteQuery[H, D, ItemT, P, P, CH, CD, FH, FD, FI]
     def __call__(self, tree: object, geometry: H, boundary: BoundaryData[CH, FH] | FH,
                  points: ArrayLike, cap: ArrayLike) -> tuple[jax.Array, jax.Array]: ...

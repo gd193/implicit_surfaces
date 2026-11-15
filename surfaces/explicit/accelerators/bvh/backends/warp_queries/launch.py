@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import linecache
 from itertools import count
+from typing import Any
 
 import warp as wp
 
@@ -23,8 +24,13 @@ class BoundQuery:
     num_query_args: int
     num_outputs: int
     block_dim: int
+    device: Any = field(kw_only=True)
     group_types: tuple = field(default=(), kw_only=True)
     components: tuple[tuple[str, str], ...] = field(default=(), kw_only=True)
+
+    @property
+    def _device_kernel(self):
+        return self.kernel
 
     def describe(self) -> dict[str, object]:
         """Describe the selected host-side composition without compiling it."""
@@ -74,11 +80,11 @@ def struct_arrays(value, struct_type):
     return tuple(getattr(value, name) for name in struct_type.vars)
 
 
-def bind_query(query_type, name, primitive, inputs, outputs, body, bindings, block_dim, *, groups=(), **options):
+def bind_query(query_type, name, primitive, inputs, outputs, body, bindings, block_dim, *, device, groups=(), **options):
     schemas = (("tree", DeviceTree), ("geometry", primitive.data_type), *groups)
     arguments = [*inputs, *(arg for prefix, schema in schemas for arg in struct_arguments(prefix, schema)), *outputs]
     body = [*(line for prefix, schema in schemas for line in struct_body(prefix, schema, prefix+"_type")), *body]
     bindings = {**{prefix+"_type": schema for prefix, schema in schemas}, **bindings}
     kernel = array_kernel(name, arguments, ["i = wp.tid()", *body], bindings)
     return query_type(kernel, primitive, len(inputs), len(outputs), block_dim,
-                      group_types=tuple(schema for _, schema in groups), **options)
+                      device=device, group_types=tuple(schema for _, schema in groups), **options)

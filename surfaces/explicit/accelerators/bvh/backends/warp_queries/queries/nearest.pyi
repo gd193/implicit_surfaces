@@ -1,4 +1,5 @@
 """Host specialization signatures; JAX arrays do not encode vector dimensions."""
+from ..._warp_tree import DeviceTree
 from typing import Generic, TypeVar, overload
 import jax
 from jax.typing import ArrayLike
@@ -14,6 +15,7 @@ PointT = TypeVar("PointT")
 QueryT = TypeVar("QueryT")
 
 class NearestQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, PointT, QueryT]):
+    device: WarpFunction[[QueryT, float, DeviceTree, DeviceDataT], tuple[PointT, float, int, int]]
     ops: NearestOps[QueryT, ItemT, PointT]
     def __call__(self, tree: object, geometry: HostDataT, queries: ArrayLike,
                  max_distance: ArrayLike = ...) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]: ...

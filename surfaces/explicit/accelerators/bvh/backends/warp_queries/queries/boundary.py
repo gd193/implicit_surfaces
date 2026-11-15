@@ -337,7 +337,7 @@ def _make_boundary_sample(primitive, measure, region, block_dim):
     body = ["p, n, pdf, index, status = wp.static(sample)(load_array(points, i), load_array(radii, i), load_array(randoms, i), tree, geometry, meta)",
             "store_array(out_point, i, p)", "store_array(out_normal, i, n)", "store_array(out_pdf, i, pdf)", "store_array(out_id, i, index)", "store_array(out_status, i, status)"]
     return bind_query(BoundarySampleQuery, "boundary_sample_kernel", primitive, inputs, outputs, body,
-        {"sample": sample}, block_dim, groups=(("meta", SamplingMeta),), region=region,
+        {"sample": sample}, block_dim, device=sample, groups=(("meta", SamplingMeta),), region=region,
         components=(("selection", "subtree_weight"), ("region", type(region).__name__),
                     ("measure", type(measure).__name__)))
 
@@ -618,7 +618,7 @@ def _make_robin_radius(primitive, ops, stack_capacity, block_dim):
     body = ["value, status = wp.static(radius)(load_array(queries, i), load_array(caps, i), tree, geometry, core, feature, meta)",
             "store_array(out_radius, i, value)", "store_array(out_status, i, status)"]
     return bind_query(RobinQuery, "robin_radius_kernel", primitive, inputs, outputs, body, {"radius": radius},
-        block_dim, ops=ops, handlers=handlers,
+        block_dim, device=radius, ops=ops, handlers=handlers,
         groups=(("core", Core), ("feature", Feature), ("meta", CoefficientMeta)),
         components=(("node", "visit" if ops.node_visit is not None else
                      "coarse_and_data" if ops.node_bound is not None and ops.node_bound_with_data is not None else

@@ -1,11 +1,12 @@
 """Host specialization signatures; JAX arrays do not encode vector dimensions."""
+from ..._warp_tree import DeviceTree
 from typing import Generic, TypeVar, overload
 import jax
 from jax.typing import ArrayLike
 import warp as wp
 from ..launch import BoundQuery
 from ..metrics import NearestOps, NearestPolicy, NearestPredicate
-from ..contracts import PrimitiveSpec, WarpFunction
+from ..contracts import PrimitiveSpec, WarpFunction, DeviceArray2D
 
 HostDataT = TypeVar("HostDataT")
 DeviceDataT = TypeVar("DeviceDataT")
@@ -14,6 +15,7 @@ PointT = TypeVar("PointT")
 QueryT = TypeVar("QueryT")
 
 class KnnQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, PointT, QueryT]):
+    device: WarpFunction[[QueryT, float, DeviceTree, DeviceDataT, DeviceArray2D[float], DeviceArray2D[int] | DeviceArray2D[PointT], int], tuple[int, int]]
     k: int
     return_points: bool
     ops: NearestOps[QueryT, ItemT, PointT]

@@ -69,5 +69,5 @@ def make_overlap(primitive, *, stack_capacity=STACK_CAPACITY, block_dim=256):
     body = ["hit, status = wp.static(overlaps)(load_array(lower, i), load_array(upper, i), tree, geometry)",
             "store_array(out_overlap, i, hit)", "store_array(out_status, i, status)"]
     return bind_query(OverlapQuery, "overlap_kernel", primitive, inputs, outputs, body,
-                      {"overlaps": overlaps}, block_dim,
+                      {"overlaps": overlaps}, block_dim, device=overlaps,
                       components=(("intersection", "primitive_aabb"),))

@@ -97,5 +97,5 @@ def _make_classify(primitive, policy=None, *, adapter=None, stack_capacity=STACK
     body = ["sign, status = wp.static(classify)(load_array(queries, i), tree, geometry, meta)",
             "store_array(out_sign, i, sign)", "store_array(out_status, i, status)"]
     return bind_query(ClassifyQuery, "classify_kernel", primitive, inputs, outputs, body,
-                      {"classify": classify}, block_dim, groups=(("meta", Meta),), policy=policy,
+                      {"classify": classify}, block_dim, device=classify, groups=(("meta", Meta),), policy=policy,
                       components=(("event", "policy"),))
