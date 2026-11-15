@@ -231,7 +231,7 @@ def test_equivalent_static_policies_reuse_kernel(case):
         make_nearest, make_ray_query, make_star_radius, make_silhouette, make_classify, make_boundary_sample, make_robin_radius, make_overlap,
     )
     from surfaces.explicit.accelerators.bvh.backends._warp_boundary import resolve_boundary_adapter
-    from surfaces.explicit.accelerators.bvh.backends._warp_boundary_queries import _uniform_measure, _euclidean_robin
+    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.boundary import _uniform_measure, _euclidean_robin
 
     class DelegatingMetric:
         def bind(self, primitive):

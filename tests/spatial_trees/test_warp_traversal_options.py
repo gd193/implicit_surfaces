@@ -84,7 +84,8 @@ def test_segment_scheduling_override(cached, packed, grouped):
 
 @pytest.mark.parametrize("factory", [make_nearest, make_knn])
 def test_options_forward_independently_and_defaults_share_cache(monkeypatch, factory):
-    from surfaces.explicit.accelerators.bvh.backends import _warp_knn, _warp_nearest
+    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries import knn as _warp_knn
+    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries import nearest as _warp_nearest
 
     module = _warp_nearest if factory is make_nearest else _warp_knn
     original = module.make_walk

@@ -314,7 +314,7 @@ def empty_warp_payload():
 
 
 def with_robin_coefficients(payload, minimum, maximum=None):
-    from ._warp_boundary_queries import prepare_robin_coefficients
+    from .warp_queries.queries.boundary import prepare_robin_coefficients
 
     data = prepare_robin_coefficients(payload, minimum, maximum)
     return payload._replace(tri_robin_bounds=data.primitive_bounds, node_robin_bounds=data.node_bounds)

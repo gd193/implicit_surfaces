@@ -69,13 +69,13 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
 
     def closest_silhouette_with_status(self, payload, x,
                                        max_distance=jnp.inf):
-        from ._warp_silhouette import make_silhouette
+        from .warp_queries.queries.silhouette import make_silhouette
 
         primitive, tree, geometry = _factory_data(payload)
         return make_silhouette(primitive)(tree, geometry, _factory_boundary(payload), x, max_distance)
 
     def sample_boundary(self, payload, points, radii, randoms):
-        from ._warp_boundary_queries import SamplingData, make_boundary_sample
+        from .warp_queries.queries.boundary import SamplingData, make_boundary_sample
 
         primitive, tree, geometry = _factory_data(payload)
         data = SamplingData(payload.tri_area, payload.node_area)
@@ -85,7 +85,7 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
         return self.star_radius_with_status(payload, points, cap)[0]
 
     def star_radius_with_status(self, payload, points, cap):
-        from ._warp_silhouette import make_star_radius
+        from .warp_queries.queries.silhouette import make_star_radius
 
         primitive, tree, geometry = _factory_data(payload)
         return make_star_radius(primitive)(tree, geometry, _factory_boundary(payload), points, cap)
@@ -97,7 +97,7 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
         return self.robin_radius_with_status(payload, points, cap)[0]
 
     def robin_radius_with_status(self, payload, points, cap):
-        from ._warp_boundary_queries import CoefficientData, RobinData, make_robin_radius
+        from .warp_queries.queries.boundary import CoefficientData, RobinData, make_robin_radius
 
         if payload.node_robin_bounds.shape != (payload.node_left.shape[0], 2):
             raise ValueError("configure Robin coefficients with with_robin_coefficients first")

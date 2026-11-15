@@ -2,11 +2,11 @@ from dataclasses import dataclass
 from typing import Callable, Generic, NamedTuple, Protocol, TypeVar, overload
 import warp as wp
 from jax.typing import ArrayLike
-from ._warp_types import DeviceArray, PrimitiveSpec, WarpFunction
+from .warp_queries.contracts import DeviceArray, PrimitiveSpec, WarpFunction
 from ._warp_tree import DeviceTree, TreeData
-from ._warp_boundary_queries import MeasureOps, RobinOps
-from ._warp_metrics import NearestPredicate
-from ._warp_domain import ClassificationOps
+from .warp_queries.queries.boundary import MeasureOps, RobinOps
+from .warp_queries.metrics import NearestPredicate
+from .warp_queries.domain import ClassificationOps
 H = TypeVar("H")
 D = TypeVar("D")
 ItemT = TypeVar("ItemT")
