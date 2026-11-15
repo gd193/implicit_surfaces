@@ -114,8 +114,35 @@ functions, and host bounds/packing. Host bounds use the primitive dimension;
 device bounds use `vec3`, with zero z in 2D. Metrics return `NearestOps`: query type/shape,
 validity, box bound, primitive minimizer, cap/score conversions and culling slack.
 Silhouette metrics also supply an explicit `viewpoint` callback.
-`NearestOps.group_leaves` selects static traversal scheduling; Euclidean point
-queries enable it when bounds are cached. Other queries retain flat traversal.
+`NearestOps.group_leaves` supplies the default traversal schedule; Euclidean point
+queries use grouped descent. `make_nearest` and `make_knn` expose three independent
+compile-time controls:
+
+- `cache_bounds=True` stores the deferred node's lower-bound score in an eight-byte
+  stack entry. `False` stores a four-byte node/tag entry and recomputes the score on pop.
+- `packed_nodes=True` reads packed float4 bounds and topology. `False` reads the
+  separate bounds, child indices and leaf-range arrays. Both layouts are already in
+  the built payload; this selects access during traversal, without rebuilding.
+- `group_leaves=None` uses the policy's default schedule. `True` groups descent
+  before leaf processing; `False` uses the flat traversal loop. Neither choice
+  depends on caching or node access. `None` and its resolved boolean share a kernel.
+
+These arguments apply to metrics and user callbacks alike. For example,
+`make_knn(primitive, 16, callbacks, cache_bounds=False, packed_nodes=True,
+group_leaves=False)` recomputes bounds while retaining packed reads and flat
+scheduling. Changing one option leaves the other two alone. Defaults retain the
+previous default kernels. Older `cache_bounds=False` measurements also selected
+indexed access and flat scheduling; reproduce that combination by setting all
+three arguments explicitly. Silhouette queries explicitly use indexed access
+because their feature metadata replaces the leaf ranges.
+
+Treat these controls as workload-specific tuning options. Their performance
+interacts with primitive size and overlap, primitive data size, evaluator and
+bound cost, tree and leaf configuration, query distribution, `k`, and GPU
+architecture. Point benchmarks do not establish optimal settings for other
+primitives. Defaults remain unchanged; choose overrides from measurements of
+the intended workload.
+
 Callbacks are `@wp.func` or `@wp.func_native`. Bounds and minimizers must use the
 same score units; bounds must be conservative. Optional `node_bound_with_data`
 receives `(query, tree, data, node)` for additional node arrays.
@@ -665,7 +692,8 @@ optional capability is present.
 ## Generic k-nearest queries
 
 `make_knn(primitive, k, metric=None, *, evaluate=None, lower_bound=None,
-stack_capacity=64, block_dim=64, cache_bounds=True, predicate=None)` specializes
+stack_capacity=64, block_dim=64, cache_bounds=True, packed_nodes=True,
+group_leaves=None, predicate=None)` specializes
 one fused traversal kernel for a positive static **Python integer** `k` (booleans
 are rejected). Construct the factory outside JIT. `k` can exceed the number of
 primitives; each primitive contributes at most one candidate.

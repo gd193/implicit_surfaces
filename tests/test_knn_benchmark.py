@@ -22,17 +22,25 @@ def test_warp_case_report_replaces_stale_results(tmp_path, monkeypatch, failure_
         "benchmark", "--binaries", str(binaries), "--output", str(output),
         "--dimensions", "2", "--sizes", "1", "--queries", "1", "--k", "1",
         "--fixtures", "uniform", "--implementations", "ours",
+        "--no-cache-bounds", "--node-access", "indexed", "--scheduling", "grouped",
     ])
     monkeypatch.setattr(benchmark.subprocess, "check_output", lambda *a, **kw: "mock metadata")
     monkeypatch.setattr(benchmark, "fixtures", lambda *a: (
         np.zeros((1, 2), np.float32), np.zeros((1, 2), np.float32),
     ))
     monkeypatch.setattr(benchmark, "prepare_ours", lambda *a: object())
-    monkeypatch.setattr(benchmark, "ours", lambda *a, **kw: (
-        (np.zeros((1, 1), np.float32), np.zeros((1, 1), np.int32),
-         np.ones(1, np.int32), np.ones(1, np.int32)),
-        [0.1], {"gpu": "mock"},
-    ))
+
+    def fake_ours(*args, **kwargs):
+        assert kwargs["cache_bounds"] is False
+        assert kwargs["packed_nodes"] is False
+        assert kwargs["group_leaves"] is True
+        return (
+            (np.zeros((1, 1), np.float32), np.zeros((1, 1), np.int32),
+             np.ones(1, np.int32), np.ones(1, np.int32)),
+            [0.1], {"gpu": "mock"},
+        )
+
+    monkeypatch.setattr(benchmark, "ours", fake_ours)
 
     error = AssertionError("deliberate invalid result")
 

@@ -2,7 +2,7 @@
 import jax
 import warp as wp
 from surfaces.explicit.accelerators.bvh.warp import (
-    NearestCallbacks, NearestPolicy, Points, PrimitiveSpec, make_knn, warp_func,
+    Euclidean, NearestCallbacks, NearestPolicy, Points, PrimitiveSpec, make_knn, make_nearest, warp_func,
 )
 from tests.typing.warp_api.valid import Device, Host, Item, OtherItem, evaluate, lower_bound
 from tests.typing.warp_api.real_extension import external_evaluate, external_bound
@@ -32,3 +32,5 @@ def mismatches(primitive: PrimitiveSpec[Host, Device, Item, wp.vec3],
 
 make_knn(Points(3), 3, evaluate=external_evaluate, lower_bound=external_bound)  # expect: reportArgumentType
 make_knn(Points(3), 3, NearestCallbacks(external_evaluate, external_bound))  # expect: reportArgumentType
+make_knn(Points(3), 3, Euclidean(), packed_nodes="packed")  # expect: reportArgumentType
+make_nearest(Points(3), Euclidean(), group_leaves="flat")  # expect: reportArgumentType

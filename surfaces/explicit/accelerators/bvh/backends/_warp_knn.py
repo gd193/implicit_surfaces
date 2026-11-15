@@ -9,7 +9,7 @@ import warp as wp
 
 from ._warp_factory import BoundQuery, bind_query
 from ._warp_metrics import NearestCallbacks
-from ._warp_nearest import prepare_nearest
+from ._warp_nearest import _bind_nearest, prepare_nearest
 from ._warp_traversal import load_array, store_array, make_walk, _PREAMBLE, _NATIVE_DIR
 from ._warp_primitives import _struct
 from ._warp_tree import DeviceTree, STACK_CAPACITY
@@ -37,7 +37,8 @@ class KnnQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, PointT, QueryT
 
 
 def make_knn(primitive, k, metric=None, *, evaluate=None, lower_bound=None, predicate=None,
-             stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True):
+             stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True,
+             packed_nodes=True, group_leaves=None):
     """Specialize a fused k-nearest query using a metric or two static Warp callbacks.
 
     Callback scores and ``max_distance`` caps share units without conversion.
@@ -59,18 +60,22 @@ def make_knn(primitive, k, metric=None, *, evaluate=None, lower_bound=None, pred
         if evaluate is None or lower_bound is None:
             raise TypeError("make_knn requires a metric or both evaluate and lower_bound callbacks")
         metric = NearestCallbacks(evaluate, lower_bound)
+    if group_leaves is None:
+        group_leaves = _bind_nearest(primitive, metric).group_leaves
     return _make_knn(primitive, k, metric, predicate=predicate,
                      stack_capacity=stack_capacity, block_dim=block_dim,
-                     cache_bounds=cache_bounds)
+                     cache_bounds=cache_bounds, packed_nodes=packed_nodes,
+                     group_leaves=group_leaves)
 
 
 @lru_cache(maxsize=None)
 def _make_knn(primitive, k, metric, *, predicate=None,
-              stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True):
+              stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True,
+              packed_nodes=True, group_leaves=False):
     if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
         raise ValueError("invalid stack capacity or block dimension")
     Candidates, insert, limit, sort, get_score, get_id, get_count = candidate_functions(k)
-    ops = metric.bind(primitive)
+    ops = _bind_nearest(primitive, metric)
     accepts = predicate.bind(primitive, ops) if hasattr(predicate, "bind") else predicate
     Query, Geometry = ops.query_type, primitive.data_type
     Context = _struct("KnnContext", {"query": Query, "geometry": Geometry, "initial": wp.float32})
@@ -121,8 +126,8 @@ def _make_knn(primitive, k, metric, *, predicate=None,
         return wp.static(ops.node_bound)(ctx.query, lower, upper)
 
     walk = make_walk(Context, State, bounds, visit, stack_capacity=stack_capacity,
-                     packed_nodes=cache_bounds, resume=None if cache_bounds else resume,
-                     group_leaves=cache_bounds and getattr(ops, "group_leaves", False))
+                     packed_nodes=packed_nodes, resume=None if cache_bounds else resume,
+                     group_leaves=group_leaves)
 
     @wp.func
     def knn(query: Query, cap: float, tree: DeviceTree, geometry: Geometry,

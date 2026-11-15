@@ -88,6 +88,8 @@ def ours(
     *,
     prepared=None,
     cache_bounds=True,
+    packed_nodes=True,
+    group_leaves=None,
 ):
     import jax
 
@@ -108,6 +110,8 @@ def ours(
         lower_bound=ops.node_bound,
         block_dim=block,
         cache_bounds=cache_bounds,
+        packed_nodes=packed_nodes,
+        group_leaves=group_leaves,
     )
     n = len(queries)
     inputs = [jnp.asarray(queries), jnp.full((n,), cap, jnp.float32), *tree, *geometry]
@@ -175,6 +179,8 @@ def main():
         action="store_true",
         help="Recompute deferred Warp node bounds with a smaller traversal stack",
     )
+    p.add_argument("--node-access", choices=("packed", "indexed"), default="packed")
+    p.add_argument("--scheduling", choices=("auto", "flat", "grouped"), default="auto")
     p.add_argument("--launches", type=int, default=30)
     p.add_argument("--repeats", type=int, default=15)
     p.add_argument("--validate-samples", type=int, default=64)
@@ -296,6 +302,8 @@ def main():
                                         a.validate_samples,
                                         prepared=prepared,
                                         cache_bounds=not a.no_cache_bounds,
+                                        packed_nodes=a.node_access == "packed",
+                                        group_leaves={"auto": None, "flat": False, "grouped": True}[a.scheduling],
                                     )
                                     for suffix, value in zip(
                                         ("scores", "ids", "count", "status"), result

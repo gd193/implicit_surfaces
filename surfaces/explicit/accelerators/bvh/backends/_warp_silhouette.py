@@ -84,7 +84,8 @@ def _make_silhouette(primitive, metric, adapter, stack_capacity, block_dim):
     if feature is None:
         raise TypeError("boundary adapter has no silhouette feature operations")
     query = make_nearest(feature, _SilhouetteMetric(metric, adapter.visibility), predicate=adapter.predicate,
-                         stack_capacity=stack_capacity, block_dim=block_dim, cache_bounds=False)
+                         stack_capacity=stack_capacity, block_dim=block_dim, cache_bounds=False,
+                         packed_nodes=False, group_leaves=False)
     return SilhouetteQuery(query)
 
 

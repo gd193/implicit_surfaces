@@ -72,7 +72,12 @@ CUDA_VISIBLE_DEVICES=0 python -m scripts.bench.spatial_trees.warp_knn_reference 
 The full matrix covers uniform, clustered and sphere/circle surface float32
 points in 2D/3D, k=1/4/8/16/32/64/128, three N scales and two Q scales.
 `--implementations`, `--dimensions`, `--k`, `--sizes`, `--queries`,
-`--fixtures`, `--block-dim`, `--leaf-size`, and `--no-cache-bounds` filter/tune runs. Timings use
+`--fixtures`, `--block-dim`, `--leaf-size`, `--no-cache-bounds`,
+`--node-access packed|indexed`, and `--scheduling auto|flat|grouped` filter/tune runs.
+Caching, node access and scheduling vary independently. The default is cached,
+packed, and the policy's schedule (grouped for these point queries). Reproduce
+the old combined uncached mode with `--no-cache-bounds --node-access indexed
+--scheduling flat`; changing only `--no-cache-bounds` now isolates caching. Timings use
 resident CUDA graphs and events after warmup, excluding construction, JIT,
 transfers and host invocation. All paths emit squared scores, original IDs,
 count and status. Warp uses the generic callback path with Euclidean closest
