@@ -3,3 +3,4 @@ import warp as wp
 
 squared_distance: WarpFunction[[wp.vec3, wp.vec3], float]
 vector_x: WarpFunction[[wp.vec3], float]
+within_axis: WarpFunction[[wp.vec3, wp.vec3, wp.vec3, int], bool]

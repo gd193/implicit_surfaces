@@ -967,3 +967,192 @@ Typed `.device` signatures distinguish host payloads from device structs and
 one-dimensional arrays from `DeviceArray2D`. Buffer extents and some dynamically
 resolved metadata/output variants remain runtime Warp contracts, as with the
 existing host factories.
+
+## Radius queries and public traversal policies
+
+`make_radius` visits every qualifying primitive under a **closed** threshold.
+`mode="any"` stops at the first match; `mode="count"` counts every match.
+Both return `(value, status)` through JAX, support JIT/vmap, and expose
+`.device(query, cap, tree, geometry)` for composition in a caller's kernel.
+Status is `1` for matches, `0` for none, and `-1` for failure. Failed queries
+return zero. Counts use int32 and report failure rather than wrap on overflow.
+
+```python
+from surfaces.explicit.accelerators.bvh.warp import (
+    Points, Euclidean, build_tree, make_radius,
+)
+
+primitive = Points()
+tree, geometry = build_tree(primitive, primitive.data([[0., 0., 0.], [1., 0., 0.]]))
+count = make_radius(primitive, Euclidean(), mode="count")
+values, status = count(tree, geometry, [[0., 0., 0.]], radius=1.0)
+# values=[2], status=[1]: equality with the threshold is included.
+```
+
+A metric converts the cap using its existing score policy. With the
+`evaluate=...`, `lower_bound=...` shorthand, caps and evaluator scores have
+identical units. Predicates, custom primitives, and `cache_bounds`,
+`packed_nodes`, and `group_leaves` select the same traversal components as nearest queries.
+Radius defaults to `cache_bounds=False`, retaining the smaller deferred-node stack;
+callers can select cached bounds explicitly. Radius queries
+are independent of the static `k` used by kNN; they do not allocate neighbor lists.
+
+`RadiusAccumulator(state_type, initialize, update, finish)` supplies a custom
+reduction for `make_radius(..., mode="accumulate", accumulator=...)`. Its
+`RadiusReduction` is **device-only**. Callbacks are statically compiled:
+
+- `initialize(query, score_cap) -> State` initializes caller-owned data.
+- `update(query, item, point, score, original_id, state: WarpRef[State]) -> None`
+  processes a qualifying primitive; it can set `state.stop` to finish early.
+- `finish(state) -> Result` returns a Warp scalar, vector, or struct.
+
+State must declare `limit: float`, `failed: bool`, `stop: bool`, and
+`matched: bool` in addition to its own fields. The factory sets the score limit
+and match flag. Keep the limit unchanged for a fixed-radius reduction. On
+invalid input, `finish` receives a zero-initialized state and status is `-1`;
+on traversal failure, it receives the partial state and status is `-1`.
+Results with failure status must not be treated as complete reductions.
+No host representation is inferred for arbitrary custom result structs.
+
+For more general queries, `make_traversal(Context, State, bounds, visit, ...)`
+exposes the existing walker as `.device(tree, context, state)`. A caller-declared
+`@warp_struct` state requires `limit: float`, `failed: bool`, and `stop: bool`.
+The `make_traversal_state(name, extra_fields)` helper can create one dynamically;
+declaring the struct explicitly gives static checkers its field types.
+
+```text
+bounds(context, tree, node, lower_vec3, upper_vec3, state: WarpRef[State])
+    -> conservative_score, eligible, tag
+visit(context, tree, node, begin_slot, end_slot, tag, state: WarpRef[State])
+    -> None
+```
+
+The leaf range contains packed primitive slots; `tree.prim_ids[slot]` gives
+original IDs. Initialize `state.limit` in the same units as the node scores.
+Callbacks may lower it, set `stop`, or flag `failed`. Bounds must remain
+conservative under float32 rounding. NaN bounds and stack overflow flag failure.
+With `cache_bounds=False`, supply
+`resume(context, tree, node, lower, upper) -> score` to recompute deferred bounds.
+Cached traversal requires no resume callback. Layout, ordering, grouping, and
+stack capacity are static factory options.
+
+Use `WarpRef[State]` with `@warp_func` for typed mutable-reference parameters.
+It is the actual `wp.ref[State]` annotation at runtime and the underlying State
+for type checking; it introduces no callable wrapper or device work. Register
+traversals and reductions with `configure_query_kernel(kernel, *queries)` before
+compiling caller-owned kernels, just like the other device-callable queries.
+
+## Exact box intersection and region classification
+
+`make_overlap` remains a primitive-AABB broad-phase query. For geometric
+intersection, pair a primitive with a `RegionIntersectionPolicy`:
+
+```python
+from surfaces.explicit.accelerators.bvh.warp import (
+    Points, build_tree, make_region, point_region_policy,
+)
+
+primitive = Points(3)
+tree, geometry = build_tree(primitive, primitive.data([[0., 0., 0.], [1., 0., 0.]]))
+query = make_region(primitive, point_region_policy(3), mode="count")
+count, status = query(tree, geometry, [[0., 0., 0.]], [[1., 0., 0.]])
+# count=[2], status=[1]
+```
+
+Builtin policies are `point_region_policy(2|3)`, `segment_region_policy(2|3)`,
+and `triangle_region_policy()`. An extension supplies
+`RegionIntersectionPolicy(intersects)`, where the typed Warp callback is
+`intersects(geometry, packed_slot, lower_vec3, upper_vec3) -> bool`.
+Node bounds cull candidates; the callback performs the full primitive test.
+The slot indexes packed geometry, not the original primitive ID. Callbacks
+can load original indexed vertices or custom geometry without reconstructing
+them from rounded derived values. Builtin triangle tests use the original
+indexed vertices, consistent with the tree bounds. Builtin segment and triangle tests
+use float64 intermediates to avoid float32 overflow/underflow at extreme scales.
+Boxes are closed: face/edge/vertex contact and zero-width boxes can intersect.
+
+`mode="any"` returns a boolean and stops at the first exact intersection.
+`mode="count"` returns an int32 count. Optional positive static
+`count_limit` saturates the count and permits early exit; without a limit all
+eligible items are examined. Invalid boxes or traversal failure return `(0,-1)`;
+valid queries return status `1`, including queries with zero intersections.
+The `.device(lower, upper, tree, geometry)` result uses int32 for both modes.
+
+`make_region_classify(primitive, region_policy, classification_policy, ...)`
+combines geometric overlap with an existing `ClassificationOps` policy.
+Its host call is `(tree, geometry, boundary_or_core, lower, upper)`, and its
+device call adds the device metadata after geometry. The classification is
+`+1` inside, `-1` outside, or `0` intersecting the surface. Valid classification
+has status `1`; invalid boxes or metadata and failed traversal have status `-1`.
+The policy must describe a closed surface, including when a box touches it.
+If no surface intersects the box, point classification at its lower corner
+classifies the entire connected box. An empty valid surface is outside.
+
+Supply `metadata_host_type=YourArraySchema` when host classification metadata
+has a different type from the device struct. This is a typing marker and does
+not create another device specialization. Region queries use the public typed
+traversal mechanism and compile into one fused call, including classification.
+
+## Selected-result policies
+
+Pass `result_policy=ResultPolicy(Result, build)` to `make_nearest` or
+`make_knn` to construct a caller-defined Warp struct for each selected neighbor.
+The typed callback is:
+
+```text
+build(query, item, original_id: int, selected_point, reported_value: float)
+    -> Result
+```
+
+`reported_value` uses the metric's output conversion; callback-only metrics
+return raw score units. The item comes from its packed primitive slot, while
+`original_id` remains the input ID. Result construction runs only after selection
+(and sorting for kNN), once per selected valid neighbor. kNN reloads selected
+items and reevaluates their closest points, as coordinate-output kNN already
+does. Callbacks must therefore be deterministic and must not modify geometry.
+
+```python
+import warp as wp
+from surfaces.explicit.accelerators.bvh.warp import (
+    PointItem3, Points, Euclidean, ResultPolicy, make_knn, warp_func, warp_struct,
+)
+
+@warp_struct
+class Hit:
+    original_id: int
+    position: wp.vec3
+    distance: float
+
+@warp_func
+def build_hit(query: wp.vec3, item: PointItem3, index: int,
+              point: wp.vec3, value: float) -> Hit:
+    hit = Hit()
+    hit.original_id = index
+    hit.position = point
+    hit.distance = value
+    return hit
+
+query = make_knn(Points(), 8, Euclidean(), result_policy=ResultPolicy(Hit, build_hit))
+# Inside a caller-owned Warp kernel:
+# count, status = query.device(point, cap, tree, geometry, values, hits, row)
+# values: float32 Warp array (rows, 8); hits: Hit Warp array (rows, 8).
+```
+
+`IdPoint()` is a builtin policy producing a struct with `id` and `point` fields.
+Its actual Warp struct descriptor is `query.result_policy.result_type`, suitable
+for allocating `wp.empty((rows, k), dtype=...)`. `IdPointResult[PointT]` describes
+these fields to static type checkers.
+
+`SelectedNearestQuery.device(query, cap, tree, geometry)` returns `(result,status)`.
+`SelectedKnnQuery.device(query, cap, tree, geometry, values, results, row)` writes
+dense contiguous `(rows,k)` buffers and returns `(count,status)`. `k` remains
+static. Misses and unused entries have a zero-initialized result struct; kNN
+values are `inf`. On failure kNN clears the complete row and returns `(0,-1)`.
+Use count/status to distinguish valid ID zero from empty struct padding.
+
+Custom struct queries are device-only and cannot be called as JAX host queries.
+Their types deliberately have no host `__call__`; users can write individual
+result fields to ordinary arrays in their own fused kernel. Register native
+dependencies with `configure_query_kernel` before launch. Default nearest/kNN
+host and device outputs remain unchanged. `return_points=True` and
+`result_policy` are mutually exclusive for kNN.

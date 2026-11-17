@@ -28,19 +28,7 @@ from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
     prepare_boundary_sample,
     prepare_robin,
 )
-
-
-def _payload(schema, host, device):
-    result = schema()
-    for name, var in schema.vars.items():
-        setattr(
-            result,
-            name,
-            wp.array(
-                np.asarray(getattr(host, name)), dtype=var.type.dtype, device=device
-            ),
-        )
-    return result
+from tests.spatial_trees._warp_device import device_payload  # noqa: E402
 
 
 def _device():
@@ -168,7 +156,7 @@ def test_nearest_and_static_knn_inside_custom_kernel(k, coordinates, tmp_path):
     assert configured["max_unroll"] >= min(k, 64)
 
     device = _device()
-    dt, dg = _payload(DeviceTree, tree, device), _payload(Geometry, geometry, device)
+    dt, dg = device_payload(DeviceTree, tree, device), device_payload(Geometry, geometry, device)
     points = wp.array(queries, dtype=wp.vec3, device=device)
     outs = [
         wp.empty((4, k), dtype=float, device=device),
@@ -264,8 +252,8 @@ def test_ray_device_modes_match_host(mode):
     directions = np.tile([1.0, 0.0, 0.0], (3, 1)).astype(np.float32)
     device = _device()
     inputs = [
-        _payload(DeviceTree, tree, device),
-        _payload(Geometry, geometry, device),
+        device_payload(DeviceTree, tree, device),
+        device_payload(Geometry, geometry, device),
         wp.array(origins, dtype=wp.vec3, device=device),
         wp.array(directions, dtype=wp.vec3, device=device),
     ]
@@ -355,7 +343,7 @@ def test_boundary_device_functions_compose(kind):
     )[:, : primitive.dimension]
     device = _device()
     inputs = [
-        _payload(schema, host, device)
+        device_payload(schema, host, device)
         for schema, host in [
             (DeviceTree, tree),
             (Geometry, geometry),
@@ -456,8 +444,8 @@ def test_external_primitive_device_call_uses_public_contract():
         kernel,
         dim=1,
         inputs=[
-            _payload(DeviceTree, tree, device),
-            _payload(ExternalData, geometry, device),
+            device_payload(DeviceTree, tree, device),
+            device_payload(ExternalData, geometry, device),
         ],
         outputs=outputs,
         device=device,
