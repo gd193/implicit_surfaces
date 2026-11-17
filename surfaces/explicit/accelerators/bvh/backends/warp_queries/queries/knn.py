@@ -9,8 +9,9 @@ import warp as wp
 from ..launch import BoundQuery, bind_query
 from .nearest import prepare_nearest
 from .nearest_ops import bind_nearest as _bind_nearest, nearest_functions, resolve_metric
+from .results import resolve_result
 from ..selection.candidates import REGISTER_LIMIT, candidate_functions, configure_candidate_module
-from ..io.results import result_writer
+from ..io.results import custom_result_writer, result_writer
 from ..io.arrays import load_array
 from ..traversal.scheduling import make_walk
 from ..contracts import make_struct
@@ -22,6 +23,7 @@ DeviceDataT = TypeVar("DeviceDataT")
 ItemT = TypeVar("ItemT")
 PointT = TypeVar("PointT")
 QueryT = TypeVar("QueryT")
+ResultT = TypeVar("ResultT")
 
 @dataclass(frozen=True)
 class KnnQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, PointT, QueryT]):
@@ -35,9 +37,18 @@ class KnnQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, PointT, QueryT
                            output_shapes=((self.k,), (self.k,), (), ()))
 
 
+@dataclass(frozen=True)
+class SelectedKnnQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, PointT, QueryT, ResultT]):
+    """Device-only query with a statically typed caller-owned result."""
+    ops: object
+    result_policy: object
+    k: int
+    return_points: bool
+
+
 def make_knn(primitive, k, metric=None, *, evaluate=None, lower_bound=None, predicate=None,
              stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True,
-             packed_nodes=True, group_leaves=None, return_points=False):
+             packed_nodes=True, group_leaves=None, return_points=False, result_policy=None):
     """Specialize a fused k-nearest query using a metric or two static Warp callbacks.
 
     Callback scores and ``max_distance`` caps share units without conversion.
@@ -55,28 +66,34 @@ def make_knn(primitive, k, metric=None, *, evaluate=None, lower_bound=None, pred
         raise ValueError("k must be positive")
     if not isinstance(return_points, bool):
         raise TypeError("return_points must be a static Python bool")
+    if result_policy is not None and return_points:
+        raise ValueError("result_policy and return_points are mutually exclusive")
     metric = resolve_metric(metric, evaluate, lower_bound, "make_knn")
     if group_leaves is None:
         group_leaves = _bind_nearest(primitive, metric).group_leaves
+    if result_policy is not None:
+        result_policy = resolve_result(result_policy, primitive, _bind_nearest(primitive, metric).query_type)
     return _make_knn(primitive, k, metric, predicate=predicate,
                      stack_capacity=stack_capacity, block_dim=block_dim,
                      cache_bounds=cache_bounds, packed_nodes=packed_nodes,
-                     group_leaves=group_leaves, return_points=return_points)
+                     group_leaves=group_leaves, return_points=return_points,
+                     result_policy=result_policy)
 
 
 @lru_cache(maxsize=None)
 def _make_knn(primitive, k, metric, *, predicate=None,
               stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True,
-              packed_nodes=True, group_leaves=False, return_points=False):
+              packed_nodes=True, group_leaves=False, return_points=False,
+              result_policy=None):
     if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
         raise ValueError("invalid stack capacity or block dimension")
-    candidates = candidate_functions(k, return_points)
+    candidates = candidate_functions(k, return_points or result_policy is not None)
     Candidates = candidates.storage
     add, limit, sort, get_count = candidates.add, candidates.limit, candidates.sort, candidates.count
     ops = _bind_nearest(primitive, metric)
     Query, Geometry = ops.query_type, primitive.data_type
     Point = primitive.point_type
-    Output = Point if return_points else wp.int32
+    Output = result_policy.result_type if result_policy is not None else Point if return_points else wp.int32
     Context = make_struct("KnnContext", {"query": Query, "geometry": Geometry, "initial": wp.float32})
     State = make_struct("KnnState", {"limit": wp.float32, "failed": wp.bool, "stop": wp.bool,
                                  "candidates": Candidates})
@@ -111,7 +128,8 @@ def _make_knn(primitive, k, metric, *, predicate=None,
                      packed_nodes=packed_nodes, resume=None if cache_bounds else resume,
                      group_leaves=group_leaves)
 
-    emit = result_writer(primitive, ops, candidates, State, k, return_points)
+    emit = (custom_result_writer(primitive, ops, candidates, State, k, result_policy)
+            if result_policy is not None else result_writer(primitive, ops, candidates, State, k, return_points))
 
     @wp.func
     def knn(query: Query, cap: float, tree: DeviceTree, geometry: Geometry,
@@ -131,7 +149,7 @@ def _make_knn(primitive, k, metric, *, predicate=None,
             wp.static(sort)(state.candidates)
         if state.failed:
             count = 0
-        if wp.static(return_points):
+        if wp.static(return_points or result_policy is not None):
             return wp.static(emit)(query, geometry, state, count, out_score, out_id, row)
         else:
             return wp.static(emit)(state, count, out_score, out_id, row)
@@ -145,8 +163,10 @@ def _make_knn(primitive, k, metric, *, predicate=None,
                   ("scheduling", "grouped" if group_leaves else "flat"),
                   ("deferred", "cached_bound" if cache_bounds else "recomputed_bound"),
                   ("selection", "unrolled" if k <= REGISTER_LIMIT else "heap"),
-                  ("output", "coordinates" if return_points else "ids"))
-    query = bind_query(KnnQuery, "knn_kernel", primitive, inputs, outputs, body, {"knn": knn},
-                       block_dim, device=knn, ops=ops, k=k, return_points=return_points, components=components)
-    configure_candidate_module(query.kernel.module, candidates, k, return_points)
+                  ("output", "custom_struct" if result_policy is not None else "coordinates" if return_points else "ids"))
+    QueryClass = SelectedKnnQuery if result_policy is not None else KnnQuery
+    options = {"result_policy": result_policy} if result_policy is not None else {}
+    query = bind_query(QueryClass, "knn_kernel", primitive, inputs, outputs, body, {"knn": knn},
+                       block_dim, device=knn, ops=ops, k=k, return_points=return_points, components=components, **options)
+    configure_candidate_module(query.kernel.module, candidates, k, return_points or result_policy is not None)
     return query

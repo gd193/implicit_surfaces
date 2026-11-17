@@ -4,7 +4,7 @@ These helpers preserve callable signatures while exposing Warp's runtime
 Function markers to static checking. They return the actual Warp descriptors;
 they never wrap a device callable.
 """
-from typing import Any, Callable, ParamSpec, Protocol, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Callable, ParamSpec, Protocol, TypeAlias, TypeVar, cast, overload
 
 import jax
 import numpy as np
@@ -19,6 +19,15 @@ PointT = TypeVar("PointT", covariant=True)
 T_co = TypeVar("T_co", covariant=True)
 StructT = TypeVar("StructT")
 ElementT = TypeVar("ElementT")
+ReferenceT = TypeVar("ReferenceT")
+
+# Warp references describe argument passing, not a different Python value.
+# Preserve the value's fields/signature for static checking while passing the
+# actual reference descriptor to Warp's compiler at runtime.
+if TYPE_CHECKING:
+    WarpRef: TypeAlias = ReferenceT
+else:
+    WarpRef = wp.ref
 
 
 class DeviceArray(Protocol[ElementT]):

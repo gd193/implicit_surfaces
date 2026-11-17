@@ -63,3 +63,41 @@ def result_writer(primitive, ops, candidates, State, k, return_points):
         return count, status
 
     return emit_points if return_points else emit_ids
+
+
+@lru_cache(maxsize=None)
+def custom_result_writer(primitive, ops, candidates, State, k, policy):
+    """Project final selected neighbors into a caller-defined Warp struct."""
+    Query, Geometry = ops.query_type, primitive.data_type
+    Result = policy.result_type
+    build = policy.build
+    get_score, get_id, get_slot = candidates.score, candidates.item_id, candidates.slot
+
+    @wp.func
+    def emit_custom(query: Query, geometry: Geometry, state: wp.ref[State], count: int,
+                    out_score: wp.array2d(dtype=wp.float32),
+                    out_result: wp.array2d(dtype=Result), row: int):
+        for index in range(wp.static(k)):
+            value = wp.inf
+            result = Result()
+            if index < count:
+                value = wp.static(ops.to_distance)(wp.static(get_score)(state.candidates, index))
+                item = wp.static(primitive.load)(geometry, wp.static(get_slot)(state.candidates, index))
+                point, score = wp.static(ops.closest)(query, item)
+                if not wp.isfinite(point) or not wp.isfinite(score) or score < 0.0:
+                    state.failed = True
+                if not wp.isfinite(value) or value < 0.0:
+                    state.failed = True
+                if not state.failed:
+                    result = wp.static(build)(query, item, wp.static(get_id)(state.candidates, index), point, value)
+            store_array(out_score, row*wp.static(k)+index, value)
+            store_array(out_result, row*wp.static(k)+index, result)
+        if state.failed:
+            count = 0
+            for index in range(wp.static(k)):
+                store_array(out_score, row*wp.static(k)+index, wp.inf)
+                store_array(out_result, row*wp.static(k)+index, Result())
+        status = wp.where(state.failed, -1, wp.where(count > 0, 1, 0))
+        return count, status
+
+    return emit_custom
