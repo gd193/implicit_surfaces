@@ -28,9 +28,13 @@ class SegmentItem3:
 
 @warp_struct
 class TriangleItem3:
+    """Indexed vertices and the packed float32 edge vectors used by callbacks."""
+
     a: wp.vec3
     e1: wp.vec3
     e2: wp.vec3
+    b: wp.vec3
+    c: wp.vec3
 
 
 @warp_struct

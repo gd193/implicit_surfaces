@@ -184,9 +184,11 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None, *, mesh_vertices=N
         v0 = tris[:, 0]
         e1 = tris[:, 1] - v0
         e2 = tris[:, 2] - v0
-        normal, area, _ = triangle_metadata(e1, e2)
-        if not all(np.isfinite(a).all() for a in (v0, e1, e2, normal, area)):
+        normal, area, _ = triangle_metadata(tris)
+        if (not all(np.isfinite(a).all() for a in (v0, e1, e2, normal, area))
+                or np.any(area > np.finfo(np.float32).max)):
             raise ValueError("packed triangle geometry overflows float32")
+        normal, area = normal.astype(np.float32), area.astype(np.float32)
     else:
         v0 = e1 = e2 = normal = np.zeros((0, 3), dtype=np.float32)
         area = np.zeros((0,), dtype=np.float32)

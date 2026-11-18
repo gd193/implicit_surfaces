@@ -137,7 +137,7 @@ def _make_nearest(primitive, metric, *, predicate=None,
         if state.index < 0:
             return Point(0.0), wp.inf, -1, 0
         distance = wp.static(ops.to_distance)(state.limit)
-        if not wp.isfinite(distance):
+        if not wp.isfinite(state.point) or not wp.isfinite(distance):
             return Point(0.0), wp.inf, -1, -1
         return state.point, distance, state.index, 1
 
@@ -174,7 +174,7 @@ def _make_nearest(primitive, metric, *, predicate=None,
             if state.index < 0:
                 return result, 0
             distance = wp.static(ops.to_distance)(state.limit)
-            if not wp.isfinite(distance) or distance < 0.0:
+            if not wp.isfinite(state.point) or not wp.isfinite(distance) or distance < 0.0:
                 return result, -1
             item = wp.static(primitive.load)(geometry, state.slot)
             result = wp.static(build)(query, item, state.index, state.point, distance)

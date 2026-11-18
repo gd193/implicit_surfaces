@@ -105,8 +105,9 @@ def _core(primitive, data, dimension):
         raise ValueError("boundary queries require indexed connectivity; use Segments(2).indexed")
     if vertices.shape[1:] != (dimension,) or indices.shape != (len(data.a), dimension):
         raise ValueError("indexed boundary arrays have incompatible shapes")
-    facets = vertices.astype(np.float64)[indices]
+    facets = vertices[indices]
     if dimension == 2:
+        facets = facets.astype(np.float64)
         edge = facets[:, 1]-facets[:, 0]
         cross = np.column_stack((edge[:, 1], -edge[:, 0]))
         boundary_features = indices.reshape(-1, 1)
@@ -114,7 +115,7 @@ def _core(primitive, data, dimension):
         measure = lengths * 1.
         normal = cross/np.where(lengths[:, None] > 0, lengths[:, None], 1.)
     else:
-        normal, measure, lengths = triangle_metadata(data.e1, data.e2, original_facets=facets)
+        normal, measure, lengths = triangle_metadata(facets)
         boundary_features = triangle_boundary_features(indices)
     if (not np.isfinite(normal).all() or not np.isfinite(measure).all()
             or np.any(measure > np.finfo(np.float32).max)):

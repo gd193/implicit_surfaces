@@ -256,7 +256,7 @@ def _build_recursive(state, node_id, prim_idx,
 # =====================================================================
 
 
-def _extract_silhouette_edges(faces_np: np.ndarray, vertices_np: np.ndarray):
+def _extract_silhouette_edges(faces_np: np.ndarray, vertices_np: np.ndarray, *, normals=None):
     """Step 2 of the brief: extract silhouette-edge candidates from a
     triangle mesh.
 
@@ -283,6 +283,11 @@ def _extract_silhouette_edges(faces_np: np.ndarray, vertices_np: np.ndarray):
             key = (u, v) if u < v else (v, u)
             edge_map.setdefault(key, []).append(f)
 
+    if normals is None:
+        facets = vertices_np[faces_np]
+        cross = np.cross(facets[:, 1] - facets[:, 0], facets[:, 2] - facets[:, 0])
+        normals = cross / (np.linalg.norm(cross, axis=1, keepdims=True) + 1e-30)
+
     v0_pos_list, v1_pos_list = [], []
     n0_list, n1_list = [], []
     edge_face_a, edge_face_b = [], []
@@ -291,20 +296,10 @@ def _extract_silhouette_edges(faces_np: np.ndarray, vertices_np: np.ndarray):
         n_faces = len(face_list)
         if n_faces == 2:
             fa, fb = face_list[0], face_list[1]
-            # Per-face unit normal via cross product of edges.
-            tri_a = vertices_np[faces_np[fa]]
-            n_a = np.cross(tri_a[1] - tri_a[0], tri_a[2] - tri_a[0])
-            n_a_norm = np.linalg.norm(n_a) + 1e-30
-            n_a = n_a / n_a_norm
-            tri_b = vertices_np[faces_np[fb]]
-            n_b = np.cross(tri_b[1] - tri_b[0], tri_b[2] - tri_b[0])
-            n_b_norm = np.linalg.norm(n_b) + 1e-30
-            n_b = n_b / n_b_norm
-
             v0_pos_list.append(vertices_np[u])
             v1_pos_list.append(vertices_np[v])
-            n0_list.append(n_a)
-            n1_list.append(n_b)
+            n0_list.append(normals[fa])
+            n1_list.append(normals[fb])
             edge_face_a.append(fa)
             edge_face_b.append(fb)
         elif n_faces == 1:
@@ -313,15 +308,10 @@ def _extract_silhouette_edges(faces_np: np.ndarray, vertices_np: np.ndarray):
             # satisfied for every query (boundary edges are silhouettes
             # by definition; only the on-plane case yields equality).
             fa = face_list[0]
-            tri_a = vertices_np[faces_np[fa]]
-            n_a = np.cross(tri_a[1] - tri_a[0], tri_a[2] - tri_a[0])
-            n_a_norm = np.linalg.norm(n_a) + 1e-30
-            n_a = n_a / n_a_norm
-
             v0_pos_list.append(vertices_np[u])
             v1_pos_list.append(vertices_np[v])
-            n0_list.append(n_a)
-            n1_list.append(-n_a)
+            n0_list.append(normals[fa])
+            n1_list.append(-normals[fa])
             edge_face_a.append(fa)
             edge_face_b.append(fa)
         else:
@@ -450,7 +440,7 @@ def _assign_silhouette_refs_and_cones(state, n_nodes,
 
 
 def _build_payload_snch(prim_lo_np, prim_hi_np, leaf_size,
-                        faces_np, vertices_np) -> BVHSnchPayload:
+                        faces_np, vertices_np, *, normals=None) -> BVHSnchPayload:
     n = int(prim_lo_np.shape[0])
     assert n >= 1, "Need at least one primitive"
 
@@ -478,7 +468,7 @@ def _build_payload_snch(prim_lo_np, prim_hi_np, leaf_size,
     # Step 2.
     (silh_v0, silh_v1, silh_n0, silh_n1,
      silh_face_a, silh_face_b) = _extract_silhouette_edges(faces_np,
-                                                           vertices_np)
+                                                           vertices_np, normals=normals)
 
     # Steps 3 + 4.
     (node_silh_offset, node_silh_count, silh_refs,

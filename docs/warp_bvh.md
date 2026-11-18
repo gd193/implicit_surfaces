@@ -408,6 +408,9 @@ The result retains the normal nearest-query status convention: 1 for a hit,
 0 for a miss or empty geometry, and -1 for invalid input/failure. Misses return
 score infinity and ID -1. Equal computed scores choose the smaller original ID.
 Negative or NaN caps and nonfinite queries are invalid; an infinite cap is allowed.
+A nearest query also returns status -1 if its selected closest point contains
+NaN or infinity. This applies to custom result policies before their result
+callback runs.
 
 The complete example below implements two extensions using only public imports:
 
@@ -601,7 +604,10 @@ ordinary invalid expressions, without `type: ignore` or expected-error
 suppression.
 
 Built-in item structs are public runtime Warp types, so a typed callback can
-annotate them directly. For example, this evaluator compiles with `Points(3)`:
+annotate them directly. For indexed triangles, use `TriangleItem3.a`, `b`,
+and `c` for vertex positions. The `e1` and `e2` fields are float32 edge
+vectors; adding them back to `a` can round away part of a vertex coordinate.
+For example, this evaluator compiles with `Points(3)`:
 
 ```python
 from surfaces.explicit.accelerators.bvh.warp import PointItem3, NearestCallbacks, warp_func

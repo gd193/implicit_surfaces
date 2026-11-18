@@ -10,7 +10,7 @@ wp = pytest.importorskip("warp")
 
 from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
     DeviceTree, PointsData3, Points, Segments, Triangles, build_boundary,
-    build_tree,
+    Euclidean, build_tree, make_knn, make_nearest, make_overlap, make_radius, make_ray_query,
 )
 from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.region import (  # noqa: E402
     RegionIntersectionPolicy, make_region, make_region_classify,
@@ -104,28 +104,68 @@ def test_triangle_exact_not_just_bounding_box():
     assert bool(q(t, g, np.array([1, 0, 0], np.float32), np.array([1, 0, 0], np.float32))[0])
 
 
-@pytest.mark.parametrize("mode", ["any", "count"])
-def test_triangle_original_vertices_survive_edge_rounding_and_leaf_packing(mode):
+@pytest.mark.parametrize("far,near", [(3., -.1), (1.e8, 1.)])
+def test_indexed_triangle_contact_at_original_vertices(far, near):
     from surfaces.explicit.accelerators.protocol import Config
 
     primitive = Triangles()
-    offsets = np.random.default_rng(42).permutation(24).astype(np.float32) * 10
-    facets = np.tile(np.array([[1e8, 0, 0], [1, 1, 0], [1, 0, 1]], np.float32), (24, 1, 1))
+    offsets = np.array([30., -20., 50., -40., 0., 20.], np.float32)
+    facets = np.tile(np.array([[far, 0, 0], [near, 1, 0], [near, 0, 1]], np.float32),
+                     (len(offsets), 1, 1))
     facets[:, :, 1] += offsets[:, None]
-    indices = np.arange(facets.size // 3).reshape(-1, 3)
+    indices = np.arange(3 * len(facets)).reshape(-1, 3)
     tree, geometry = build_tree(primitive, primitive.indexed(facets.reshape(-1, 3), indices),
                                 Config(leaf_size_threshold=1))
     assert not np.array_equal(tree.prim_ids, np.arange(len(facets)))
-    # Float32 a+e1 loses x=1. Test both the actual vertex and the false x=0
-    # reconstruction, for every triangle after a nontrivial leaf permutation.
-    vertices = facets[:, 1]
-    false_vertices = vertices.copy()
-    false_vertices[:, 0] = 0
-    boxes = np.concatenate((vertices, false_vertices))
-    query = make_region(primitive, triangle_region_policy(), mode=mode)
-    result, status = jax.jit(query)(tree, geometry, boxes, boxes)
-    np.testing.assert_array_equal(result, np.r_[np.ones(24), np.zeros(24)])
-    np.testing.assert_array_equal(status, 1)
+
+    vertices = facets.reshape(-1, 3)
+    expected_ids = np.repeat(np.arange(len(facets)), 3)
+
+    def run(query, *args):
+        return jax.jit(query)(tree, geometry, *args)
+
+    # Reconstructing the second vertex from rounded edges can move it off the face.
+    reconstructed = facets[:, 0] + (facets[:, 1] - facets[:, 0])
+    boxes = np.concatenate((vertices, reconstructed))
+    for mode in ("any", "count"):
+        hit, status = run(make_region(primitive, triangle_region_policy(), mode=mode), boxes, boxes)
+        np.testing.assert_array_equal(hit, np.r_[np.ones(len(vertices)), np.zeros(len(facets))])
+        np.testing.assert_array_equal(status, 1)
+    hit, _ = run(make_overlap(primitive), vertices, vertices)
+    np.testing.assert_array_equal(hit, True)
+
+    metric = Euclidean()
+    point, distance, ids, _ = run(make_nearest(primitive, metric), vertices, 0.)
+    np.testing.assert_array_equal(point, vertices)
+    np.testing.assert_array_equal(distance, 0.)
+    np.testing.assert_array_equal(ids, expected_ids)
+    _, points, count, _ = run(make_knn(primitive, 2, metric, return_points=True), vertices, 0.)
+    np.testing.assert_array_equal(points[:, 0], vertices)
+    np.testing.assert_array_equal(count, 1)
+    count, _ = run(make_radius(primitive, metric, mode="count"), vertices, 0.)
+    np.testing.assert_array_equal(count, 1)
+
+    midpoints = (facets[:, 1] + facets[:, 2]) * .5
+    direction = np.broadcast_to(np.array([1., 0., 0.], np.float32), midpoints.shape)
+    times, ids, hit, _ = run(make_ray_query(primitive), midpoints - direction, direction, 2.)
+    np.testing.assert_array_equal(hit, True)
+    np.testing.assert_array_equal(times, 1.)
+    np.testing.assert_array_equal(ids, np.arange(len(facets)))
+
+
+def test_indexed_triangle_closest_points_on_edge_and_interior():
+    primitive = Triangles()
+    vertices = np.array([[1.e8, 0, 0], [1, 1, 0], [1, -1, 0]], np.float32)
+    tree, geometry = build_tree(primitive, primitive.indexed(vertices, [[0, 1, 2]]))
+    points = np.array([[0, .25, 0], [1.5, .5, 2], [0, 0, 0]], np.float32)
+    expected = np.array([[1, .25, 0], [1.5, .5, 0], [1, 0, 0]], np.float32)
+    nearest, distances, _, _ = jax.jit(make_nearest(primitive, Euclidean()))(tree, geometry, points)
+    np.testing.assert_array_equal(nearest, expected)
+    np.testing.assert_array_equal(distances, [1., 2., 1.])
+
+    # The rounded-edge representation used to extend the face down to x=0.
+    overlap, _ = jax.jit(make_overlap(primitive))(tree, geometry, points[2:], points[2:])
+    np.testing.assert_array_equal(overlap, False)
 
 
 def test_external_region_callback_compiles_with_geometry_and_slot():

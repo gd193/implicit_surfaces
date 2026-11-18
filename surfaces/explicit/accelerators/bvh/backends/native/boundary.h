@@ -26,8 +26,6 @@ CUDA_CALLABLE inline float robin_leaf(const wp::vec3 &p, const Geometry &geometr
                                       const Coefficients &coefficients, int offset, int count,
                                       float best) {
     const auto &tri_v0 = geometry.a;
-    const auto &tri_e1 = geometry.e1;
-    const auto &tri_e2 = geometry.e2;
     const auto &tri_normal = core.primitive_normal;
     const auto &tri_robin_bounds = coefficients.primitive_bounds;
     float best2 = best;
@@ -38,6 +36,8 @@ CUDA_CALLABLE inline float robin_leaf(const wp::vec3 &p, const Geometry &geometr
         if (mu == 0.0f)
             continue;
         const wp::vec3 a = tri_v0.data[k];
+        const wp::vec3i ids = geometry.indices.data[k];
+        const wp::vec3 b = geometry.vertices.data[ids[1]], c = geometry.vertices.data[ids[2]];
         float h = 0.0f, q = 0.0f, farthest2 = INFINITY;
         if (mu < INFINITY) {
             const wp::vec3 normal = tri_normal.data[k];
@@ -55,8 +55,6 @@ CUDA_CALLABLE inline float robin_leaf(const wp::vec3 &p, const Geometry &geometr
                 if (lower_h * lower_h > best2 || 6.75f * (lower_h / mu) * 0.999996f > best2)
                     continue;
                 if (q < 3.0f) {
-                    const wp::vec3 b = a + tri_e1.data[k];
-                    const wp::vec3 c = a + tri_e2.data[k];
                     const float da2 = wp::dot(view, view);
                     const float db2 = wp::dot(b - p, b - p);
                     const float dc2 = wp::dot(c - p, c - p);
@@ -80,9 +78,7 @@ CUDA_CALLABLE inline float robin_leaf(const wp::vec3 &p, const Geometry &geometr
                 }
             }
         }
-        const wp::vec3 e1 = tri_e1.data[k];
-        const wp::vec3 e2 = tri_e2.data[k];
-        const wp::vec3 delta = closest_triangle(p, a, e1, e2) - p;
+        const wp::vec3 delta = closest_triangle(p, a, b, c) - p;
         const float closest2 = wp::dot(delta, delta);
         if (!(closest2 < INFINITY)) {
             failed = true;
@@ -98,8 +94,8 @@ CUDA_CALLABLE inline float robin_leaf(const wp::vec3 &p, const Geometry &geometr
         if (q < 3.0f) {
             if (farthest2 == INFINITY) {
                 const wp::vec3 da = a - p;
-                const wp::vec3 db = a + e1 - p;
-                const wp::vec3 dc = a + e2 - p;
+                const wp::vec3 db = b - p;
+                const wp::vec3 dc = c - p;
                 farthest2 = wp::max(wp::dot(da, da), wp::max(wp::dot(db, db), wp::dot(dc, dc)));
             }
             if (!(farthest2 < INFINITY)) {

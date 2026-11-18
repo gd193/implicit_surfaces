@@ -1,4 +1,4 @@
-"""CPU regression coverage for the two host triangle arithmetic contracts."""
+"""CPU regression coverage for indexed triangle metadata."""
 import numpy as np
 import pytest
 
@@ -7,34 +7,26 @@ from surfaces.explicit.accelerators.bvh.backends._warp_host_metadata import (
 )
 
 
-@pytest.mark.parametrize("boundary", [False, True])
-def test_triangle_metadata_matches_original_arithmetic(boundary):
+def test_triangle_metadata_uses_indexed_vertices():
     facets = np.array([
         [[0, 0, 0], [2, 0, 0], [0, 3, 0]],
         [[0, 0, 0], [1, 1, 1], [2, 2, 2]],
         [[0, 0, 0], [1e-11, 0, 0], [0, 1e-11, 0]],
         [[0, 0, 0], [0, 0, 0], [0, 0, 0]],
-    ], np.float64)
-    e1 = (facets[:, 1] - facets[:, 0]).astype(np.float32)
-    e2 = (facets[:, 2] - facets[:, 0]).astype(np.float32)
-    # Packed edges can round a source-degenerate triangle into a nonzero one.
-    e2[1, 2] = np.nextafter(e2[1, 2], np.float32(np.inf))
-    cross = np.cross(e1, e2)
-    if boundary:
-        original_cross = np.cross(facets[:, 1]-facets[:, 0], facets[:, 2]-facets[:, 0])
-        cross[np.all(original_cross == 0, axis=1)] = 0
-    lengths = np.linalg.norm(cross, axis=1)
-    denominator = (np.where(lengths[:, None] > 0, lengths[:, None], 1.) if boundary
-                   else np.maximum(lengths[:, None], np.float32(1e-30)))
-    actual = triangle_metadata(e1, e2, original_facets=facets if boundary else None)
-    for value, expected in zip(actual, (cross / denominator, lengths * .5, lengths)):
-        np.testing.assert_array_equal(value, expected)
-        assert value.dtype == np.float32
+        [[-2**25, -2**25, 0], [1, 0, 0], [0, 1, 0]],
+    ], np.float32)
+    expected_lengths = [6, 0, float(facets[2, 1, 0])**2, 0, 2**26 + 1]
+    expected_normals = [[0, 0, 1], [0, 0, 0], [0, 0, 1], [0, 0, 0], [0, 0, 1]]
+    for shift in range(3):
+        normal, area, lengths = triangle_metadata(np.roll(facets, shift, axis=1))
+        np.testing.assert_array_equal(normal, expected_normals)
+        np.testing.assert_allclose(lengths, expected_lengths, atol=0, rtol=1e-15)
+        np.testing.assert_allclose(area, np.array(expected_lengths) / 2, atol=0, rtol=1e-15)
 
 
 def test_empty_metadata_and_closure():
     empty = np.empty((0, 3), np.float32)
-    normal, area, lengths = triangle_metadata(empty, empty)
+    normal, area, lengths = triangle_metadata(np.empty((0, 3, 3), np.float32))
     assert normal.shape == (0, 3)
     assert area.shape == lengths.shape == (0,)
     assert triangle_mesh_closed(empty, np.empty((0, 3), np.int32))
@@ -45,6 +37,8 @@ def test_closure_open_closed_degenerate_and_tiny():
     faces = np.array([[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]], np.int32)
     assert triangle_mesh_closed(vertices, faces)
     assert triangle_mesh_closed(vertices * np.float32(1e-20), faces)
+    mixed = np.array([[-2**25, -2**25, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]], np.float32)
+    assert triangle_mesh_closed(mixed, faces)
     assert not triangle_mesh_closed(vertices, faces[:-1])
     vertices[3] = vertices[0]
     assert not triangle_mesh_closed(vertices, faces)

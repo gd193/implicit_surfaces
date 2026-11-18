@@ -110,10 +110,8 @@ def _array_bounds(data):
 
 
 def _triangle_bounds(data):
-    arrays = [np.asarray(a, np.float32) for a in data[:3]]
-    arrays = [arrays[0], arrays[0]+arrays[1], arrays[0]+arrays[2]]
-    arrays.extend(np.asarray(data.vertices)[np.asarray(data.indices)].transpose(1, 0, 2))
-    return np.minimum.reduce(arrays), np.maximum.reduce(arrays)
+    facets = np.asarray(data.vertices)[np.asarray(data.indices)]
+    return facets.min(axis=1), facets.max(axis=1)
 
 
 def _array_pack(data, ids):
@@ -166,7 +164,7 @@ def _primitive(kind, dimension):
         return item.a, item.n0, item.n1
 
     if kind == "triangles":
-        @wp.func_native("return bvh::closest_triangle(query, item.a, item.e1, item.e2);")
+        @wp.func_native("return bvh::closest_triangle(query, item.a, item.b, item.c);")
         def closest(query: Vec, item: Item) -> Vec: ...
     elif kind == "points":
         @wp.func
@@ -180,17 +178,11 @@ def _primitive(kind, dimension):
     if kind == "triangles":
         from .crossings import native_triangle_crossing
 
-        @wp.func_native("return bvh::first_triangle_intersection(ray, minimum, maximum, data, slot);")
-        def first_intersection(ray: Ray, minimum: float, maximum: float,
-                               data: Data, slot: int) -> wp.vec2: ...
-
         @wp.func
         def intersect(ray: Ray, minimum: float, maximum: float,
                       data: Data, slot: int, half_open: bool, store_times: bool):
-            if half_open:
-                return native_triangle_crossing(ray, minimum, maximum, slot,
-                                                 data.vertices, data.indices, half_open, store_times)
-            return first_intersection(ray, minimum, maximum, data, slot)
+            return native_triangle_crossing(ray, minimum, maximum, slot,
+                                            data.vertices, data.indices, half_open, store_times)
     elif kind == "segments" and dimension == 2:
         @wp.func_native("return bvh::segment_intersection(ray, minimum, maximum, data, slot, half_open, store_times);")
         def intersect(ray: Ray, minimum: float, maximum: float,

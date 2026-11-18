@@ -271,9 +271,7 @@ def test_ray_narrow_leaf_roundoff(mode, dimension):
     if mode in ("first", "all"):
         assert np.asarray(result[1]).reshape(-1)[0] == 1
         expected = np.float32(0.8518937471553134)
-        # First-hit triangles compute t in FP32, unlike the double segment path.
-        np.testing.assert_allclose(np.asarray(result[0]).reshape(-1)[0], expected,
-                                   atol=np.spacing(expected) if dimension == 3 and mode == "first" else 0., rtol=0.)
+        np.testing.assert_array_equal(np.asarray(result[0]).reshape(-1)[0], expected)
 
 
 @pytest.mark.parametrize("scale", [2.**-120, 2.**-100, 1., 2.**100])

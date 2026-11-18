@@ -1,4 +1,4 @@
-"""Robust half-open triangle crossing predicate."""
+"""Robust triangle crossing predicate with closed or half-open edge ownership."""
 import warp as wp
 
 from ..domain import Ray
