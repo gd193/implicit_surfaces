@@ -83,6 +83,9 @@ def _make_radius(primitive, metric, predicate, mode, accumulator, stack_capacity
     if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
         raise ValueError("invalid stack capacity or block dimension")
     ops = bind_nearest(primitive, metric)
+    score_at = getattr(ops, "score_at", None)
+    point_at = getattr(ops, "point_at", None)
+    defer_point = score_at is not None and (mode != "accumulate" or point_at is not None)
     Query, Geometry = ops.query_type, primitive.data_type
     from ..contracts import make_struct
     Context = make_struct("RadiusContext", {"query": Query, "geometry": Geometry,
@@ -101,7 +104,8 @@ def _make_radius(primitive, metric, predicate, mode, accumulator, stack_capacity
     def visit(ctx: Context, tree: DeviceTree, node: int, begin: int, end: int,
               tag: bool, state: wp.ref[State]):
         for slot in range(begin, end):
-            item = wp.static(primitive.load)(ctx.geometry, slot)
+            if wp.static(accepts is not None or ops.cull_items or mode == "accumulate" or not defer_point):
+                item = wp.static(primitive.load)(ctx.geometry, slot)
             if wp.static(accepts is not None):
                 if not wp.static(accepts)(ctx.query, item):
                     continue
@@ -113,7 +117,10 @@ def _make_radius(primitive, metric, predicate, mode, accumulator, stack_capacity
                     return
                 if not (item_bound <= wp.static(ops.cull_limit)(ctx.query, state.limit)):
                     continue
-            point, score = wp.static(ops.closest)(ctx.query, item)
+            if wp.static(defer_point):
+                score = wp.static(score_at)(ctx.query, ctx.geometry, slot)
+            else:
+                point, score = wp.static(ops.closest)(ctx.query, item)
             if score != score:
                 state.failed = True
                 return
@@ -128,6 +135,8 @@ def _make_radius(primitive, metric, predicate, mode, accumulator, stack_capacity
                         return
                     state.value += 1
                 else:
+                    if wp.static(defer_point):
+                        point = wp.static(point_at)(ctx.query, ctx.geometry, slot)
                     state.matched = True
                     index = load_array(tree.prim_ids, slot)
                     wp.static(accumulator.update)(ctx.query, item, point, score,

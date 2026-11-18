@@ -4,18 +4,20 @@ from typing import TYPE_CHECKING, NamedTuple
 import jax
 import warp as wp
 
-from ..contracts import DeviceArray, warp_struct
+from ..contracts import DeviceArray, DeviceArray2D, warp_struct
 
 if TYPE_CHECKING:
     _Vec2Array = DeviceArray[wp.vec2]
     _Vec3Array = DeviceArray[wp.vec3]
     _Vec2iArray = DeviceArray[wp.vec2i]
     _Vec3iArray = DeviceArray[wp.vec3i]
+    _FrameArray = DeviceArray2D[wp.uint32]
 else:
     _Vec2Array = wp.array(dtype=wp.vec2)
     _Vec3Array = wp.array(dtype=wp.vec3)
     _Vec2iArray = wp.array(dtype=wp.vec2i)
     _Vec3iArray = wp.array(dtype=wp.vec3i)
+    _FrameArray = wp.array2d(dtype=wp.uint32)
 
 
 @warp_struct
@@ -51,6 +53,9 @@ class TrianglesData3:
     e2: _Vec3Array
     vertices: _Vec3Array
     indices: _Vec3iArray
+    b: _Vec3Array
+    c: _Vec3Array
+    frame: _FrameArray
 
 
 @warp_struct
@@ -89,6 +94,9 @@ class TrianglesArrays3(NamedTuple):
     e2: jax.Array
     vertices: jax.Array
     indices: jax.Array
+    b: jax.Array
+    c: jax.Array
+    frame: jax.Array
 
 
 class SilhouetteEdgesArrays3(NamedTuple):

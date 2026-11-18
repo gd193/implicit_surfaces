@@ -91,6 +91,7 @@ def _make_knn(primitive, k, metric, *, predicate=None,
     Candidates = candidates.storage
     add, limit, sort, get_count = candidates.add, candidates.limit, candidates.sort, candidates.count
     ops = _bind_nearest(primitive, metric)
+    score_at = getattr(ops, "score_at", None)
     Query, Geometry = ops.query_type, primitive.data_type
     Point = primitive.point_type
     Output = result_policy.result_type if result_policy is not None else Point if return_points else wp.int32
@@ -104,7 +105,8 @@ def _make_knn(primitive, k, metric, *, predicate=None,
     @wp.func
     def visit(ctx: Context, tree: DeviceTree, node: int, begin: int, end: int, tag: bool, state: wp.ref[State]):
         for slot in range(begin, end):
-            item = wp.static(primitive.load)(ctx.geometry, slot)
+            if wp.static(accepts is not None or ops.cull_items or score_at is None):
+                item = wp.static(primitive.load)(ctx.geometry, slot)
             if wp.static(accepts is not None):
                 if not wp.static(accepts)(ctx.query, item):
                     continue
@@ -114,7 +116,10 @@ def _make_knn(primitive, k, metric, *, predicate=None,
                 state.failed = wp.where(bound != bound, True, state.failed)
                 if not (bound <= wp.static(ops.cull_limit)(ctx.query, state.limit)):
                     continue
-            point, score = wp.static(ops.closest)(ctx.query, item)
+            if wp.static(score_at is not None):
+                score = wp.static(score_at)(ctx.query, ctx.geometry, slot)
+            else:
+                point, score = wp.static(ops.closest)(ctx.query, item)
             if not wp.isfinite(score) or score < 0.0:
                 state.failed = True
                 return

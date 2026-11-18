@@ -9,9 +9,10 @@ import pytest
 wp = pytest.importorskip("warp")
 from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
     Euclidean, NearestCallbacks, Points, Segments, Triangles, build_tree,
-    make_knn, make_nearest,
+    make_knn, make_nearest, make_radius,
 )
 from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
+from tests.spatial_trees._warp_helpers import _closest_triangle  # noqa: E402
 from tests.spatial_trees.test_warp_factories import (  # noqa: E402
     Balls, BallArrays, ball_evaluate, ball_lower_bound, weighted_callbacks,
 )
@@ -252,3 +253,96 @@ def test_custom_scalar_query_policy(return_points):
         coordinates = np.where((expected[1] >= 0)[..., None], points[np.maximum(expected[1], 0)], 0.)
         expected = (expected[0], coordinates, *expected[2:])
     assert_result(jax.jit(query)(tree, data, queries), expected)
+
+
+@pytest.mark.parametrize("cache_bounds", [False, True])
+def test_thin_triangle_capped_queries(cache_bounds):
+    # The rounded vertices describe a thin, rotated triangle. Computing its
+    # normal from two nearly parallel edges can admit a point outside the face.
+    thin = np.array([
+        [-2.09561824798584, -.8604152798652649, -.8177284002304077],
+        [-.9771557450294495, -1.4173413515090942, .48430976271629333],
+        [-1.4997109174728394, -1.1571329832077026, -.12399935722351074],
+    ], np.float32)
+    p = np.array([-1.710182785987854, -1.0626181364059448, -.3567012846469879],
+                 np.float32)
+    rival = np.broadcast_to(p + np.array([0., 0., .01045], np.float32), (3, 3))
+    shift = np.array([8., -4., 16.], np.float32)
+    contact_tri = np.array([[8., 0., 0.], [10., 1., 0.], [8., 1., 0.]], np.float32)
+    # The first corner is opposite the longest edge. A plane equation
+    # referenced to either endpoint can leave a residual at this corner.
+    rotated_contact = np.array([
+        [-.4503190517425537, -.28977879881858826, -1.2234320640563965],
+        [1.5400711297988892, -.67762690782547, -.2773061990737915],
+        [-1.630417823791504, .13754382729530334, -1.247592568397522],
+    ], np.float32)
+    triangles = np.stack([thin, rival, thin + shift, contact_tri, rotated_contact])
+    near_contact = rotated_contact[0].copy()
+    near_contact[2] = np.nextafter(near_contact[2], np.float32(np.inf))
+    queries = np.array([
+        p, p, p + shift, thin[0], rotated_contact[0], [8.5, .5, 0.], [9., .5, 0.],
+        near_contact, p,
+    ], np.float32)
+    caps = np.array([np.inf, .01048, np.inf, 0., 0., 0., 0., 0., .0104], np.float32)
+    points = np.array([
+        [_closest_triangle(q.astype(np.float64), tri.astype(np.float64))
+         for tri in triangles]
+        for q in queries
+    ])
+    scores = np.linalg.norm(points - queries[:, None, :], axis=-1)
+    k = len(triangles) + 1
+    expected = reference(scores, k, caps)
+    np.testing.assert_array_equal(expected[1][:, 0], [1, 1, 2, 0, 4, 3, 3, -1, -1])
+    np.testing.assert_array_equal(expected[2], [5, 1, 5, 1, 1, 1, 1, 0, 0])
+
+    primitive = Triangles()
+    faces = np.arange(triangles.size // 3).reshape(-1, 3)
+    raw = primitive.indexed(triangles.reshape(-1, 3), faces)
+    tree, data = build_tree(primitive, raw, Config(leaf_size_threshold=1))
+    options = dict(cache_bounds=cache_bounds)
+    knn = make_knn(primitive, k, Euclidean(), **options)
+    assert_result(jax.jit(knn)(tree, data, queries, caps), expected)
+    nearest = make_nearest(primitive, Euclidean(), **options)
+    cp, distance, ids, status = jax.jit(nearest)(tree, data, queries, caps)
+    np.testing.assert_array_equal(ids, expected[1][:, 0])
+    np.testing.assert_array_equal(status, expected[3])
+    np.testing.assert_allclose(distance, expected[0][:, 0], rtol=5e-6, atol=2e-6)
+    hits = ids >= 0
+    nearest_points = points[np.flatnonzero(hits), ids[hits]]
+    np.testing.assert_allclose(cp[hits], nearest_points, rtol=0, atol=2e-6)
+
+    knn_points = make_knn(primitive, k, Euclidean(), return_points=True, **options)
+    values, cp, counts, status = jax.jit(knn_points)(tree, data, queries, caps)
+    order = expected[1]
+    expected_points = np.where(
+        (order >= 0)[..., None], points[np.arange(len(queries))[:, None], order], 0.
+    )
+    assert_result((values, counts, status), (expected[0], expected[2], expected[3]))
+    np.testing.assert_allclose(cp, expected_points, rtol=0, atol=2e-6)
+
+
+def test_triangle_adjacent_float32_caps():
+    vertex = np.array([-.006331482, -9.0728, -9.025907], np.float32)
+    point = np.array([-6.2419786, -8.897067, -4.5006127], np.float32)
+    queries = np.broadcast_to(point, (2, 3))
+    # Distances use the Euclidean policy's float32 score and cap convention.
+    cap = np.float32(np.linalg.norm(point.astype(np.float64) - vertex))
+    caps = np.array([np.nextafter(cap, np.float32(0)), cap], np.float32)
+
+    primitive = Triangles()
+    tree, data = build_tree(primitive, primitive.indexed([vertex], [[0, 0, 0]]))
+    nearest = make_nearest(primitive, Euclidean())
+    cp, distance, ids, status = jax.jit(nearest)(tree, data, queries, caps)
+    np.testing.assert_array_equal(distance, [np.inf, cap])
+    np.testing.assert_array_equal(ids, [-1, 0])
+    np.testing.assert_array_equal(status, [0, 1])
+    np.testing.assert_array_equal(cp[1], vertex)
+
+    result = make_knn(primitive, 1, Euclidean())(tree, data, queries, caps)
+    assert_result(result, reference([[cap], [cap]], 1, caps))
+    points = make_knn(primitive, 1, Euclidean(), return_points=True)(tree, data, queries, caps)
+    np.testing.assert_array_equal(points[1][:, 0], np.stack([np.zeros_like(vertex), vertex]))
+    radius_count = make_radius(primitive, Euclidean(), mode="count")
+    values, status = radius_count(tree, data, queries, caps)
+    np.testing.assert_array_equal(values, [0, 1])
+    np.testing.assert_array_equal(status, [0, 1])

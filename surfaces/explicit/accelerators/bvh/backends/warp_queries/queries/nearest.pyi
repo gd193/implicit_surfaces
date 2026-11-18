@@ -33,7 +33,7 @@ def make_nearest(primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]
                  metric: NearestPolicy[DeviceDataT, ItemT, PointT, QueryT], *,
                  result_policy: ResultPolicy[QueryT, ItemT, PointT, ResultT],
                  predicate: WarpFunction[[QueryT, ItemT], bool] | NearestPredicate[DeviceDataT, ItemT, PointT, QueryT] | None = ...,
-                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool = ...,
+                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool | None = ...,
                  packed_nodes: bool = ..., group_leaves: bool | None = ...
                  ) -> SelectedNearestQuery[HostDataT, DeviceDataT, ItemT, PointT, QueryT, ResultT]: ...
 @overload
@@ -43,7 +43,7 @@ def make_nearest(primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]
                  lower_bound: WarpFunction[[PointT, wp.vec3, wp.vec3], float],
                  result_policy: ResultPolicy[PointT, ItemT, PointT, ResultT],
                  predicate: WarpFunction[[PointT, ItemT], bool] | NearestPredicate[DeviceDataT, ItemT, PointT, PointT] | None = ...,
-                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool = ...,
+                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool | None = ...,
                  packed_nodes: bool = ..., group_leaves: bool | None = ...
                  ) -> SelectedNearestQuery[HostDataT, DeviceDataT, ItemT, PointT, PointT, ResultT]: ...
 
@@ -52,7 +52,7 @@ def make_nearest(primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]
                  metric: NearestPolicy[DeviceDataT, ItemT, PointT, QueryT], *,
                  result_policy: IdPoint,
                  predicate: WarpFunction[[QueryT, ItemT], bool] | NearestPredicate[DeviceDataT, ItemT, PointT, QueryT] | None = ...,
-                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool = ...,
+                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool | None = ...,
                  packed_nodes: bool = ..., group_leaves: bool | None = ...
                  ) -> SelectedNearestQuery[HostDataT, DeviceDataT, ItemT, PointT, QueryT, IdPointResult[PointT]]: ...
 @overload
@@ -62,7 +62,7 @@ def make_nearest(primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]
                  lower_bound: WarpFunction[[PointT, wp.vec3, wp.vec3], float],
                  result_policy: IdPoint,
                  predicate: WarpFunction[[PointT, ItemT], bool] | NearestPredicate[DeviceDataT, ItemT, PointT, PointT] | None = ...,
-                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool = ...,
+                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool | None = ...,
                  packed_nodes: bool = ..., group_leaves: bool | None = ...
                  ) -> SelectedNearestQuery[HostDataT, DeviceDataT, ItemT, PointT, PointT, IdPointResult[PointT]]: ...
 
@@ -71,7 +71,7 @@ def make_nearest(primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]
                  metric: NearestPolicy[DeviceDataT, ItemT, PointT, QueryT], *,
                  predicate: WarpFunction[[QueryT, ItemT], bool] | NearestPredicate[DeviceDataT, ItemT, PointT, QueryT] | None = ...,
                  result_policy: None = ...,
-                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool = ...,
+                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool | None = ...,
                  packed_nodes: bool = ..., group_leaves: bool | None = ...
                  ) -> NearestQuery[HostDataT, DeviceDataT, ItemT, PointT, QueryT]: ...
 @overload
@@ -81,7 +81,7 @@ def make_nearest(primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]
                  lower_bound: WarpFunction[[PointT, wp.vec3, wp.vec3], float],
                  predicate: WarpFunction[[PointT, ItemT], bool] | NearestPredicate[DeviceDataT, ItemT, PointT, PointT] | None = ...,
                  result_policy: None = ...,
-                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool = ...,
+                 stack_capacity: int = ..., block_dim: int = ..., cache_bounds: bool | None = ...,
                  packed_nodes: bool = ..., group_leaves: bool | None = ...
                  ) -> NearestQuery[HostDataT, DeviceDataT, ItemT, PointT, PointT]: ...
 

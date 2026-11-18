@@ -97,6 +97,39 @@ def test_warp_bvh_closest_point_equal_distance_tie_across_children(backend_name)
     np.testing.assert_allclose(distance, np.sqrt(2.), rtol=0, atol=1e-6)
 
 
+@pytest.mark.parametrize(("vertices", "foot", "offset", "cap"), [
+    ([[227, 171, 198], [1088, -403, 198], [3563, 5175, -3416]],
+     [1491.5, 1135, -705.5], [2, 3, 6], 7),
+    ([[0, 0, 0], [1800000, 2400000, 0], [-40000, 30000, 0]],
+     [600000, 800000, 0], [4, -3, 12], 13),
+], ids=["face", "edge"])
+def test_warp_triangle_nonaxis_closed_distance_cap(vertices, foot, offset, cap):
+    from surfaces.explicit.accelerators.bvh.warp import (
+        Euclidean, Triangles, build_tree, make_knn, make_nearest,
+    )
+
+    primitive = Triangles()
+    tree, geometry = build_tree(primitive, primitive.indexed(vertices, [[0, 1, 2]]))
+    foot, cap = np.asarray(foot, np.float32), np.float32(cap)
+    query = foot + np.asarray(offset, np.float32)
+    queries = np.stack((query, query, foot))
+    caps = np.array([np.nextafter(cap, np.float32(0)), cap, 0], np.float32)
+
+    nearest = jax.jit(make_nearest(primitive, Euclidean()))
+    points, distance, ids, status = map(np.asarray, nearest(tree, geometry, queries, caps))
+    np.testing.assert_array_equal(ids, [-1, 0, 0])
+    np.testing.assert_array_equal(status, [0, 1, 1])
+    np.testing.assert_array_equal(distance, [np.inf, cap, 0.])
+    np.testing.assert_array_equal(points[1:], np.broadcast_to(foot, (2, 3)))
+
+    knn = jax.jit(make_knn(primitive, 1, Euclidean()))
+    distance, ids, count, status = map(np.asarray, knn(tree, geometry, queries, caps))
+    np.testing.assert_array_equal(ids[:, 0], [-1, 0, 0])
+    np.testing.assert_array_equal(count, [0, 1, 1])
+    np.testing.assert_array_equal(status, [0, 1, 1])
+    np.testing.assert_array_equal(distance[:, 0], [np.inf, cap, 0.])
+
+
 @pytest.mark.parametrize("backend_name", SAH_WARP, ids=SAH_WARP)
 def test_warp_bvh_rays_caps_axes_grazes_and_start_contact(backend_name):
     # Regular, collinear and point triangles.
@@ -136,8 +169,9 @@ def test_warp_bvh_rays_caps_axes_grazes_and_start_contact(backend_name):
 
 
 @pytest.mark.parametrize("backend_name", SAH_WARP, ids=SAH_WARP)
-def test_warp_bvh_first_hit_equal_t_face_id_tie_across_children(backend_name):
-    # Equal t=1 hits: face 0 lives in the later-visited child.
+@pytest.mark.parametrize("speed", [1., 25.])  # 1/25 rounds down in float32.
+def test_warp_bvh_first_hit_equal_t_face_id_tie_across_children(backend_name, speed):
+    # Face 0 lives in the later-visited child.
     centers = np.asarray([4., -4., -3., -2., -1., -1., 1., 2., 3., 4.],
                          np.float32)
     triangles = np.stack([np.column_stack([centers - 8, np.full_like(centers, -2),
@@ -176,9 +210,9 @@ def test_warp_bvh_first_hit_equal_t_face_id_tie_across_children(backend_name):
         p, o, d, cap))
     t, face_id, hit, status = query(
         payload, jnp.asarray([0., 0., 1.], jnp.float32),
-        jnp.asarray([0., 0., -1.], jnp.float32), jnp.float32(1.))
+        jnp.asarray([0., 0., -speed], jnp.float32), jnp.float32(1.))
     assert bool(hit) and int(status) == 1
-    np.testing.assert_allclose(t, 1., rtol=0, atol=0)
+    np.testing.assert_allclose(t, np.float32(1. / speed), rtol=0, atol=0)
     assert int(face_id) == 0
 
 
@@ -203,7 +237,7 @@ def test_warp_bvh_ray_preserves_large_int32_source_face_id(backend_name):
 
 
 @pytest.mark.parametrize("backend_name", SAH_WARP, ids=SAH_WARP)
-@pytest.mark.parametrize("tiny", [np.float32(1e-30),
+@pytest.mark.parametrize("tiny", [np.float32(0), np.float32(1e-30),
                                   np.nextafter(np.float32(0), np.float32(1))])
 @pytest.mark.parametrize("side", [-1, 1])
 def test_warp_bvh_tiny_direction_on_child_box_boundary(backend_name, tiny, side):

@@ -66,6 +66,19 @@ def ray_box(ray: Ray, lower: wp.vec3, upper: wp.vec3,
             minimum: float, maximum: float, dimension: int) -> wp.vec2: ...
 
 
+@wp.func_native("return bvh::first_ray_inverse(ray);")
+def first_ray_inverse(ray: Ray) -> wp.vec3: ...
+
+
+@wp.func_native("return bvh::first_ray_box(ray, inverse, lower, upper, minimum, maximum);")
+def first_ray_box(ray: Ray, inverse: wp.vec3, lower: wp.vec3, upper: wp.vec3,
+                  minimum: float, maximum: float) -> wp.vec2: ...
+
+
+@wp.func_native("return wp::min(maximum, bvh::ray_successor(value));")
+def tie_upper_bound(value: float, maximum: float) -> float: ...
+
+
 @wp.func_native("return bvh::valid_ray(origin, direction, minimum, maximum, excluded, count, line, exclusion);")
 def valid_ray(origin: Any, direction: Any, minimum: float, maximum: float,
               excluded: int, count: int, line: bool, exclusion: bool):
@@ -91,17 +104,25 @@ def _make_ray_query(primitive, mode, ops, exclude, stack_capacity, block_dim):
     exclusion, half_open = exclude or mode in ("count", "all"), mode in ("count", "all")
     store_times = mode in ("first", "all")
     Vec, Geometry = primitive.point_type, primitive.data_type
-    fields = {"ray": Ray, "minimum": wp.float32, "excluded": wp.int32, "geometry": Geometry, "qi": wp.int32}
+    fields = {"ray": Ray, "minimum": wp.float32, "maximum": wp.float32, "excluded": wp.int32, "geometry": Geometry, "qi": wp.int32}
+    forward_3d = mode == "first" and primitive.dimension == 3
+    if forward_3d:
+        fields["inverse"] = wp.vec3
     if mode == "all":
         fields.update(times=wp.array2d(dtype=wp.float32), faces=wp.array2d(dtype=wp.int32))
     Context = make_struct("RayContext", fields)
-    State = make_struct("RayState", {"limit": wp.float32, "failed": wp.bool, "stop": wp.bool,
-                                 "count": wp.int32, "index": wp.int32})
+    state_fields = {"limit": wp.float32, "failed": wp.bool, "stop": wp.bool,
+                    "count": wp.int32, "index": wp.int32}
+    if mode == "first" and not multiple:
+        state_fields["candidate_limit"] = wp.float32
+    State = make_struct("RayState", state_fields)
 
     @wp.func
     def bounds(ctx: Context, lower: wp.vec3, upper: wp.vec3, state: wp.ref[State]):
-        hit = ray_box(ctx.ray, lower, upper, ctx.minimum, state.limit,
-                      wp.static(primitive.dimension))
+        if wp.static(forward_3d):
+            hit = first_ray_box(ctx.ray, ctx.inverse, lower, upper, ctx.minimum, state.limit)
+            return hit[0], hit[1] > 0.0, False
+        hit = ray_box(ctx.ray, lower, upper, ctx.minimum, state.limit, wp.static(primitive.dimension))
         return hit[0], hit[1] > 0.0, False
 
     # Resolve the accumulation rule and intersection capability in Python.  Each
@@ -117,6 +138,9 @@ def _make_ray_query(primitive, mode, ops, exclude, stack_capacity, block_dim):
             if hit[0] < state.limit or state.index < 0 or (hit[0] == state.limit and face < state.index):
                 state.limit = hit[0]
                 state.index = face
+                if wp.static(not multiple):
+                    # A rounded incumbent can be below its exact parameter.
+                    state.candidate_limit = tie_upper_bound(hit[0], ctx.maximum)
     elif mode == "all":
         @wp.func
         def emit(ctx: Context, state: wp.ref[State], hit: wp.vec2, face: int):
@@ -161,7 +185,10 @@ def _make_ray_query(primitive, mode, ops, exclude, stack_capacity, block_dim):
                 if wp.static(exclusion):
                     if face == ctx.excluded:
                         continue
-                hit = wp.static(ops.intersect)(ctx.ray, ctx.minimum, state.limit, ctx.geometry,
+                upper = state.limit
+                if wp.static(mode == "first"):
+                    upper = state.candidate_limit
+                hit = wp.static(ops.intersect)(ctx.ray, ctx.minimum, upper, ctx.geometry,
                                                slot, wp.static(half_open), wp.static(store_times))
                 if hit[1] < 0.0:
                     state.failed = True
@@ -174,7 +201,8 @@ def _make_ray_query(primitive, mode, ops, exclude, stack_capacity, block_dim):
 
     handlers = _RayHandlers(emit, visit, "stateful" if multiple else "single")
     walk = make_walk(Context, State, bounds, handlers.visit, stack_capacity=stack_capacity,
-                     near_first=mode in ("first", "any"), packed=True, test_root=half_open)
+                     near_first=mode in ("first", "any"), packed=True, test_root=half_open,
+                     group_leaves=(mode == "first" and getattr(primitive, "group_leaves", False)))
 
     @wp.func
     def ray_query(qi: int, origin: Vec, direction: Vec, minimum: float, maximum: float,
@@ -193,6 +221,8 @@ def _make_ray_query(primitive, mode, ops, exclude, stack_capacity, block_dim):
                           tree.prim_ids.shape[0], wp.static(half_open), wp.static(exclusion))
         state = State()
         state.limit = maximum
+        if wp.static(mode == "first" and not multiple):
+            state.candidate_limit = maximum
         state.index = -1
         if valid:
             ctx = Context()
@@ -201,7 +231,10 @@ def _make_ray_query(primitive, mode, ops, exclude, stack_capacity, block_dim):
                 o[2] = origin[2]
                 d[2] = direction[2]
             ctx.ray = prepare_ray(o, d, wp.static(primitive.dimension))
+            if wp.static(forward_3d):
+                ctx.inverse = first_ray_inverse(ctx.ray)
             ctx.minimum = minimum
+            ctx.maximum = maximum
             ctx.excluded = excluded
             ctx.geometry = geometry
             ctx.qi = qi

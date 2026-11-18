@@ -50,7 +50,7 @@ class SelectedNearestQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, Po
 
 
 def make_nearest(primitive, metric=None, *, evaluate=None, lower_bound=None, predicate=None,
-                 stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=True,
+                 stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=None,
                  packed_nodes=True, group_leaves=None, result_policy=None):
     """Specialize a fused nearest query using a metric or two static Warp callbacks.
 
@@ -61,6 +61,8 @@ def make_nearest(primitive, metric=None, *, evaluate=None, lower_bound=None, pre
     Queries use the primitive's point type and dimension.
     """
     metric = resolve_metric(metric, evaluate, lower_bound, "make_nearest")
+    if cache_bounds is None:
+        cache_bounds = _bind_nearest(primitive, metric).cache_nearest_bounds
     if group_leaves is None:
         group_leaves = _bind_nearest(primitive, metric).group_leaves
     if result_policy is not None:
@@ -78,11 +80,16 @@ def _make_nearest(primitive, metric, *, predicate=None,
     if not 1 <= stack_capacity <= STACK_CAPACITY or not 1 <= block_dim <= 1024:
         raise ValueError("invalid stack capacity or block dimension")
     ops = _bind_nearest(primitive, metric)
+    score_at = getattr(ops, "score_at", None)
+    point_at = getattr(ops, "point_at", None)
+    defer_point = score_at is not None and point_at is not None
     Query, Point, Geometry = ops.query_type, primitive.point_type, primitive.data_type
     Context = make_struct("NearestContext", {"query": Query, "geometry": Geometry, "initial": wp.float32})
     state_fields = {"limit": wp.float32, "failed": wp.bool, "stop": wp.bool,
-                    "point": Point, "index": wp.int32}
-    if result_policy is not None:
+                    "index": wp.int32}
+    if not defer_point:
+        state_fields["point"] = Point
+    if defer_point or result_policy is not None:
         state_fields["slot"] = wp.int32
     State = make_struct("NearestState", state_fields)
 
@@ -92,7 +99,8 @@ def _make_nearest(primitive, metric, *, predicate=None,
     @wp.func
     def visit(ctx: Context, tree: DeviceTree, node: int, begin: int, end: int, tag: bool, state: wp.ref[State]):
         for slot in range(begin, end):
-            item = wp.static(primitive.load)(ctx.geometry, slot)
+            if wp.static(accepts is not None or ops.cull_items or not defer_point):
+                item = wp.static(primitive.load)(ctx.geometry, slot)
             if wp.static(accepts is not None):
                 if not wp.static(accepts)(ctx.query, item):
                     continue
@@ -102,15 +110,19 @@ def _make_nearest(primitive, metric, *, predicate=None,
                 state.failed = wp.where(bound != bound, True, state.failed)
                 if not (bound <= wp.static(ops.cull_limit)(ctx.query, state.limit)):
                     continue
-            point, score = wp.static(ops.closest)(ctx.query, item)
+            if wp.static(defer_point):
+                score = wp.static(score_at)(ctx.query, ctx.geometry, slot)
+            else:
+                point, score = wp.static(ops.closest)(ctx.query, item)
             state.failed = wp.where(score != score, True, state.failed)
             if score <= state.limit:
                 index = load_array(tree.prim_ids, slot)
                 if score < state.limit or state.index < 0 or index < state.index:
-                    state.point = point
+                    if wp.static(not defer_point):
+                        state.point = point
                     state.limit = score
                     state.index = index
-                    if wp.static(result_policy is not None):
+                    if wp.static(defer_point or result_policy is not None):
                         state.slot = slot
         return
 
@@ -136,10 +148,14 @@ def _make_nearest(primitive, metric, *, predicate=None,
             return Point(0.0), wp.inf, -1, -1
         if state.index < 0:
             return Point(0.0), wp.inf, -1, 0
+        if wp.static(defer_point):
+            point = wp.static(point_at)(query, geometry, state.slot)
+        else:
+            point = state.point
         distance = wp.static(ops.to_distance)(state.limit)
-        if not wp.isfinite(state.point) or not wp.isfinite(distance):
+        if not wp.isfinite(point) or not wp.isfinite(distance):
             return Point(0.0), wp.inf, -1, -1
-        return state.point, distance, state.index, 1
+        return point, distance, state.index, 1
 
     inputs = [("queries", wp.array(dtype=Query)), ("caps", wp.array(dtype=wp.float32))]
     outputs = [("out_point", wp.array(dtype=Point)), ("out_distance", wp.array(dtype=wp.float32)),
@@ -173,11 +189,15 @@ def _make_nearest(primitive, metric, *, predicate=None,
                 return result, -1
             if state.index < 0:
                 return result, 0
+            if wp.static(defer_point):
+                point = wp.static(point_at)(query, geometry, state.slot)
+            else:
+                point = state.point
             distance = wp.static(ops.to_distance)(state.limit)
-            if not wp.isfinite(state.point) or not wp.isfinite(distance) or distance < 0.0:
+            if not wp.isfinite(point) or not wp.isfinite(distance) or distance < 0.0:
                 return result, -1
             item = wp.static(primitive.load)(geometry, state.slot)
-            result = wp.static(build)(query, item, state.index, state.point, distance)
+            result = wp.static(build)(query, item, state.index, point, distance)
             return result, 1
 
         outputs = [("out_result", wp.array(dtype=Result)), ("out_status", wp.array(dtype=wp.int32))]
