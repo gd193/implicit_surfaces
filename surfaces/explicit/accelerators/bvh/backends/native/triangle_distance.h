@@ -181,9 +181,121 @@ CUDA_CALLABLE inline double triangle_frame_edge_score(const wp::vec3 &a, const w
     return double(quotient + residual / denom.hi);
 }
 
+CUDA_CALLABLE inline uint32_t triangle_vertex_bits(float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
+}
+
+CUDA_CALLABLE inline float triangle_vertex_float(uint32_t bits) {
+    float value;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+// Each float is a signed 24-bit significand times 2^(shift - 149).
+// Accumulate the nine terms of sum(p² + v² - 2pv) in units of 2^-298.
+// 576 bits cover even the sum of three squared differences of opposite
+// maximum finite coordinates. Unsigned carries and borrows are modulo 2^576.
+CUDA_CALLABLE inline void triangle_vertex_accumulate(uint64_t *sum, uint64_t term,
+                                                     int shift, bool subtract) {
+    int word = shift / 64;
+    const int offset = shift % 64;
+    uint64_t low = term << offset;
+    uint64_t high = offset ? term >> (64 - offset) : 0;
+    while ((low || high) && word < 9) {
+        const uint64_t old = sum[word];
+        const uint64_t next = subtract ? old - low : old + low;
+        const bool carry = subtract ? old < low : next < old;
+        sum[word++] = next;
+        low = high + carry;
+        high = 0;
+    }
+}
+
+#if defined(__CUDA_ARCH__)
+__device__ __noinline__
+#else
+inline
+#endif
+double triangle_frame_vertex_exact(const wp::vec3 &p, const wp::vec3 &v) {
+    uint64_t sum[9] = {};
+    for (int i = 0; i < 3; ++i) {
+        const uint32_t p_bits = triangle_vertex_bits(p[i]), v_bits = triangle_vertex_bits(v[i]);
+        const int p_exp = (p_bits >> 23) & 255, v_exp = (v_bits >> 23) & 255;
+        if (p_exp == 255 || v_exp == 255) {
+            const TriangleVector delta = TriangleVector(p) - TriangleVector(v);
+            return wp::dot(delta, delta);
+        }
+        const uint64_t pi = (p_bits & 0x7fffff) | (p_exp ? 0x800000 : 0);
+        const uint64_t vi = (v_bits & 0x7fffff) | (v_exp ? 0x800000 : 0);
+        const int ps = p_exp ? p_exp - 1 : 0, vs = v_exp ? v_exp - 1 : 0;
+        triangle_vertex_accumulate(sum, pi * pi, 2 * ps, false);
+        triangle_vertex_accumulate(sum, vi * vi, 2 * vs, false);
+        triangle_vertex_accumulate(sum, pi * vi, ps + vs + 1, (p_bits ^ v_bits) < 0x80000000u);
+    }
+    int top = 8;
+    while (top >= 0 && !sum[top])
+        --top;
+    // Half the smallest subnormal is bit 148 in this fixed-point representation.
+    if (top < 2)
+        return 0.;
+#if defined(__CUDA_ARCH__)
+    const int highest = 64 * top + 63 - __clzll(sum[top]);
+#else
+    const int highest = 64 * top + 63 - __builtin_clzll(sum[top]);
+#endif
+    const int shift = highest > 172 ? highest - 23 : 149;
+    const int word = shift / 64, offset = shift % 64;
+    uint64_t rounded = sum[word] >> offset;
+    if (offset && word < 8)
+        rounded |= sum[word + 1] << (64 - offset);
+    const int round_word = (shift - 1) / 64;
+    const uint64_t round_bit = uint64_t(1) << ((shift - 1) % 64);
+    bool sticky = (sum[round_word] & (round_bit - 1)) != 0;
+    for (int i = 0; i < round_word; ++i)
+        sticky |= sum[i] != 0;
+    rounded += (sum[round_word] & round_bit) && (sticky || (rounded & 1));
+    if (highest > 425 || (highest == 425 && rounded == 0x1000000))
+        return double(triangle_vertex_float(0x7f800000u));
+    // Construct the rounded result in double, including float subnormals,
+    // without a float operation that could flush a subnormal result to zero.
+    return ldexp(double(rounded), shift - 298);
+}
+
+CUDA_CALLABLE inline float triangle_vertex_product(float value) {
+#if defined(__CUDA_ARCH__)
+    return __fmul_rn(value, value);
+#else
+    const volatile float square = value * value;
+    return square;
+#endif
+}
+
 CUDA_CALLABLE inline double triangle_frame_vertex_score(const wp::vec3 &p, const wp::vec3 &v) {
-    const TriangleVector delta = TriangleVector(p) - TriangleVector(v);
-    return wp::dot(delta, delta);
+    const auto x = triangle_float_sum(p[0], -v[0]), y = triangle_float_sum(p[1], -v[1]),
+               z = triangle_float_sum(p[2], -v[2]);
+    const float xx = triangle_vertex_product(x.hi), yy = triangle_vertex_product(y.hi),
+                zz = triangle_vertex_product(z.hi);
+    const auto xy = triangle_float_sum(xx, yy), xyz = triangle_float_sum(xy.hi, zz);
+    if (xyz.hi > 0x1p-60f && xyz.hi < 0x1p+60f) {
+        const float product_error = fmaf(x.hi, x.hi, -xx) + fmaf(y.hi, y.hi, -yy)
+                                  + fmaf(z.hi, z.hi, -zz);
+        const float cross_error = 2.f * (x.hi * x.lo + y.hi * y.lo + z.hi * z.lo);
+        const float low = ((xyz.lo + xy.lo) + product_error) + cross_error;
+        const float rounded = xyz.hi + low;
+        const float residual = low - (rounded - xyz.hi);
+        const uint32_t bits = triangle_vertex_bits(rounded);
+        const uint32_t exponent = bits & 0x7f800000;
+        const float upper_half = triangle_vertex_float(exponent - (24u << 23));
+        const float lower_half = bits == exponent ? 0.5f * upper_half : upper_half;
+        // Bound omitted low squares and all correction roundoffs. The
+        // subtraction between the high and rounded scores is exact (Sterbenz).
+        const float error = xyz.hi * 0x1p-42f;
+        if (residual > error - lower_half && residual < upper_half - error)
+            return double(rounded);
+    }
+    return triangle_frame_vertex_exact(p, v);
 }
 
 template <typename Data>
