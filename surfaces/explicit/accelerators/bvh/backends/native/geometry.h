@@ -21,40 +21,85 @@ CUDA_CALLABLE inline Vec closest_segment(const Vec &p, const Vec &a, const Vec &
     return a + t * ab;
 }
 
+using TriangleVector = wp::vec_t<3, double>;
+
+CUDA_CALLABLE inline TriangleVector closest_triangle_edge(const TriangleVector &a,
+                                                           const TriangleVector &b,
+                                                           const TriangleVector &edge,
+                                                           const TriangleVector &pa,
+                                                           const TriangleVector &pb,
+                                                           double length2) {
+    const double from_a = wp::dot(pa, edge);
+    const double from_b = -wp::dot(pb, edge);
+    if (from_a <= 0.0)
+        return a;
+    if (from_b <= 0.0)
+        return b;
+    // Interpolate from the nearer endpoint to limit cancellation.
+    return from_a < from_b ? a + (from_a / length2) * edge
+                           : b - (from_b / length2) * edge;
+}
+
+CUDA_CALLABLE inline wp::vec3 closest_triangle_precise(const wp::vec3 &p32, const wp::vec3 &a32,
+                                                       const wp::vec3 &b32, const wp::vec3 &c32) {
+    const TriangleVector p(p32), a(a32), b(b32), c(c32);
+    const TriangleVector ab = b - a, bc = c - b, ca = a - c;
+    const TriangleVector pa = p - a, pb = p - b, pc = p - c;
+    const double ab2 = wp::dot(ab, ab), bc2 = wp::dot(bc, bc), ca2 = wp::dot(ca, ca);
+    // Include the shortest edge in the normal to avoid subtracting products
+    // of nearly equal long edges when two vertices are close together.
+    const TriangleVector n = ca2 < ab2 && ca2 < bc2 ? wp::cross(bc, ca) : wp::cross(ab, bc);
+    const double n2 = wp::dot(n, n);
+    if (n2 > 0.0 && wp::dot(wp::cross(ab, pa), n) >= 0.0 &&
+        wp::dot(wp::cross(bc, pb), n) >= 0.0 && wp::dot(wp::cross(ca, pc), n) >= 0.0) {
+        const double da2 = wp::dot(pa, pa), db2 = wp::dot(pb, pb), dc2 = wp::dot(pc, pc);
+        const TriangleVector offset = da2 <= db2 && da2 <= dc2 ? pa : db2 <= dc2 ? pb : pc;
+        const wp::vec3 projected(p - (wp::dot(offset, n) / n2) * n);
+        // Projection can round past the AABB, including on a flat axis.
+        const wp::vec3 lower = wp::min(a32, wp::min(b32, c32));
+        const wp::vec3 upper = wp::max(a32, wp::max(b32, c32));
+        return wp::min(wp::max(projected, lower), upper);
+    }
+
+    const TriangleVector q_ab = closest_triangle_edge(a, b, ab, pa, pb, ab2);
+    const TriangleVector q_bc = closest_triangle_edge(b, c, bc, pb, pc, bc2);
+    const TriangleVector q_ca = closest_triangle_edge(c, a, ca, pc, pa, ca2);
+    const double d_ab = wp::dot(p - q_ab, p - q_ab);
+    const double d_bc = wp::dot(p - q_bc, p - q_bc);
+    const double d_ca = wp::dot(p - q_ca, p - q_ca);
+    return wp::vec3(d_ab <= d_bc && d_ab <= d_ca ? q_ab : d_bc <= d_ca ? q_bc : q_ca);
+}
+
 CUDA_CALLABLE inline wp::vec3 closest_triangle(const wp::vec3 &p, const wp::vec3 &a,
-                                               const wp::vec3 &e1, const wp::vec3 &e2) {
-    const wp::vec3 b = a + e1;
-    const wp::vec3 c = a + e2;
-    const wp::vec3 n = wp::cross(e1, e2);
-    const float n2 = wp::dot(n, n);
-    const wp::vec3 e3 = e2 - e1;
-    const float edge_scale = wp::max(wp::dot(e3, e3), wp::max(wp::dot(e1, e1), wp::dot(e2, e2)));
-    // Keep thin and degenerate triangles on the robust path.
-    if (n2 > 1.e-2f * edge_scale * edge_scale) {
+                                               const wp::vec3 &b, const wp::vec3 &c) {
+    if (p == a || p == b || p == c)
+        return p;
+
+    const wp::vec3 ab = b - a, ac = c - a, bc = c - b;
+    const wp::vec3 n = wp::cross(ab, ac);
+    const float edge2 = wp::max(wp::dot(ab, ab), wp::max(wp::dot(ac, ac), wp::dot(bc, bc)));
+    const wp::vec3 view = p - a;
+    const float view2 = wp::dot(view, view);
+    // Use single precision only on well-conditioned, round-trip-safe edges.
+    // The range checks also keep the barycentric products in float range.
+    if (edge2 >= 1.e-16f && edge2 <= 1.e16f && view2 <= 1.e4f * edge2 &&
+        wp::dot(n, n) > 1.e-2f * edge2 * edge2 &&
+        a + ab == b && b - ab == a && a + ac == c && c - ac == a &&
+        b + bc == c && c - bc == b) {
         const wp::vec2 uv = wp::closest_point_to_triangle(a, b, c, p);
-        return a + uv[1] * e1 + (1.0f - uv[0] - uv[1]) * e2;
+        const float u = uv[0], v = uv[1], w = 1.0f - (u + v);
+        constexpr float weight_slack = 2.e-6f;
+        if ((u == 0.0f || u >= weight_slack) && (v == 0.0f || v >= weight_slack) &&
+            (w == 0.0f || w >= weight_slack)) {
+            // Anchor the point at the vertex with the greatest weight.
+            if (u >= v && u >= w)
+                return a + v * ab + w * ac;
+            if (v >= w)
+                return b - u * ab + w * bc;
+            return c - u * ac - v * bc;
+        }
     }
-    if (n2 > 0.0f) {
-        const wp::vec3 projected = p - (wp::dot(p - a, n) / n2) * n;
-        const wp::vec3 v = projected - a;
-        const float u = wp::dot(wp::cross(v, e2), n) / n2;
-        const float w = wp::dot(wp::cross(e1, v), n) / n2;
-        if (u >= 0.0f && w >= 0.0f && u + w <= 1.0f)
-            return projected;
-    }
-    wp::vec3 best = closest_segment(p, a, b);
-    float best_d2 = wp::dot(p - best, p - best);
-    wp::vec3 candidate = closest_segment(p, b, c);
-    float candidate_d2 = wp::dot(p - candidate, p - candidate);
-    if (candidate_d2 < best_d2) {
-        best = candidate;
-        best_d2 = candidate_d2;
-    }
-    candidate = closest_segment(p, c, a);
-    candidate_d2 = wp::dot(p - candidate, p - candidate);
-    if (candidate_d2 < best_d2)
-        best = candidate;
-    return best;
+    return closest_triangle_precise(p, a, b, c);
 }
 
 template <typename Vec>
@@ -143,28 +188,6 @@ cone_may_have_silhouette(const wp::vec3 &p, int node, const Lower &node_lower,
     const float limit = sin_alpha * (wp::sqrt(wp::dot(perpendicular, perpendicular)) + radius);
     const float slack = 2.0e-6f * (wp::sqrt(wp::dot(view, view)) + radius);
     return gap * cos_alpha <= limit + slack;
-}
-
-CUDA_CALLABLE inline bool triangle_t(const wp::vec3 &o, const wp::vec3 &d, const wp::vec3 &a,
-                                     const wp::vec3 &e1, const wp::vec3 &e2, float tmin, float tmax,
-                                     float &result) {
-    const wp::vec3 pvec = wp::cross(d, e2);
-    const float det = wp::dot(e1, pvec);
-    const float scale = wp::sqrt(wp::dot(e1, e1) * wp::dot(e2, e2) * wp::dot(d, d));
-    const float det_eps = 1.0e-7f * scale;
-    result = 0.0f;
-    if (wp::abs(det) > det_eps) {
-        const float inv_det = 1.0f / det;
-        const wp::vec3 tvec = o - a;
-        const float u = wp::dot(tvec, pvec) * inv_det;
-        const wp::vec3 qvec = wp::cross(tvec, e1);
-        const float v = wp::dot(d, qvec) * inv_det;
-        const float t = wp::dot(e2, qvec) * inv_det;
-        result = t;
-        const float slack = 1.0e-6f;
-        return u >= -slack && v >= -slack && u + v <= 1.0f + slack && t >= tmin && t <= tmax;
-    }
-    return false;
 }
 
 template <typename Ray, typename Data>
@@ -272,16 +295,6 @@ CUDA_CALLABLE inline wp::vec2 segment_intersection(const Ray &ray, float minimum
     }
     const float result = store_times ? static_cast<float>(numerator / scale) : 0.f;
     return wp::vec2(result, store_times && !wp::isfinite(result) ? -1.f : 1.f);
-}
-
-template <typename Ray, typename Data>
-CUDA_CALLABLE inline wp::vec2 first_triangle_intersection(const Ray &ray, float minimum,
-                                                          float maximum, const Data &data,
-                                                          int slot) {
-    float t;
-    const bool hit = triangle_t(ray.origin, ray.direction, data.a.data[slot], data.e1.data[slot],
-                                data.e2.data[slot], minimum, maximum, t);
-    return wp::vec2(t, hit ? 1.f : 0.f);
 }
 
 } // namespace bvh

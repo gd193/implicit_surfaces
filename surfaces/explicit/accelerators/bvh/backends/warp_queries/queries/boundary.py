@@ -230,11 +230,17 @@ def _uniform_measure(primitive):
     else:
         @wp.func
         def sample(item: Item, uniforms: wp.vec2):
-            normal = wp.cross(item.e1, item.e2)
+            a, b, c = wp.vec3d(item.a), wp.vec3d(item.b), wp.vec3d(item.c)
+            ab, bc, ca = b - a, c - b, a - c
+            normal = wp.cross(ab, bc)
+            ca2 = wp.dot(ca, ca)
+            if ca2 < wp.dot(ab, ab) and ca2 < wp.dot(bc, bc):
+                normal = wp.cross(bc, ca)
             twice_area = wp.length(normal)
-            root = wp.sqrt(uniforms[0])
-            point = item.a+root*(1.0-uniforms[1])*item.e1+root*uniforms[1]*item.e2
-            return point, normal/twice_area, 2.0/twice_area
+            root, fraction = wp.sqrt(wp.float64(uniforms[0])), wp.float64(uniforms[1])
+            one = wp.float64(1.0)
+            point = (one - root) * a + root * ((one - fraction) * b + fraction * c)
+            return Vec(point), Vec(normal / twice_area), wp.float32(wp.float64(2.0) / twice_area)
     return MeasureOps(sample)
 
 

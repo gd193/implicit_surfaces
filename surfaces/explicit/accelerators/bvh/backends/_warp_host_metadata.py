@@ -4,25 +4,18 @@ from __future__ import annotations
 import numpy as np
 
 
-def triangle_metadata(e1, e2, *, original_facets=None):
-    """Return float32 normals, areas and double areas in input triangle order.
-
-    Packed geometry clamps normal denominators at 1e-30. Indexed boundary
-    geometry supplies float64 source facets: exact source degeneracies are
-    zeroed before measuring, and every positive length normalizes directly.
-    The caller retains responsibility for finite/range validation.
-    """
-    cross = np.cross(np.asarray(e1, np.float32), np.asarray(e2, np.float32))
-    if original_facets is not None:
-        original_cross = np.cross(original_facets[:, 1] - original_facets[:, 0],
-                                  original_facets[:, 2] - original_facets[:, 0])
-        cross[np.all(original_cross == 0.0, axis=1)] = 0.0
+def triangle_metadata(facets):
+    """Measure indexed triangles in float64 before packing boundary metadata."""
+    a, b, c = np.asarray(facets, np.float64).transpose(1, 0, 2)
+    ab, bc, ca = b - a, c - b, a - c
+    # Include the shortest edge to preserve normals when two vertices are close.
+    ab2, bc2, ca2 = (np.einsum("ij,ij->i", edge, edge) for edge in (ab, bc, ca))
+    use_ca = (ca2 < ab2) & (ca2 < bc2)
+    cross = np.cross(ab, bc)
+    cross[use_ca] = np.cross(bc[use_ca], ca[use_ca])
     lengths = np.linalg.norm(cross, axis=1)
     area = 0.5 * lengths
-    if original_facets is None:
-        normal = cross / np.maximum(lengths[:, None], np.float32(1e-30))
-    else:
-        normal = cross / np.where(lengths[:, None] > 0, lengths[:, None], 1.)
+    normal = cross / np.where(lengths[:, None] > 0, lengths[:, None], 1.)
     return normal, area, lengths
 
 
@@ -33,10 +26,8 @@ def triangle_boundary_features(indices):
 
 def triangle_mesh_closed(vertices, faces):
     """Packed-layout closure: source-coordinate degeneracy and edge incidence."""
-    triangles = vertices[faces].astype(np.float64)
-    normals = np.cross(triangles[:, 1] - triangles[:, 0],
-                       triangles[:, 2] - triangles[:, 0])
-    if np.any(np.all(normals == 0, axis=1)):
+    _, _, lengths = triangle_metadata(vertices[faces])
+    if np.any(lengths == 0.0):
         return False
     _, counts = np.unique(triangle_boundary_features(faces), axis=0, return_counts=True)
     return bool(np.all(counts == 2))

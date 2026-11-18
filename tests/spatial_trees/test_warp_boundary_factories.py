@@ -59,7 +59,7 @@ def test_boundary_feature_enclosure_and_leaf_order(dimension):
         assert np.all(points >= np.asarray(tree.node_lower[node]))
         assert np.all(points <= np.asarray(tree.node_upper[node]))
     collapsed = (primitive.indexed([[0., 0], [0., 0]], [[0, 1]]) if dimension == 2 else
-                 primitive.data([[1e8, 1e8, 0], [1, 0, 0], [0, 1, 0]], [[0, 1, 2]]))
+                 primitive.data([[1e8, 1e8, 0], [1, 1, 0], [0, 0, 0]], [[0, 1, 2]]))
     with np.errstate(divide="raise", invalid="raise"):
         with pytest.raises(ValueError, match="non-degenerate"):
             build_boundary(primitive, collapsed)

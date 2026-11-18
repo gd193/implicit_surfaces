@@ -53,6 +53,37 @@ def test_warp_boundary_sample_measure_batching_and_nulls(dimension):
     np.testing.assert_array_equal(rejected[4], 0)
 
 
+def test_warp_triangle_boundary_sample_uses_indexed_vertices():
+    from ._warp_helpers import _build
+
+    vertices = np.array([[-2**25, -2**25, 0], [1, 0, 0], [0, 1, 0]], np.float32)
+    faces = [[0, 1, 2]]
+    primitive = Triangles()
+    tree, geometry, boundary = build_boundary(primitive, primitive.indexed(vertices, faces), Config())
+    metadata = prepare_boundary_sample(tree, boundary)
+    np.testing.assert_array_equal(boundary.core.primitive_normal, [[0, 0, 1]])
+    np.testing.assert_array_equal(boundary.core.primitive_measure, [2**25])
+
+    parameter = np.nextafter(np.float32(1), np.float32(0))
+    randoms = jnp.asarray([.5, parameter, .5], jnp.float32)
+    root = np.sqrt(np.float64(parameter))
+    expected = (1 - root) * vertices[0].astype(np.float64) + root * np.array([.5, .5, 0])
+    query = jnp.zeros(3, jnp.float32)
+    samp = make_boundary_sample(primitive)
+    generic = jax.jit(samp)(tree, geometry, metadata, query, jnp.inf, randoms)
+
+    accel = _build("bvh.snch.warp", vertices, faces)
+    np.testing.assert_array_equal(accel.payload.tri_normal, [[0, 0, 1]])
+    np.testing.assert_array_equal(accel.payload.tri_area, [2**25])
+    np.testing.assert_array_equal(np.abs(np.asarray(accel.payload.silhouette_n0)[:, 2]), 1)
+    snch = jax.jit(accel.sample_boundary)(query, jnp.inf, randoms)
+    for point, normal, pdf, face, status in (generic, snch):
+        np.testing.assert_array_equal(point, expected.astype(np.float32))
+        np.testing.assert_array_equal(normal, [0, 0, 1])
+        np.testing.assert_allclose(pdf, 2.**-25, rtol=1e-7)
+        assert int(face) == 0 and int(status) == 1
+
+
 @wp.func
 def _nonuniform_sample(item: Any, u: wp.vec2):
     edge = item.b-item.a

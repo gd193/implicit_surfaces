@@ -9,6 +9,7 @@ from surfaces.explicit.accelerators.registry import register_backend
 from surfaces.explicit.primitives import Primitives
 
 from ._warp_build import finite_primitive_bounds, validate_warp_mesh_and_config
+from ._warp_host_metadata import triangle_metadata
 from ._warp_layout import empty_warp_payload, make_warp_payload, with_robin_coefficients
 from .sah_warp import BVHSahWarpBackend, _factory_data, _factory_boundary
 from .snch_jax import _build_payload_snch
@@ -46,13 +47,13 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
             return empty_warp_payload()
         used = vertices[faces]
         _reject_nonmanifold(faces)
-        tri_cross = np.cross(used[:, 1] - used[:, 0], used[:, 2] - used[:, 0])
-        if np.any(np.linalg.norm(tri_cross, axis=1) <= 1e-30):
+        normals, _, lengths = triangle_metadata(used)
+        if np.any(lengths <= 1e-30):
             raise ValueError("bvh.snch.warp requires non-degenerate triangles")
 
         lo_np, hi_np = finite_primitive_bounds(primitives)
         tree = _build_payload_snch(
-            lo_np, hi_np, int(config.leaf_size_threshold), faces, vertices)
+            lo_np, hi_np, int(config.leaf_size_threshold), faces, vertices, normals=normals)
         payload, depth = make_warp_payload(
             tree, vertices, faces, snch=tree, mesh_vertices=primitives.mesh.vertices)
         if depth > config.max_stack_depth:

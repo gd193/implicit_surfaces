@@ -17,6 +17,36 @@ def _tree_inputs(tree, geometry, geometry_type, device):
             device_payload(geometry_type, geometry, device)]
 
 
+def _run_selected_neighbors(nearest, knn, tree, geometry, queries, cap):
+    Result = nearest.result_policy.result_type
+    k = knn.k
+    near_fn, knn_fn = nearest.device, knn.device
+    Geometry = nearest.primitive.data_type
+
+    @wp.kernel(module="unique", enable_backward=False)
+    def kernel(tree: DeviceTree, geometry: Geometry, queries: wp.array(dtype=wp.vec3),
+               near_out: wp.array(dtype=Result), near_status: wp.array(dtype=wp.int32),
+               values: wp.array2d(dtype=wp.float32), results: wp.array2d(dtype=Result),
+               counts: wp.array(dtype=wp.int32), statuses: wp.array(dtype=wp.int32)):
+        row = wp.tid()
+        value, status = wp.static(near_fn)(queries[row], wp.static(cap), tree, geometry)
+        near_out[row] = value
+        near_status[row] = status
+        count, status = wp.static(knn_fn)(queries[row], wp.static(cap), tree, geometry, values, results, row)
+        counts[row] = count
+        statuses[row] = status
+
+    device = wp.device_from_jax(jax.devices()[0])
+    n = len(queries)
+    return run_kernel(
+        kernel, n,
+        [*_tree_inputs(tree, geometry, Geometry, device),
+         wp.array(queries, dtype=wp.vec3, device=device)],
+        [(n, Result), (n, int), ((n, k), float), ((n, k), Result), (n, int), (n, int)],
+        queries=(nearest, knn), device=device,
+    )
+
+
 @pytest.mark.parametrize("k", [16, 64, 65])
 def test_id_point_selected_results(k):
     primitive = Points()
@@ -31,33 +61,9 @@ def test_id_point_selected_results(k):
         nearest(tree, geometry, points[:1])
     with pytest.raises(TypeError, match="not callable"):
         knn(tree, geometry, points[:1])
-    near_fn, knn_fn = nearest.device, knn.device
-    Geometry = primitive.data_type
-
-    @wp.kernel(module="unique", enable_backward=False)
-    def kernel(tree: DeviceTree, geometry: Geometry, queries: wp.array(dtype=wp.vec3),
-               near_out: wp.array(dtype=Result), near_status: wp.array(dtype=wp.int32),
-               values: wp.array2d(dtype=wp.float32), results: wp.array2d(dtype=Result),
-               counts: wp.array(dtype=wp.int32), statuses: wp.array(dtype=wp.int32)):
-        row = wp.tid()
-        value, status = wp.static(near_fn)(queries[row], 2.0, tree, geometry)
-        near_out[row] = value
-        near_status[row] = status
-        count, status = wp.static(knn_fn)(queries[row], 2.0, tree, geometry, values, results, row)
-        counts[row] = count
-        statuses[row] = status
-
-    device = wp.device_from_jax(jax.devices()[0])
     q = np.array([[0., 0., 0.], [100., 0., 0.], [np.nan, 0., 0.]], np.float32)
-    n = len(q)
-    near, near_status, values, results, counts, statuses = run_kernel(
-        kernel, n,
-        [*_tree_inputs(tree, geometry, Geometry, device),
-         wp.array(q, dtype=wp.vec3, device=device)],
-        [(n, Result), (n, wp.int32), ((n, k), wp.float32),
-         ((n, k), Result), (n, wp.int32), (n, wp.int32)],
-        queries=(nearest, knn), device=device,
-    )
+    near, near_status, values, results, counts, statuses = _run_selected_neighbors(
+        nearest, knn, tree, geometry, q, cap=2.)
     assert near['id'][0] == 0
     np.testing.assert_array_equal(near['point'][0], points[0])
     np.testing.assert_array_equal(near_status, [1, 0, -1])
@@ -110,31 +116,8 @@ def test_custom_result_uses_original_id_item_and_reported_value():
                            result_policy=policy)
     knn = make_knn(primitive, 3, evaluate=weighted, lower_bound=weighted_bound,
                    result_policy=policy)
-    near_fn, knn_fn = nearest.device, knn.device
-    Geometry = primitive.data_type
-
-    @wp.kernel(module="unique", enable_backward=False)
-    def kernel(tree: DeviceTree, geometry: Geometry, queries: wp.array(dtype=wp.vec3),
-               near: wp.array(dtype=CustomResult), near_status: wp.array(dtype=int),
-               values: wp.array2d(dtype=float), results: wp.array2d(dtype=CustomResult),
-               counts: wp.array(dtype=int), statuses: wp.array(dtype=int)):
-        row = wp.tid()
-        selected, status = wp.static(near_fn)(queries[row], 10.0, tree, geometry)
-        near[row] = selected
-        near_status[row] = status
-        count, status = wp.static(knn_fn)(queries[row], 10.0, tree, geometry, values, results, row)
-        counts[row] = count
-        statuses[row] = status
-
-    device = wp.device_from_jax(jax.devices()[0])
-    near, near_status, values, results, counts, statuses = run_kernel(
-        kernel, 1,
-        [*_tree_inputs(tree, geometry, Geometry, device),
-         wp.array(np.zeros((1, 3), np.float32), dtype=wp.vec3, device=device)],
-        [(1, CustomResult), (1, int), ((1, 3), float),
-         ((1, 3), CustomResult), (1, int), (1, int)],
-        queries=(nearest, knn), device=device,
-    )
+    near, near_status, values, results, counts, statuses = _run_selected_neighbors(
+        nearest, knn, tree, geometry, [[0., 0., 0.]], cap=10.)
     np.testing.assert_array_equal(near_status, [1])
     np.testing.assert_array_equal(counts, [3])
     np.testing.assert_array_equal(statuses, [1])
@@ -146,30 +129,36 @@ def test_custom_result_uses_original_id_item_and_reported_value():
     assert near['original_id'][0] == 0
 
 
+def _selected_nearest(query, tree, geometry, positions):
+    Result = query.result_policy.result_type
+    Geometry = query.primitive.data_type
+    selected = query.device
+
+    @wp.kernel(module="unique", enable_backward=False)
+    def kernel(tree: DeviceTree, geometry: Geometry, positions: wp.array(dtype=wp.vec3),
+               values: wp.array(dtype=Result), statuses: wp.array(dtype=int)):
+        i = wp.tid()
+        value, status = wp.static(selected)(positions[i], 100.0, tree, geometry)
+        values[i] = value
+        statuses[i] = status
+
+    device = wp.device_from_jax(jax.devices()[0])
+    n = len(positions)
+    return run_kernel(kernel, n, [*_tree_inputs(tree, geometry, Geometry, device),
+                                  wp.array(positions, dtype=wp.vec3, device=device)],
+                      [(n, Result), (n, int)], queries=(query,), device=device)
+
+
 def test_external_primitive_id_point_result():
     from tests.typing.warp_api.real_extension import (
-        ExternalArrays, ExternalData, ExternalPoints, external_evaluate, external_bound,
+        ExternalArrays, ExternalPoints, external_evaluate, external_bound,
     )
     primitive = ExternalPoints()
     positions = np.array([[4., 0., 0.], [1., 0., 0.]], np.float32)
     tree, geometry = build_tree(primitive, ExternalArrays(positions))
     query = make_nearest(primitive, evaluate=external_evaluate,
                          lower_bound=external_bound, result_policy=IdPoint())
-    Result = query.result_policy.result_type
-    device_fn = query.device
-
-    @wp.kernel(module="unique", enable_backward=False)
-    def kernel(tree: DeviceTree, geometry: ExternalData,
-               output: wp.array(dtype=Result), status: wp.array(dtype=int)):
-        result, state = wp.static(device_fn)(wp.vec3(0.0), 100.0, tree, geometry)
-        output[0] = result
-        status[0] = state
-
-    device = wp.device_from_jax(jax.devices()[0])
-    output, status = run_kernel(
-        kernel, 1, _tree_inputs(tree, geometry, ExternalData, device),
-        [(1, Result), (1, int)], queries=(query,), device=device,
-    )
+    output, status = _selected_nearest(query, tree, geometry, [[0., 0., 0.]])
     assert int(status[0]) == 1
     assert int(output['id'][0]) == 1
     np.testing.assert_array_equal(output['point'][0], positions[1])
@@ -240,3 +229,38 @@ def test_equal_score_id_order_in_custom_results(k):
     )
     np.testing.assert_array_equal(results['id'][0], np.arange(k))
     np.testing.assert_array_equal(values, 0.)
+
+
+@wp.func
+def invalid_point(query: wp.vec3, item: PointItem3):
+    score = wp.length_sq(query - item.a)
+    point = item.a
+    if item.a[0] == 0.0:
+        point[2] = wp.nan
+    if item.a[0] == 1.0:
+        point[2] = wp.inf
+    return point, score
+
+
+@wp.func
+def lower_bound(query: wp.vec3, lower: wp.vec3, upper: wp.vec3):
+    return 0.0
+
+
+def test_invalid_selected_point_fails_both_nearest_result_paths():
+    primitive = Points()
+    positions = np.array([[0., 0., 0.], [1., 0., 0.], [2., 0., 0.]], np.float32)
+    tree, geometry = build_tree(primitive, primitive.data(positions))
+    nearest = make_nearest(primitive, evaluate=invalid_point, lower_bound=lower_bound)
+    custom = make_nearest(primitive, evaluate=invalid_point, lower_bound=lower_bound,
+                          result_policy=IdPoint())
+    points, scores, ids, statuses = jax.jit(nearest)(tree, geometry, positions)
+    np.testing.assert_array_equal(statuses, [-1, -1, 1])
+    np.testing.assert_array_equal(ids, [-1, -1, 2])
+    np.testing.assert_array_equal(scores, [np.inf, np.inf, 0.])
+    np.testing.assert_array_equal(points, [[0., 0., 0.], [0., 0., 0.], [2., 0., 0.]])
+
+    values, statuses = _selected_nearest(custom, tree, geometry, positions)
+    np.testing.assert_array_equal(statuses, [-1, -1, 1])
+    np.testing.assert_array_equal(values["id"], [0, 0, 2])
+    np.testing.assert_array_equal(values["point"], points)

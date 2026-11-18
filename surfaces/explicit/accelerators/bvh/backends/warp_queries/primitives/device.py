@@ -71,16 +71,18 @@ def item_functions(kind: str, dimension: int, Data: WarpType[DeviceDataT],
         @wp.func
         def load(data: Data, index: int):
             value = Item()
+            ids = load_array(data.indices, index)
             value.a = load_array(data.a, index)
             value.e1 = load_array(data.e1, index)
             value.e2 = load_array(data.e2, index)
+            value.b = load_array(data.vertices, ids[1])
+            value.c = load_array(data.vertices, ids[2])
             return value
 
         @wp.func
         def bounds(item: Item):
-            a = to_vec3(item.a)
-            b, c = item.a + item.e1, item.a + item.e2
-            return wp.min(a, wp.min(b, c)), wp.max(a, wp.max(b, c))
+            return (wp.min(item.a, wp.min(item.b, item.c)),
+                    wp.max(item.a, wp.max(item.b, item.c)))
 
     else:
         raise ValueError(f"unknown builtin primitive {kind!r}")
