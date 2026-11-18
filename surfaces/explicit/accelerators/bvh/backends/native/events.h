@@ -84,17 +84,20 @@ CUDA_CALLABLE inline int triangle_event(const wp::vec3 &p, const wp::array_t<wp:
     return 1;
 }
 
+// A dynamic vector subscript can force the three coordinates into CUDA local memory.
+CUDA_CALLABLE inline float ray_coordinate(const wp::vec3 &v, int axis) {
+    return axis == 0 ? v[0] : axis == 1 ? v[1] : v[2];
+}
+
 template <class Ray>
-CUDA_CALLABLE inline wp::vec2 triangle_crossing(const Ray &ray, float min_t, float max_t, int slot,
-                                                const wp::array_t<wp::vec3> &mesh_vertices,
-                                                const wp::array_t<wp::vec3i> &tri_indices,
-                                                bool half_open, bool store_times) {
+CUDA_CALLABLE inline wp::vec2 triangle_crossing(const Ray &ray, float min_t, float max_t,
+                                                const wp::vec3 &a0, const wp::vec3 &b0,
+                                                const wp::vec3 &c0, bool half_open, bool store_times) {
     const wp::vec3 o = ray.origin, d = ray.direction;
     const float lo_t = min_t, hi_t = max_t;
 
     const int kx = ray.axes[0], ky = ray.axes[1], kz = ray.axes[2];
-    const auto triangle_t = [&](int slot, float &result) {
-        const wp::vec3i ids = tri_indices.data[slot];
+    const auto triangle_t = [&](float &result) {
         // Reuse one predicate at both precisions. -1 asks for the double path.
         const auto solve = [&](auto zero) {
             using S = decltype(zero);
@@ -107,10 +110,10 @@ CUDA_CALLABLE inline wp::vec2 triangle_crossing(const Ray &ray, float min_t, flo
                                                           static_cast<S>(ray.frame_direction[2]);
             constexpr float rounding = 8.0f * 1.1920928955078125e-7f;
             for (int i = 0; i < 3; ++i) {
-                const wp::vec3 v = mesh_vertices.data[ids[i]];
-                const S a = static_cast<S>(v[kx]) - static_cast<S>(ray.frame_origin[0]);
-                const S b = static_cast<S>(v[ky]) - static_cast<S>(ray.frame_origin[1]);
-                z[i] = static_cast<S>(v[kz]) - static_cast<S>(ray.frame_origin[2]);
+                const wp::vec3 v = i == 0 ? a0 : i == 1 ? b0 : c0;
+                const S a = static_cast<S>(ray_coordinate(v, kx)) - static_cast<S>(ray.frame_origin[0]);
+                const S b = static_cast<S>(ray_coordinate(v, ky)) - static_cast<S>(ray.frame_origin[1]);
+                z[i] = static_cast<S>(ray_coordinate(v, kz)) - static_cast<S>(ray.frame_origin[2]);
                 x[i] = a - sx * z[i];
                 y[i] = b - sy * z[i];
                 uncertainty[i] = rounding * wp::max(wp::abs(a) + wp::abs(sx * z[i]),
@@ -167,9 +170,9 @@ CUDA_CALLABLE inline wp::vec2 triangle_crossing(const Ray &ray, float min_t, flo
                     return -1;
             } else {
                 // Recompute from the original plane at ambiguous interval endpoints.
-                const wp::vec3 a = mesh_vertices.data[ids[0]];
-                const wp::vec3 b = mesh_vertices.data[ids[1]];
-                const wp::vec3 c = mesh_vertices.data[ids[2]];
+                const wp::vec3 a = a0;
+                const wp::vec3 b = b0;
+                const wp::vec3 c = c0;
                 S ab[3], ac[3], normal[3];
                 for (int i = 0; i < 3; ++i) {
                     ab[i] = static_cast<S>(b[i]) - static_cast<S>(a[i]);
@@ -204,7 +207,7 @@ CUDA_CALLABLE inline wp::vec2 triangle_crossing(const Ray &ray, float min_t, flo
     };
 
     float t = 0;
-    const int hit = triangle_t(slot, t);
+    const int hit = triangle_t(t);
     return wp::vec2(t, hit < 0 ? -1.f : static_cast<float>(hit));
 }
 
@@ -253,6 +256,18 @@ CUDA_CALLABLE inline bool valid_ray(const Vec &origin, const Vec &direction, flo
     return line ? nonzero : minimum >= 0.f && wp::dot(direction, direction) > 1.e-30f;
 }
 
+CUDA_CALLABLE inline float ray_successor(float t) {
+    // Valid first-hit parameters are finite and nonnegative, including -0.
+    uint32_t bits = 0;
+    if (t != 0.f)
+        memcpy(&bits, &t, sizeof(bits));
+    // Keep a finite incumbent even when the next bit pattern is +infinity.
+    bits = bits < 0x7f7fffffu ? bits + 1u : bits;
+    float result;
+    memcpy(&result, &bits, sizeof(result));
+    return result;
+}
+
 template <class Ray>
 CUDA_CALLABLE inline wp::vec2 ray_box(const Ray &ray, const wp::vec3 &lower, const wp::vec3 &upper,
                                       float minimum, float maximum, int dimension) {
@@ -260,6 +275,49 @@ CUDA_CALLABLE inline wp::vec2 ray_box(const Ray &ray, const wp::vec3 &lower, con
     const bool hit = box_interval(ray.origin, ray.direction, ray.inverse, dimension, ray.fast,
                                   lower, upper, minimum, maximum, enter);
     return wp::vec2(enter, hit ? 1.f : 0.f);
+}
+
+template <class Ray>
+CUDA_CALLABLE inline wp::vec3 first_ray_inverse(const Ray &ray) {
+    if (ray.fast)
+        return ray.inverse;
+    wp::vec3 inverse;
+    for (int axis = 0; axis < 3; ++axis) {
+        const float d = ray.direction[axis];
+        if (d != 0.f && wp::abs(d) < 1.e-20f)
+            return wp::vec3(NAN); // Use the division-based slab test for tiny nonzero directions.
+        inverse[axis] = d == 0.f ? INFINITY : 1.f / d;
+    }
+    return inverse;
+}
+
+template <class Ray>
+CUDA_CALLABLE inline wp::vec2 first_ray_box(const Ray &ray, const wp::vec3 &inverse,
+                                            const wp::vec3 &lower, const wp::vec3 &upper,
+                                            float minimum, float maximum) {
+    if (wp::isnan(inverse[0]))
+        return ray_box(ray, lower, upper, minimum, maximum, 3);
+    float enter = minimum, leave = maximum;
+    for (int axis = 0; axis < 3; ++axis) {
+        const float t0 = (lower[axis] - ray.origin[axis]) * inverse[axis];
+        const float t1 = (upper[axis] - ray.origin[axis]) * inverse[axis];
+        const bool positive = inverse[axis] > 0.f;
+        // Float min/max ignore 0 * infinity on contact with a parallel slab.
+        enter = wp::max(enter, positive ? t0 : t1);
+        leave = wp::min(leave, positive ? t1 : t0);
+    }
+    if (wp::isfinite(enter) && leave > -INFINITY) {
+        // First-hit rays have enter >= 0. For a near miss, enter >= leave;
+        // bound both slab endpoints' rounding by 18 float epsilons on enter.
+        // The unpadded value is used only to order children.
+        constexpr float scale = 1.f - 18.f * 1.1920928955078125e-7f;
+        return wp::vec2(enter, scale * enter - 2.1e-37f <= leave ? 1.f : 0.f);
+    }
+    for (int axis = 0; axis < 3; ++axis)
+        if (ray.direction[axis] == 0.f &&
+            (ray.origin[axis] < lower[axis] || ray.origin[axis] > upper[axis]))
+            return wp::vec2(minimum, 0.f);
+    return wp::vec2(minimum, 1.f);
 }
 
 } // namespace bvh

@@ -71,12 +71,11 @@ def item_functions(kind: str, dimension: int, Data: WarpType[DeviceDataT],
         @wp.func
         def load(data: Data, index: int):
             value = Item()
-            ids = load_array(data.indices, index)
             value.a = load_array(data.a, index)
             value.e1 = load_array(data.e1, index)
             value.e2 = load_array(data.e2, index)
-            value.b = load_array(data.vertices, ids[1])
-            value.c = load_array(data.vertices, ids[2])
+            value.b = load_array(data.b, index)
+            value.c = load_array(data.c, index)
             return value
 
         @wp.func

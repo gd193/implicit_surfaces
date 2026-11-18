@@ -6,6 +6,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
+from ._triangle_frames import TRIANGLE_FRAME_WORDS, pack_triangle_frames
 from ._warp_host_metadata import reduce_nodes, triangle_mesh_closed, triangle_metadata
 
 
@@ -34,6 +35,9 @@ class WarpBVHPayload(NamedTuple):
     silhouette_n0: jnp.ndarray
     silhouette_n1: jnp.ndarray
     # Packed triangles in leaf order.
+    tri_b: jnp.ndarray
+    tri_c: jnp.ndarray
+    tri_frame: jnp.ndarray
     tri_v0: jnp.ndarray
     tri_e1: jnp.ndarray
     tri_e2: jnp.ndarray
@@ -177,10 +181,10 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None, *, mesh_vertices=N
     tree_arrays, depths, postorder = _validate_tree(tree, prim_ids.size)
     if n_nodes != len(tree_arrays["node_left"]):
         raise ValueError("tree bounds and index arrays must have matching node counts")
-    if prim_ids.size and not np.isfinite(vertices[faces[prim_ids]]).all():
+    tris = vertices[faces[prim_ids]]
+    if not np.isfinite(tris).all():
         raise ValueError("packed triangle geometry requires finite referenced vertices")
     if prim_ids.size:
-        tris = vertices[faces[prim_ids]]
         v0 = tris[:, 0]
         e1 = tris[:, 1] - v0
         e2 = tris[:, 2] - v0
@@ -258,6 +262,9 @@ def make_warp_payload(tree, vertices_np, faces_np, snch=None, *, mesh_vertices=N
         silhouette_v1=jnp.asarray(silh_v1),
         silhouette_n0=jnp.asarray(silh_n0),
         silhouette_n1=jnp.asarray(silh_n1),
+        tri_b=jnp.asarray(tris[:, 1]),
+        tri_c=jnp.asarray(tris[:, 2]),
+        tri_frame=jnp.asarray(pack_triangle_frames(tris)),
         tri_v0=jnp.asarray(v0),
         tri_e1=jnp.asarray(e1),
         tri_e2=jnp.asarray(e2),
@@ -299,7 +306,8 @@ def empty_warp_payload():
         silhouette_v1=empty3,
         silhouette_n0=empty3,
         silhouette_n1=empty3,
-        tri_v0=empty3,
+        tri_b=empty3, tri_c=empty3, tri_v0=empty3,
+        tri_frame=jnp.zeros((0, TRIANGLE_FRAME_WORDS), jnp.uint32),
         tri_e1=empty3,
         tri_e2=empty3,
         tri_normal=empty3,

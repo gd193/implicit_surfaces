@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, cast, overload
 
+from ..._triangle_frames import pack_triangle_frames
 from ..contracts import PrimitiveSpec as PrimitiveSpec, WarpFunction, WarpType, as_warp_function
 
 import jax
@@ -53,6 +54,11 @@ class Primitive(Generic[HostDataT, DeviceDataT, ItemT, PointT]):
     prepare_indexed: Callable[[Any, Any], HostDataT] | None = None
     boundary_adapter: "BoundaryAdapter[HostDataT, DeviceDataT, ItemT, PointT, Any, Any, Any, Any, Any] | None" = None
 
+    score_euclidean_at: WarpFunction[[PointT, DeviceDataT, int], wp.float64] | None = None
+    closest_euclidean_at: WarpFunction[[PointT, DeviceDataT, int], PointT] | None = None
+    group_leaves: bool = False
+    cache_nearest_bounds: bool = True
+
     def data(self, *arrays: Any) -> HostDataT:
         if self.prepare_data is None:
             raise TypeError("primitive has no array data constructor")
@@ -99,8 +105,10 @@ def _indexed_data(payload, dimension, width):
                   if width == 3 else (items[:, 0], items[:, 1]))
         if any(not np.isfinite(a).all() for a in arrays):
             raise ValueError("primitive data must be finite float32")
-        return payload(*(jnp.asarray(a) for a in arrays),
-                       jnp.asarray(vertices), jnp.asarray(indices, jnp.int32))
+        fields = (*arrays, vertices, indices.astype(np.int32))
+        if width == 3:
+            fields += (items[:, 1], items[:, 2], pack_triangle_frames(items))
+        return payload(*(jnp.asarray(field) for field in fields))
     return prepare
 
 
@@ -124,7 +132,8 @@ def _segment_pack(data, ids):
 
 
 def _triangle_pack(data, ids):
-    return type(data)(*(a[ids] for a in data[:3]), data.vertices, data.indices[ids])
+    return type(data)(*(a[ids] for a in data[:3]), data.vertices, data.indices[ids],
+                      data.b[ids], data.c[ids], data.frame[ids])
 
 
 @lru_cache(maxsize=None)
@@ -163,7 +172,14 @@ def _primitive(kind, dimension):
     def normal_sides(item: Any):
         return item.a, item.n0, item.n1
 
+    score_at = closest_at = None
     if kind == "triangles":
+        @wp.func_native("return bvh::triangle_score(query, data, slot);")
+        def score_at(query: Vec, data: Data, slot: int) -> wp.float64: ...
+
+        @wp.func_native("return bvh::triangle_closest(query, data, slot);")
+        def closest_at(query: Vec, data: Data, slot: int) -> Vec: ...
+
         @wp.func_native("return bvh::closest_triangle(query, item.a, item.b, item.c);")
         def closest(query: Vec, item: Item) -> Vec: ...
     elif kind == "points":
@@ -181,8 +197,8 @@ def _primitive(kind, dimension):
         @wp.func
         def intersect(ray: Ray, minimum: float, maximum: float,
                       data: Data, slot: int, half_open: bool, store_times: bool):
-            return native_triangle_crossing(ray, minimum, maximum, slot,
-                                            data.vertices, data.indices, half_open, store_times)
+            return native_triangle_crossing(ray, minimum, maximum, data.a[slot],
+                                            data.b[slot], data.c[slot], half_open, store_times)
     elif kind == "segments" and dimension == 2:
         @wp.func_native("return bvh::segment_intersection(ray, minimum, maximum, data, slot, half_open, store_times);")
         def intersect(ray: Ray, minimum: float, maximum: float,
@@ -214,10 +230,13 @@ def _primitive(kind, dimension):
                      load=as_warp_function(load), bounds_of_item=as_warp_function(item_bounds),
                      host_bounds=host_bounds, host_pack=host_pack, item_type=Item,
                      closest_euclidean=as_warp_function(closest),
+                     score_euclidean_at=as_warp_function(score_at) if score_at is not None else None,
+                     closest_euclidean_at=as_warp_function(closest_at) if closest_at is not None else None,
                      intersect=as_warp_function(intersect) if intersect is not None else None,
                      segment_endpoints=as_warp_function(endpoints) if kind != "triangles" else None,
                      normal_sides=as_warp_function(normal_sides) if kind == "silhouette_edges" else None,
-                     point_bounds=kind == "points", name=kind, payload_type=Payload,
+                     point_bounds=kind == "points", group_leaves=kind == "triangles",
+                     cache_nearest_bounds=kind != "triangles", name=kind, payload_type=Payload,
                      prepare_data=prepare_data, prepare_indexed=prepare_indexed,
                      boundary_adapter=boundary_adapter)
 

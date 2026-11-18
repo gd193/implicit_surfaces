@@ -114,8 +114,22 @@ functions, and host bounds/packing. Host bounds use the primitive dimension;
 device bounds use `vec3`, with zero z in 2D. Metrics return `NearestOps`: query type/shape,
 validity, box bound, primitive minimizer, cap/score conversions and culling slack.
 Silhouette metrics also supply an explicit `viewpoint` callback.
-`NearestOps.group_leaves` supplies the default traversal schedule; Euclidean point
-queries use grouped descent. `make_nearest` and `make_knn` expose three independent
+`NearestOps.group_leaves` supplies the default traversal schedule; Euclidean point and
+triangle queries use grouped descent. For Euclidean triangles, nearest recomputes
+deferred bounds and kNN caches them. During host packing, `Triangles.indexed`
+prepares a longest-edge coordinate frame from the original float32 vertices
+using float64 arithmetic. The built-in Euclidean kernels use this frame to
+score candidates and reconstruct closest points only for selected triangles
+when the output requires coordinates. Degenerate frames and near-contact
+cases use the original vertices directly. User-supplied evaluators still
+receive the triangle item.
+
+The two leaf-ordered vertex arrays `b` and `c` occupy 24 bytes per triangle.
+The `frame` array adds 64 bytes per triangle and uses 16 uint32 words to carry
+mixed-precision coefficients even when JAX float64 arrays are disabled.
+Manual `TrianglesArrays3` construction requires these three fields.
+Rebuild from the indexed vertices after changing the mesh coordinates.
+`make_nearest` and `make_knn` expose three independent
 compile-time controls:
 
 - `cache_bounds=True` stores the deferred node's lower-bound score in an eight-byte
@@ -130,8 +144,7 @@ compile-time controls:
 These arguments apply to metrics and user callbacks alike. For example,
 `make_knn(primitive, 16, callbacks, cache_bounds=False, packed_nodes=True,
 group_leaves=False)` recomputes bounds while retaining packed reads and flat
-scheduling. Changing one option leaves the other two alone. Defaults retain the
-previous default kernels. Older `cache_bounds=False` measurements also selected
+scheduling. Changing one option leaves the other two alone. Older `cache_bounds=False` measurements also selected
 indexed access and flat scheduling; reproduce that combination by setting all
 three arguments explicitly. Silhouette queries explicitly use indexed access
 because their feature metadata replaces the leaf ranges.

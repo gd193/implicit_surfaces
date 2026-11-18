@@ -21,7 +21,8 @@ def _factory_data(payload):
 
     primitive = Triangles()
     geometry = primitive.payload_type(payload.tri_v0, payload.tri_e1, payload.tri_e2,
-                                       payload.mesh_vertices, payload.tri_indices)
+                                       payload.mesh_vertices, payload.tri_indices, payload.tri_b, payload.tri_c,
+                                       payload.tri_frame)
     return primitive, TreeData.from_payload(payload), geometry
 
 

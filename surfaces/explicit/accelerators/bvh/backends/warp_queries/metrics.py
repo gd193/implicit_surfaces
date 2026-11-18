@@ -34,6 +34,10 @@ class NearestOps(Generic[QueryT, ItemT, PointT]):
     cull_items: bool = True
     node_filter: WarpFunction[..., bool] | None = None
     group_leaves: bool = False
+    cache_nearest_bounds: bool = True
+    # Slot-based evaluation keeps coordinate reconstruction out of selection.
+    score_at: WarpFunction[[QueryT, Any, int], float] | None = None
+    point_at: WarpFunction[[QueryT, Any, int], PointT] | None = None
 
 
 class NearestPolicy(Protocol[DeviceDataT, ItemT, PointT, QueryT]):
@@ -52,6 +56,10 @@ class NearestPredicate(Protocol[DeviceDataT, ItemT, PointT, QueryT]):
 
 
 MetricSpec = NearestPolicy
+
+
+@wp.func_native("return bvh::conservative_box_score(query, lower, upper);")
+def _conservative_box_score(query: wp.vec3, lower: wp.vec3, upper: wp.vec3) -> float: ...
 
 
 @dataclass(frozen=True)
@@ -101,6 +109,8 @@ class Euclidean:
         if closest_primitive is None:
             raise TypeError("primitive has no Euclidean minimizer")
         Vec, dimension = primitive.point_type, primitive.dimension
+        score_primitive = getattr(primitive, "score_euclidean_at", None)
+        point_primitive = getattr(primitive, "closest_euclidean_at", None)
 
         @wp.func
         def valid(query: Vec):
@@ -142,8 +152,22 @@ class Euclidean:
             else:
                 return query
 
-        return NearestOps(Vec, (dimension,), valid, bound, closest, to_score, to_distance,
-                          cull_limit, viewpoint=viewpoint, group_leaves=getattr(primitive, "point_bounds", False))
+        group_leaves = getattr(primitive, "point_bounds", False) or getattr(primitive, "group_leaves", False)
+        score_at = point_at = None
+        if score_primitive is not None and point_primitive is not None:
+            Geometry = primitive.data_type
+            point_at = point_primitive
+
+            @wp.func
+            def score_at(query: Vec, geometry: Geometry, slot: int):
+                score = wp.float32(wp.static(score_primitive)(query, geometry, slot))
+                return wp.where(score < wp.inf, score, wp.nan)
+
+        node_bound = _conservative_box_score if score_at is not None and dimension == 3 else bound
+        return NearestOps(Vec, (dimension,), valid, node_bound, closest, to_score, to_distance,
+                          cull_limit, viewpoint=viewpoint, group_leaves=group_leaves,
+                          cache_nearest_bounds=getattr(primitive, "cache_nearest_bounds", True),
+                          score_at=score_at, point_at=point_at)
 
 
 @dataclass(frozen=True)
