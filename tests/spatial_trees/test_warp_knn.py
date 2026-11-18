@@ -346,3 +346,18 @@ def test_triangle_adjacent_float32_caps():
     values, status = radius_count(tree, data, queries, caps)
     np.testing.assert_array_equal(values, [0, 1])
     np.testing.assert_array_equal(status, [0, 1])
+
+
+def test_triangle_vertex_score_rounds_once_at_midpoint():
+    # Face 2 has squared distance 1 + 2^-24, which rounds to 1. The tiny
+    # positive z² terms put faces 0 and 1 above that midpoint, tied in float32.
+    corners = np.array([[1., 2.**-12, z] for z in (2.**-50, 2.**-51, 0.)], np.float32)
+    triangles = np.stack([corners, corners + [1, 0, 0], corners + [0, 1, 0]], axis=1)
+    primitive, metric = Triangles(), Euclidean()
+    mesh = primitive.indexed(triangles.reshape(-1, 3), np.arange(9).reshape(3, 3))
+    tree, data = build_tree(primitive, mesh, Config(leaf_size_threshold=1))
+    args = tree, data, np.zeros((2, 3), np.float32), np.array([1., np.inf], np.float32)
+    np.testing.assert_array_equal(make_nearest(primitive, metric)(*args)[2], [2, 2])
+    np.testing.assert_array_equal(make_knn(primitive, 3, metric)(*args)[1],
+                                  [[2, -1, -1], [2, 0, 1]])
+    np.testing.assert_array_equal(make_radius(primitive, metric, mode="count")(*args)[0], [1, 3])
