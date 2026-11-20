@@ -33,10 +33,15 @@ def bind_nearest(primitive, metric):
     return metric.bind(primitive)
 
 
+@wp.func_native("return bvh::conservative_box_score<true>(query, lower, upper);")
+def _triangle_box_score(query: wp.vec3, lower: wp.vec3, upper: wp.vec3) -> float: ...
+
+
 @lru_cache(maxsize=None)
-def nearest_functions(primitive, metric, predicate, Context, State):
+def nearest_functions(primitive, metric, predicate, Context, State, *, fused_triangle=False):
     ops = bind_nearest(primitive, metric)
     accepts = predicate.bind(primitive, ops) if hasattr(predicate, "bind") else predicate
+    node_bound = _triangle_box_score if fused_triangle else ops.node_bound
 
     # Select the callback combination on the host. The resulting device
     # function contains only the calls needed by this particular policy.
@@ -44,13 +49,13 @@ def nearest_functions(primitive, metric, predicate, Context, State):
         @wp.func
         def node_test(ctx: Context, tree: DeviceTree, node: int, lower: wp.vec3,
                       upper: wp.vec3, state: wp.ref[State]):
-            score = wp.static(ops.node_bound)(ctx.query, lower, upper)
+            score = wp.static(node_bound)(ctx.query, lower, upper)
             return score, score <= state.limit
     elif ops.node_filter is not None and ops.node_bound_with_data is None:
         @wp.func
         def node_test(ctx: Context, tree: DeviceTree, node: int, lower: wp.vec3,
                       upper: wp.vec3, state: wp.ref[State]):
-            score = wp.static(ops.node_bound)(ctx.query, lower, upper)
+            score = wp.static(node_bound)(ctx.query, lower, upper)
             eligible = score <= state.limit
             if eligible:
                 eligible = wp.static(ops.node_filter)(ctx.query, tree, ctx.geometry, node)
@@ -59,7 +64,7 @@ def nearest_functions(primitive, metric, predicate, Context, State):
         @wp.func
         def node_test(ctx: Context, tree: DeviceTree, node: int, lower: wp.vec3,
                       upper: wp.vec3, state: wp.ref[State]):
-            score = wp.static(ops.node_bound)(ctx.query, lower, upper)
+            score = wp.static(node_bound)(ctx.query, lower, upper)
             eligible = score <= state.limit
             if eligible:
                 score = wp.static(ops.node_bound_with_data)(ctx.query, tree, ctx.geometry, node)
@@ -69,7 +74,7 @@ def nearest_functions(primitive, metric, predicate, Context, State):
         @wp.func
         def node_test(ctx: Context, tree: DeviceTree, node: int, lower: wp.vec3,
                       upper: wp.vec3, state: wp.ref[State]):
-            score = wp.static(ops.node_bound)(ctx.query, lower, upper)
+            score = wp.static(node_bound)(ctx.query, lower, upper)
             eligible = score <= state.limit
             if eligible:
                 eligible = wp.static(ops.node_filter)(ctx.query, tree, ctx.geometry, node)
@@ -89,6 +94,6 @@ def nearest_functions(primitive, metric, predicate, Context, State):
 
     @wp.func
     def resume(ctx: Context, tree: DeviceTree, node: int, lower: wp.vec3, upper: wp.vec3):
-        return wp.static(ops.node_bound)(ctx.query, lower, upper)
+        return wp.static(node_bound)(ctx.query, lower, upper)
 
     return NearestFunctions(ops, accepts, node_test, bounds, resume)

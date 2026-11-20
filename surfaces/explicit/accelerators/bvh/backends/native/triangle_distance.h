@@ -358,4 +358,166 @@ CUDA_CALLABLE inline wp::vec3 triangle_closest(const wp::vec3 &query, const Data
     return triangle_precise_result<true>(query, data.a.data[slot], data.b.data[slot], data.c.data[slot]);
 }
 
+CUDA_CALLABLE inline float triangle_max_abs(const wp::vec3 &v) {
+    return wp::max(wp::abs(v[0]), wp::max(wp::abs(v[1]), wp::abs(v[2])));
+}
+
+CUDA_CALLABLE inline float triangle_cross_component_fp32(float x, float y, float u, float v) {
+    const float yu = y * u;
+    return fmaf(x, v, -yu) + fmaf(-y, u, yu);
+}
+
+CUDA_CALLABLE inline wp::vec3 triangle_normal_fp32(const wp::vec3 &a, const wp::vec3 &b) {
+    return wp::vec3(triangle_cross_component_fp32(a[1], a[2], b[1], b[2]),
+                    triangle_cross_component_fp32(a[2], a[0], b[2], b[0]),
+                    triangle_cross_component_fp32(a[0], a[1], b[0], b[1]));
+}
+
+CUDA_CALLABLE inline float triangle_plane_dot_fp32(const wp::vec3 &a, const wp::vec3 &b) {
+    const float x = a[0] * b[0], y = a[1] * b[1], z = a[2] * b[2];
+    const auto xy = triangle_float_sum(x, y), sum = triangle_float_sum(xy.hi, z);
+    const float products = fmaf(a[0], b[0], -x) + fmaf(a[1], b[1], -y) + fmaf(a[2], b[2], -z);
+    return sum.hi + (products + (xy.lo + sum.lo));
+}
+
+// When a far query nearly cancels along an edge, retain the FP32 subtraction
+// residual so its projection can still distinguish positions on that edge.
+template <bool Far>
+CUDA_CALLABLE inline float triangle_offset_dot_fp32(const wp::vec3 &p, const wp::vec3 &a,
+                                                   const wp::vec3 &direction) {
+    if constexpr (!Far) return wp::dot(p - a, direction);
+    const auto x = triangle_float_sum(p[0], -a[0]);
+    const auto y = triangle_float_sum(p[1], -a[1]);
+    const auto z = triangle_float_sum(p[2], -a[2]);
+    return triangle_plane_dot_fp32(wp::vec3(x.hi, y.hi, z.hi), direction) +
+           wp::dot(wp::vec3(x.lo, y.lo, z.lo), direction);
+}
+
+template <bool Far>
+CUDA_CALLABLE inline wp::vec3 triangle_segment_fp32(const wp::vec3 &p, const wp::vec3 &a,
+                                                   const wp::vec3 &b, const wp::vec3 &edge,
+                                                   bool reconstruct) {
+    const float from_a = triangle_offset_dot_fp32<Far>(p, a, edge);
+    const float from_b = -triangle_offset_dot_fp32<Far>(p, b, edge);
+    if (from_a <= 0.f) return a;
+    if (from_b <= 0.f) return b;
+    if (reconstruct) {
+        const float extent = from_a + from_b;
+        const wp::vec3 span = b - a;
+        return from_a <= from_b ? a + (from_a / extent) * span : b - (from_b / extent) * span;
+    }
+    const float length2 = wp::dot(edge, edge);
+    if (length2 == 0.f) return a;
+    const wp::vec3 offset = p - (from_a <= from_b ? a : b);
+    const wp::vec3 perpendicular = wp::cross(edge, triangle_normal_fp32(offset, edge));
+    return p - perpendicular * (1.f / length2);
+}
+
+template <bool Far>
+CUDA_CALLABLE inline wp::vec3 triangle_region_fp32(const wp::vec3 &p, const wp::vec3 &a,
+                                                  const wp::vec3 &b, const wp::vec3 &c,
+                                                  wp::vec3 ab, wp::vec3 bc, wp::vec3 ca) {
+    const wp::vec3 pa = p - a, pb = p - b, pc = p - c;
+    const float ab_max = triangle_max_abs(ab), bc_max = triangle_max_abs(bc);
+    const float ca_max = triangle_max_abs(ca);
+    const float max_edge = wp::max(ab_max, wp::max(bc_max, ca_max));
+    if (max_edge == 0.f) return a;
+    // A vertex combination keeps the point on the primitive when subtracting
+    // the perpendicular displacement would cancel most of the query.
+    const bool reconstruct = Far || triangle_max_abs(pa) > 4.f * max_edge;
+    // Keep squared lengths and cross products in range for very small or large edges.
+    if (max_edge < 0x1p-30f || max_edge > 0x1p30f) {
+        const int exponent = int(triangle_vertex_bits(max_edge) >> 23) - 127;
+        const uint32_t scale_bits = uint32_t(127 - wp::clamp(exponent, -126, 126)) << 23;
+        const float inv_scale = triangle_vertex_float(scale_bits);
+        if (!wp::isfinite(max_edge)) {
+            // Scale before subtracting when an edge difference overflows.
+            ab = b * inv_scale - a * inv_scale;
+            bc = c * inv_scale - b * inv_scale;
+            ca = a * inv_scale - c * inv_scale;
+        } else {
+            ab = ab * inv_scale;
+            bc = bc * inv_scale;
+            ca = ca * inv_scale;
+        }
+    }
+    // Include the shortest side to reduce cancellation in needle-like triangles.
+    wp::vec3 n = ca_max < ab_max && ca_max < bc_max ? triangle_normal_fp32(bc, ca)
+                                                   : triangle_normal_fp32(ab, bc);
+    const float normal_max = triangle_max_abs(n);
+    if (normal_max == 0.f) {
+        // A collapsed triangle has the same hull as its longest edge.
+        const float ab2 = wp::dot(ab, ab), bc2 = wp::dot(bc, bc), ca2 = wp::dot(ca, ca);
+        if (ab2 >= bc2 && ab2 >= ca2)
+            return triangle_segment_fp32<Far>(p, a, b, ab, reconstruct);
+        if (bc2 >= ca2)
+            return triangle_segment_fp32<Far>(p, b, c, bc, reconstruct);
+        return triangle_segment_fp32<Far>(p, c, a, ca, reconstruct);
+    }
+    if (normal_max < 0x1p-30f || normal_max > 0x1p30f)
+        n = wp::vec3(n[0] / normal_max, n[1] / normal_max, n[2] / normal_max);
+
+    // Edge half spaces are perpendicular to the triangle plane. Their signs
+    // identify the face region without a dot-product determinant for thin faces.
+    const float side_ab = Far ? triangle_offset_dot_fp32<true>(p, a, triangle_normal_fp32(n, ab))
+                              : wp::dot(wp::cross(ab, pa), n);
+    const float side_bc = Far ? triangle_offset_dot_fp32<true>(p, b, triangle_normal_fp32(n, bc))
+                              : wp::dot(wp::cross(bc, pb), n);
+    const float side_ca = Far ? triangle_offset_dot_fp32<true>(p, c, triangle_normal_fp32(n, ca))
+                              : wp::dot(wp::cross(ca, pc), n);
+    const bool outside_ab = side_ab < 0.f, outside_bc = side_bc < 0.f, outside_ca = side_ca < 0.f;
+    if (!(outside_ab || outside_bc || outside_ca)) {
+        if (reconstruct) {
+            const float sum = (side_bc + side_ca) + side_ab;
+            if (!(sum > 0.f) || !wp::isfinite(sum)) return a;
+            const float b_weight = wp::clamp(side_ca / sum, 0.f, 1.f);
+            const float c_weight = wp::clamp(side_ab / sum, 0.f, 1.f - b_weight);
+            return a + b_weight * (b - a) + c_weight * (c - a);
+        }
+        const float da2 = wp::dot(pa, pa), db2 = wp::dot(pb, pb), dc2 = wp::dot(pc, pc);
+        const wp::vec3 offset = da2 <= db2 && da2 <= dc2 ? pa : db2 <= dc2 ? pb : pc;
+        return p - n * (triangle_plane_dot_fp32(offset, n) / wp::dot(n, n));
+    }
+
+    const float a_ab = triangle_offset_dot_fp32<Far>(p, a, ab);
+    const float b_ab = -triangle_offset_dot_fp32<Far>(p, b, ab);
+    const float b_bc = triangle_offset_dot_fp32<Far>(p, b, bc);
+    const float c_bc = -triangle_offset_dot_fp32<Far>(p, c, bc);
+    const float c_ca = triangle_offset_dot_fp32<Far>(p, c, ca);
+    const float a_ca = -triangle_offset_dot_fp32<Far>(p, a, ca);
+    if (outside_ab && a_ab > 0.f && b_ab > 0.f)
+        return triangle_segment_fp32<Far>(p, a, b, ab, reconstruct);
+    if (outside_bc && b_bc > 0.f && c_bc > 0.f)
+        return triangle_segment_fp32<Far>(p, b, c, bc, reconstruct);
+    if (outside_ca && c_ca > 0.f && a_ca > 0.f)
+        return triangle_segment_fp32<Far>(p, c, a, ca, reconstruct);
+    if (a_ab <= b_ab) {
+        if (a_ca <= c_ca) return a;
+    } else if (b_bc <= c_bc) {
+        return b;
+    }
+    return c;
+}
+
+#if defined(__CUDA_ARCH__)
+__device__ __noinline__
+#else
+inline
+#endif
+wp::vec3 triangle_far_fp32(wp::vec3 p, wp::vec3 a, wp::vec3 b, wp::vec3 c) {
+    return triangle_region_fp32<true>(p, a, b, c, b - a, c - b, a - c);
+}
+
+CUDA_CALLABLE inline wp::vec3 triangle_closest_fp32(const wp::vec3 &p, const wp::vec3 &a,
+                                                    const wp::vec3 &b, const wp::vec3 &c) {
+    const wp::vec3 ab = b - a, bc = c - b, ca = a - c;
+    const float max_edge = wp::max(triangle_max_abs(ab),
+                                  wp::max(triangle_max_abs(bc), triangle_max_abs(ca)));
+    // Beyond this ratio a single FP32 subtraction loses at least nine bits
+    // of resolution relative to an edge. Use compensated region tests there.
+    if (max_edge > 0.f && triangle_max_abs(p - a) > 512.f * max_edge)
+        return triangle_far_fp32(p, a, b, c);
+    return triangle_region_fp32<false>(p, a, b, c, ab, bc, ca);
+}
+
 } // namespace bvh

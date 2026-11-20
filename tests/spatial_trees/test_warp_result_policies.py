@@ -6,7 +6,7 @@ import pytest
 wp = pytest.importorskip("warp")
 
 from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
-    DeviceTree, Euclidean, PointItem3, Points, build_tree,
+    DeviceTree, Euclidean, PointItem3, Points, TriangleItem3, Triangles, build_tree,
     IdPoint, make_knn, make_nearest,
 )
 from tests.spatial_trees._warp_device import device_payload, run_kernel  # noqa: E402
@@ -147,6 +147,32 @@ def _selected_nearest(query, tree, geometry, positions):
     return run_kernel(kernel, n, [*_tree_inputs(tree, geometry, Geometry, device),
                                   wp.array(positions, dtype=wp.vec3, device=device)],
                       [(n, Result), (n, int)], queries=(query,), device=device)
+
+
+def test_triangle_predicate_and_selected_result_use_winning_item():
+    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.results import ResultPolicy
+
+    @wp.func
+    def accept(query: wp.vec3, item: TriangleItem3):
+        return item.e2[1] >= 2.0
+
+    @wp.func
+    def build(query: wp.vec3, item: TriangleItem3, index: int, point: wp.vec3, value: float):
+        return CustomResult(index, point, item.e2[1], value)
+
+    primitive = Triangles()
+    vertices = []
+    for z, height in ((0, 1), (1, 2), (2, 3)):
+        vertices.extend([[0, 0, z], [2, 0, z], [0, height, z]])
+    tree, geometry = build_tree(primitive, primitive.indexed(vertices, np.arange(9).reshape(3, 3)))
+    query = make_nearest(primitive, Euclidean(), predicate=accept,
+                         result_policy=ResultPolicy(CustomResult, build))
+    hit, status = _selected_nearest(query, tree, geometry, [[0.25, 0.25, 0.]])
+    np.testing.assert_array_equal(status, [1])
+    np.testing.assert_array_equal(hit['original_id'], [1])
+    np.testing.assert_array_equal(hit['selected'], [[0.25, 0.25, 1.]])
+    np.testing.assert_array_equal(hit['attribute'], [2.])
+    np.testing.assert_array_equal(hit['value'], [1.])
 
 
 def test_external_primitive_id_point_result():
