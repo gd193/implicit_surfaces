@@ -408,7 +408,7 @@ CUDA_CALLABLE inline wp::vec3 triangle_segment_fp32(const wp::vec3 &p, const wp:
     }
     const float length2 = wp::dot(edge, edge);
     if (length2 == 0.f) return a;
-    const wp::vec3 offset = p - (from_a <= from_b ? a : b);
+    const wp::vec3 offset = from_a <= from_b ? p - a : p - b;
     const wp::vec3 perpendicular = wp::cross(edge, triangle_normal_fp32(offset, edge));
     return p - perpendicular * (1.f / length2);
 }
