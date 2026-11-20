@@ -69,7 +69,7 @@ def test_warp_bvh_closest_point_matches_numpy_oracle(backend_name):
 
 @pytest.mark.parametrize("backend_name", WARP_BVHS, ids=WARP_BVHS)
 def test_warp_bvh_closest_point_equal_distance_tie_across_children(backend_name):
-    # Equal bounds: face 0 in the later child must win.
+    # Equal distances across children permit either face as the minimizer.
     v = np.asarray([[1, 0, 0], [2, 0, 0], [1, 1, 0],
                     [-2, 0, 0], [-1, 0, 0], [-1, 1, 0]], np.float32)
     f = np.asarray([[0, 1, 2], [3, 4, 5]], np.int32)
@@ -92,8 +92,8 @@ def test_warp_bvh_closest_point_equal_distance_tie_across_children(backend_name)
         p, point))
     cp, distance, face_id, status = map(
         np.asarray, query(payload, jnp.asarray(q)))
-    assert int(face_id) == 0 and int(status) == 1
-    np.testing.assert_allclose(cp, [1., .25, 0.], rtol=0, atol=1e-6)
+    assert int(face_id) in (0, 1) and int(status) == 1
+    np.testing.assert_allclose(cp, [1. - 2. * int(face_id), .25, 0.], rtol=0, atol=1e-6)
     np.testing.assert_allclose(distance, np.sqrt(2.), rtol=0, atol=1e-6)
 
 
@@ -128,6 +128,20 @@ def test_warp_triangle_nonaxis_closed_distance_cap(vertices, foot, offset, cap):
     np.testing.assert_array_equal(count, [0, 1, 1])
     np.testing.assert_array_equal(status, [0, 1, 1])
     np.testing.assert_array_equal(distance[:, 0], [np.inf, cap, 0.])
+
+
+@pytest.mark.parametrize(("third", "query_z", "expected_z"), [
+    ([0., 0., 0.], 0., 0.),
+    ([0., 0., 3.], 1., 1.),
+], ids=["collapsed-edge", "face"])
+def test_warp_triangle_far_query_keeps_closest_point_on_triangle(third, query_z, expected_z):
+    vertices = [[-1., -2., 0.], [1., 2., 0.], third]
+    accel = _build("bvh.sah.warp", vertices, [[0, 1, 2]])
+    query = jnp.asarray([2.**56, -2.**55, query_z], jnp.float32)
+    point, distance, face_id, status = map(np.asarray, accel.closest_point_with_status(query))
+    np.testing.assert_allclose(point, [0., 0., expected_z], rtol=0, atol=1e-6)
+    np.testing.assert_allclose(distance, np.sqrt(5.) * 2.**55, rtol=2e-7, atol=0)
+    assert int(face_id) == 0 and int(status) == 1
 
 
 @pytest.mark.parametrize("backend_name", SAH_WARP, ids=SAH_WARP)

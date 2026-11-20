@@ -357,7 +357,12 @@ def test_triangle_vertex_score_rounds_once_at_midpoint():
     mesh = primitive.indexed(triangles.reshape(-1, 3), np.arange(9).reshape(3, 3))
     tree, data = build_tree(primitive, mesh, Config(leaf_size_threshold=1))
     args = tree, data, np.zeros((2, 3), np.float32), np.array([1., np.inf], np.float32)
-    np.testing.assert_array_equal(make_nearest(primitive, metric)(*args)[2], [2, 2])
+    point, distance, ids, status = map(np.asarray, make_nearest(primitive, metric)(*args))
+    # The FP32 nearest kernel can round all three vertex scores to 1.
+    assert np.isin(ids, [0, 1, 2]).all()
+    np.testing.assert_array_equal(point, corners[ids])
+    np.testing.assert_array_equal(distance, [1., 1.])
+    np.testing.assert_array_equal(status, [1, 1])
     np.testing.assert_array_equal(make_knn(primitive, 3, metric)(*args)[1],
                                   [[2, -1, -1], [2, 0, 1]])
     np.testing.assert_array_equal(make_radius(primitive, metric, mode="count")(*args)[0], [1, 3])

@@ -116,13 +116,17 @@ validity, box bound, primitive minimizer, cap/score conversions and culling slac
 Silhouette metrics also supply an explicit `viewpoint` callback.
 `NearestOps.group_leaves` supplies the default traversal schedule; Euclidean point and
 triangle queries use grouped descent. For Euclidean triangles, nearest recomputes
-deferred bounds and kNN caches them. During host packing, `Triangles.indexed`
-prepares a longest-edge coordinate frame from the original float32 vertices
-using float64 arithmetic. The built-in Euclidean kernels use this frame to
-score candidates and reconstruct closest points only for selected triangles
-when the output requires coordinates. Degenerate frames and near-contact
-cases use the original vertices directly. User-supplied evaluators still
-receive the triangle item.
+deferred bounds and kNN caches them. The built-in Euclidean triangle-nearest
+kernel loads the three vertices for each visited candidate, computes its
+bounding box, and projects onto surviving triangles in float32. It keeps the
+closest point with the winning squared distance and original ID. If multiple
+triangles attain the same float32 score, any of them may be returned.
+The nearest query accepts a first hit exactly at its distance cap.
+
+The shared triangle payload also supports kNN and radius queries. Their
+built-in Euclidean scorers use a longest-edge coordinate frame prepared by
+`Triangles.indexed` in float64 and refine degenerate or near-contact cases
+from the original vertices. User-supplied evaluators receive the triangle item.
 
 The two leaf-ordered vertex arrays `b` and `c` occupy 24 bytes per triangle.
 The `frame` array adds 64 bytes per triangle and uses 16 uint32 words to carry
@@ -246,9 +250,10 @@ frame; setup runs once per query.
 The triangle backend silhouette, star-radius, Robin and sampling methods require SNCH.
 Factories also support the indexed 2D boundary path and explicit custom policies.
 Status **1** means a valid result, **0** means a valid
-miss/empty geometry, and **-1** means invalid input or failure. Equal computed
-distances or ray parameters choose the smaller original ID. Closest point
-reports failure when squared distances exceed float32 range.
+miss/empty geometry, and **-1** means invalid input or failure. Closest point
+may return any face tied at the minimum computed distance and reports failure
+when squared distances exceed float32 range. Equal ray parameters and equal
+silhouette distances choose the smaller original ID.
 
 Classification uses orientation-independent even-odd parity on closed indexed
 meshes. Each edge must occur twice; open/nonmanifold edges and degenerate faces
@@ -419,7 +424,7 @@ Both callbacks are required, and neither may be combined with `metric`.
 
 The result retains the normal nearest-query status convention: 1 for a hit,
 0 for a miss or empty geometry, and -1 for invalid input/failure. Misses return
-score infinity and ID -1. Equal computed scores choose the smaller original ID.
+score infinity and ID -1. In callback mode, equal computed scores choose the smaller original ID.
 Negative or NaN caps and nonfinite queries are invalid; an infinite cap is allowed.
 A nearest query also returns status -1 if its selected closest point contains
 NaN or infinity. This applies to custom result policies before their result
