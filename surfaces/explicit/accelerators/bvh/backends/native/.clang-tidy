@@ -1,3 +1,0 @@
-Checks: '-*,clang-analyzer-*,bugprone-*,-bugprone-easily-swappable-parameters'
-WarningsAsErrors: '*'
-HeaderFilterRegex: '.*backends/native/.*'

@@ -6,6 +6,7 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+from importlib.resources import files
 import re
 import shutil
 import subprocess
@@ -17,8 +18,8 @@ import warp as wp
 from scripts.bench.spatial_trees._warp_cases import PRIMITIVES, QueryCase, Scene, arguments, scene
 from scripts.bench.spatial_trees._warp_timing import _array_digest, _make_case, _measure
 from scripts.bench.spatial_trees.warp_query_matrix import ROOT, kernel_inputs
-from surfaces.explicit.accelerators.bvh.warp import build_boundary, build_tree
-from surfaces.explicit.accelerators.protocol import Config
+from sengi.bvh.warp import build_boundary, build_tree
+from sengi.protocol import Config
 
 
 def digest(path):
@@ -119,14 +120,14 @@ def main():
     if previous_report is not None and previous_report.get("reference_fingerprint") != fingerprint:
         parser.error("reference GPU, runtime or timing configuration differs; measure fresh references")
     reference_rows = {} if previous_report is None else {r["case"]: r for r in previous_report["results"]}
-    sources = [*sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends").glob("*warp*.py")),
-             *sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends/warp_queries").rglob("*.py")),
-               *sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends/native").glob("*.h")),
-               ROOT/"surfaces/explicit/accelerators/bvh/backends/sah_jax.py", Path(__file__),
+    sources = [*sorted((files("sengi")/"bvh/backends").glob("*warp*.py")),
+             *sorted((files("sengi")/"bvh/backends/warp_queries").rglob("*.py")),
+               *sorted((files("sengi")/"bvh/backends/native").glob("*.h")),
+               files("sengi")/"bvh/backends/sah_jax.py", Path(__file__),
                *sorted(Path(__file__).parent.glob("_warp*.py")), Path(__file__).with_name("warp_query_matrix.py"),
                Path(__file__).with_name("build_references.py"),
                *sorted(Path(__file__).with_name("references").glob("*"))]
-    sources = {str(p.relative_to(ROOT)): digest(p) for p in sources if p.is_file()}
+    sources = {str(p.relative_to(ROOT) if p.is_relative_to(ROOT) else p): digest(p) for p in sources if p.is_file()}
     report = dict(gpu=device.name, cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES"),
         versions={p: importlib.metadata.version(p) for p in ("warp-lang", "jax", "jaxlib", "numpy")},
         scope="Warmed CUDA graphs, kernel-only events. Build, compile, transfers, dispatch and Slang parameter uploads excluded. Independent trees: SAH except cuBQL 2D spatial median (its SAH supports float3 only). Matching block sizes and inputs. FCPW miss outputs initialized before timing.",

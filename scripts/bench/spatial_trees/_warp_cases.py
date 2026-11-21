@@ -6,8 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 import trimesh
 
-from surfaces.explicit.accelerators.protocol import Config
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.protocol import Config
+from sengi.bvh.warp import (
     Angular, Euclidean, Points, Segments, SilhouetteEdges, Triangles,
     build_boundary, build_tree, make_nearest, make_overlap, make_ray_query,
     make_silhouette, make_star_radius, make_classify, make_boundary_sample,

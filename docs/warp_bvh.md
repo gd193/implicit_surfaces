@@ -9,7 +9,7 @@ arrays and support JIT, nested vmap and direct calls from Warp kernels.
 ## Build and query
 
 ```python
-from surfaces.explicit.accelerators.bvh.warp import Points, Triangles, Euclidean, build_tree, make_nearest
+from sengi.bvh.warp import Points, Triangles, Euclidean, build_tree, make_nearest
 
 primitive = Points(3)
 source = primitive.data(coordinates)
@@ -49,10 +49,10 @@ The removed query registrations are `bvh.lbvh.jax`, `bvh.sah.jax`,
 available independently of query discovery:
 
 ```python
-from surfaces.explicit.accelerators import Config
-from surfaces.explicit.accelerators.bvh import build_lbvh, build_sah, build_snch
-from surfaces.explicit.accelerators.kd import build_left_balanced, build_sah as build_kd_sah
-from surfaces.explicit.accelerators.octree import build_morton_explicit
+from sengi import Config
+from sengi.bvh import build_lbvh, build_sah, build_snch
+from sengi.kd import build_left_balanced, build_sah as build_kd_sah
+from sengi.octree import build_morton_explicit
 
 payload = build_lbvh(primitives, Config(leaf_size_threshold=8))
 ```
@@ -70,11 +70,14 @@ cleanup.
 
 ## Setup
 
-Install alongside JAX, NumPy and trimesh:
+Create the geometry environment from the lab conda channel and conda-forge:
 
 ```sh
-python -m pip install -r requirements-warp.txt
+mamba env create -f environment-warp.yml
+mamba activate implicit-surfaces-warp
 ```
+
+Outside the lab, build the pinned [Sengi package](https://github.com/gd193/sengi/tree/56d0256f6dac1a297527dabbf18fc53cca15f348) using its conda recipe and replace the lab channel in `environment-warp.yml` with the resulting local channel URL.
 
 Validated with JAX/JAXLIB 0.10.2 and Warp 1.18.0. Warp is optional; imports
 and backend discovery do not initialize CUDA. Set `CUDA_VISIBLE_DEVICES`
@@ -88,8 +91,8 @@ import jax
 import jax.numpy as jnp
 
 from surfaces.base import TriMesh
-from surfaces.explicit.primitives import TriMeshPrimitives
-from surfaces.explicit.accelerators import BVHAccelerator, Config
+from sengi.primitives import TriMeshPrimitives
+from sengi import BVHAccelerator, Config
 
 primitives = TriMeshPrimitives(TriMesh(
     vertices=jnp.asarray(vertices, dtype=jnp.float32),
@@ -120,7 +123,7 @@ such as `tree.closest_point(points)` are also available.
 Select primitives and metrics with ordinary Python arguments before JAX tracing:
 
 ```python
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     Segments, Euclidean, build_tree, make_nearest, make_ray_query,
 )
 
@@ -221,7 +224,7 @@ first/any queries that need face exclusion. Count/all always support exclusion.
 Boundary queries use indexed segments in 2D or indexed triangles in 3D:
 
 ```python
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     Segments, build_boundary, make_classify, make_silhouette,
     prepare_boundary_sample, make_boundary_sample, prepare_robin, make_robin_radius,
 )
@@ -345,7 +348,7 @@ threshold; retained leaves can exceed it. Tree depth must fit
 automatic differentiation are not supported.
 
 Warp's built-in `wp.jax_kernel` handles FFI, compilation and ownership. The
-[batching adapter](../surfaces/explicit/accelerators/bvh/backends/warp_queries/ffi.py)
+batching adapter (installed at `sengi/bvh/backends/warp_queries/ffi.py`)
 flattens query axes without tiling geometry. Factories bind typed geometry and optional metadata through the same adapter;
 existing triangle backend methods delegate to them. SNCH cones enclose whole edges.
 Packed float4 nodes hold bounds and topology for cached nearest, ray, overlap and
@@ -356,9 +359,9 @@ indices/tags and recompute bounds on pop. FFI arrays are contiguous.
 Rebuild the tree when changing bounds or topology.
 
 Adapted ray helpers retain Warp's
-[Apache-2.0 license](../surfaces/explicit/accelerators/bvh/backends/licenses/warp-LICENSE.txt).
+Apache-2.0 license (installed at `sengi/bvh/backends/licenses/warp-LICENSE.txt`).
 
-Native C++ lives in [headers](../surfaces/explicit/accelerators/bvh/backends/native/query.h);
+Native C++ lives in headers (installed at `sengi/bvh/backends/native/query.h`);
 Python keeps typed one-line bindings. The query factory attaches include paths
 and every header as a Warp build dependency. Header edits trigger recompilation
 in a new process; reapply module options when editing within a running process.
@@ -367,7 +370,7 @@ Primitive, dimension and metric specialization still happens during JIT compilat
 Format and lint the headers with their local Clang configurations:
 
 ```sh
-native_dir=surfaces/explicit/accelerators/bvh/backends/native
+native_dir=$(python -c "from importlib.resources import files; print(files('sengi') / 'bvh/backends/native')")
 warp_native=$(python -c 'from pathlib import Path; import warp; print(Path(warp.__file__).parent / "native")')
 clang-format --dry-run --Werror "$native_dir"/*.h
 clang-tidy "$native_dir/query.h" -- -x c++ -std=c++17 \
@@ -508,7 +511,7 @@ import jax.numpy as jnp
 import numpy as np
 import warp as wp
 
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     NearestCallbacks, Points, PrimitiveSpec, WarpFunction, WarpType,
     build_tree, make_nearest, warp_func, warp_struct,
 )
@@ -670,7 +673,7 @@ vectors; adding them back to `a` can round away part of a vertex coordinate.
 For example, this evaluator compiles with `Points(3)`:
 
 ```python
-from surfaces.explicit.accelerators.bvh.warp import PointItem3, NearestCallbacks, warp_func
+from sengi.bvh.warp import PointItem3, NearestCallbacks, warp_func
 
 @warp_func
 def constant_score(query: wp.vec3, item: PointItem3) -> tuple[wp.vec3, float]:
@@ -726,7 +729,7 @@ this runs the external struct-state ray policy through the public API:
 ```python
 import jax
 import jax.numpy as jnp
-from surfaces.explicit.accelerators.bvh.warp import RayOps, build_tree, make_ray_query
+from sengi.bvh.warp import RayOps, build_tree, make_ray_query
 from tests.typing.warp_api.real_extension import ExternalArrays, ExternalPoints
 from tests.typing.warp_api.query_extension import Cursor, next_hit
 
@@ -767,7 +770,7 @@ primitives; each primitive contributes at most one candidate.
 ```python
 import jax
 import jax.numpy as jnp
-from surfaces.explicit.accelerators.bvh.warp import Points, Euclidean, build_tree, make_knn
+from sengi.bvh.warp import Points, Euclidean, build_tree, make_knn
 
 primitive = Points(2)
 tree, geometry = build_tree(primitive, primitive.data([[0., 0.], [2., 0.], [-2., 0.]]))
@@ -940,7 +943,7 @@ This complete example consumes a nearest result inside the caller's kernel:
 ```python
 import numpy as np
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     DeviceTree, Euclidean, Points, build_tree, configure_query_kernel, make_nearest,
 )
 
@@ -1044,7 +1047,7 @@ Status is `1` for matches, `0` for none, and `-1` for failure. Failed queries
 return zero. Counts use int32 and report failure rather than wrap on overflow.
 
 ```python
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     Points, Euclidean, build_tree, make_radius,
 )
 
@@ -1114,7 +1117,7 @@ compiling caller-owned kernels, just like the other device-callable queries.
 intersection, pair a primitive with a `RegionIntersectionPolicy`:
 
 ```python
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     Points, build_tree, make_region, point_region_policy,
 )
 
@@ -1179,7 +1182,7 @@ does. Callbacks must therefore be deterministic and must not modify geometry.
 
 ```python
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     PointItem3, Points, Euclidean, ResultPolicy, make_knn, warp_func, warp_struct,
 )
 

@@ -3,7 +3,7 @@
 A `SpatialTree` is the full node graph produced by an `ImplicitTree`
 builder when invoked via `build_with_topology`. It captures every node
 visited during subdivision (root + internals + leaves) so that downstream
-consumers — chiefly mesh accelerators (`surfaces.explicit.accelerators`)
+consumers — chiefly mesh accelerators (`sengi`)
 — can reuse the partition without rebuilding.
 
 Distinct from `meshExtractor.base.Leaves`, which is the surviving

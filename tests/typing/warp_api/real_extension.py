@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, NamedTuple, Protocol
 import jax
 import numpy as np
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import PointItem3, WarpFunction, WarpType, warp_func, warp_struct
+from sengi.bvh.warp import PointItem3, WarpFunction, WarpType, warp_func, warp_struct
 from tests.typing.warp_api.native_math import squared_distance
 
 class VectorArray(Protocol):

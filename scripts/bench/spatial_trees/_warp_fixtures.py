@@ -6,7 +6,7 @@ import numpy as np
 import trimesh
 
 from surfaces.base import TriMesh
-from surfaces.explicit.primitives import TriMeshPrimitives
+from sengi.primitives import TriMeshPrimitives
 
 
 def _mesh(subdivisions=3, shape="sphere"):

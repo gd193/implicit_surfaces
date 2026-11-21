@@ -1,6 +1,6 @@
 """All query families retain concrete third-party callback and payload types."""
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     ClassificationOps, MeasureOps, RayOps, RegionOps,
     make_boundary_sample, make_classify, make_overlap, make_ray_query,
 )
@@ -9,7 +9,7 @@ from tests.typing.warp_api.query_extension import (
     Cursor, ExternalMetadata, ExternalRobinMetric, MetadataArrays, classification_event, intersect, metadata_valid,
     next_hit, region_contains, region_overlaps, region_valid, sample,
 )
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     BoundaryCore, SilhouetteMeta, RobinOps, make_robin_radius,
 )
 from tests.typing.warp_api.query_extension import (
@@ -17,13 +17,13 @@ from tests.typing.warp_api.query_extension import (
     robin_valid, score_to_radius,
 )
 import jax
-from surfaces.explicit.accelerators.bvh.warp import SamplingData
-from surfaces.explicit.accelerators.bvh.warp import make_silhouette, make_star_radius, NearestCallbacks
+from sengi.bvh.warp import SamplingData
+from sengi.bvh.warp import make_silhouette, make_star_radius, NearestCallbacks
 from tests.typing.warp_api.query_extension import external_adapter, FeatureArrays
 from tests.typing.warp_api.real_extension import external_bound, external_evaluate
-from surfaces.explicit.accelerators.bvh.warp import Points, PointsData3
+from sengi.bvh.warp import Points, PointsData3
 from tests.typing.warp_api.query_extension import builtin_intersect
-from surfaces.explicit.accelerators.bvh.warp import BoundaryCoreData, SilhouetteData, RobinData, build_boundary
+from sengi.bvh.warp import BoundaryCoreData, SilhouetteData, RobinData, build_boundary
 
 single: RayOps[ExternalData, int] = RayOps(intersect=intersect)
 multiple: RayOps[ExternalData, Cursor] = RayOps(state_type=Cursor, next_hit=next_hit)

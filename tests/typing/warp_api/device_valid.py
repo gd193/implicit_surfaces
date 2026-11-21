@@ -1,7 +1,7 @@
 """Device calls keep query, geometry, metadata and buffer types."""
 from typing import assert_type
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     DeviceArray, DeviceArray2D, DeviceTree, Euclidean, Points, PointsData3,
     Triangles, TrianglesData3, BoundaryCore, SilhouetteMeta, SamplingMeta, CoefficientMeta,
     make_nearest, make_knn, make_ray_query, make_classify, make_boundary_sample,

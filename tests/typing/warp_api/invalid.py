@@ -1,6 +1,6 @@
 """Each marked line must produce a real diagnostic; no ignore comments."""
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     NearestCallbacks, NearestPolicy, Points, PrimitiveSpec, make_nearest, warp_func,
 )
 from tests.typing.warp_api.valid import Device, Host, Item, OtherItem, evaluate, lower_bound

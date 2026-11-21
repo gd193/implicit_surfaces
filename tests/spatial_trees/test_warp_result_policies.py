@@ -7,7 +7,7 @@ import pytest
 
 wp = pytest.importorskip("warp")
 
-from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
+from sengi.bvh.warp import (  # noqa: E402
     DeviceTree, Euclidean, PointItem3, Points, TriangleItem3, Triangles, build_tree,
     IdPoint, make_knn, make_nearest,
 )
@@ -109,7 +109,7 @@ def weighted_bound(query: wp.vec3, lower: wp.vec3, upper: wp.vec3):
 
 
 def test_custom_result_uses_original_id_item_and_reported_value():
-    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.results import ResultPolicy
+    from sengi.bvh.backends.warp_queries.queries.results import ResultPolicy
     primitive = Points()
     points = np.array([[2., 0., 0.], [0., 1., 0.], [3., 0., 0.]], np.float32)
     tree, geometry = build_tree(primitive, primitive.data(points))
@@ -152,7 +152,7 @@ def _selected_nearest(query, tree, geometry, positions):
 
 
 def test_triangle_predicate_and_selected_result_use_winning_item():
-    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.results import ResultPolicy
+    from sengi.bvh.backends.warp_queries.queries.results import ResultPolicy
 
     @wp.func
     def accept(query: wp.vec3, item: TriangleItem3):

@@ -1,7 +1,7 @@
 """Exact diagnostics prove query callback and payload links are enforced."""
 import jax
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     ClassificationOps, MeasureOps, Ray, RayOps, RegionOps, warp_func,
     make_overlap, make_ray_query,
 )
@@ -10,14 +10,14 @@ from tests.typing.warp_api.query_extension import (
     Cursor, ExternalMetadata, classification_event, intersect, metadata_valid,
     region_overlaps, region_valid,
 )
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     BoundaryCore, SilhouetteMeta, RobinOps, make_boundary_sample, make_classify,
     make_robin_radius,
 )
 from tests.typing.warp_api.query_extension import robin_valid, robin_node, robin_feature
-from surfaces.explicit.accelerators.bvh.warp import Points, PointsData3
+from sengi.bvh.warp import Points, PointsData3
 from tests.typing.warp_api.query_extension import builtin_intersect
-from surfaces.explicit.accelerators.bvh.warp import Primitive, DeviceTree, CoefficientMeta
+from sengi.bvh.warp import Primitive, DeviceTree, CoefficientMeta
 from tests.typing.warp_api.real_extension import ExternalArrays, external_load, external_bounds
 
 class OtherData: ...
@@ -98,7 +98,7 @@ def more_payloads(tree: object, array: jax.Array, wrong: OtherData) -> None:
     sample_query = make_boundary_sample(ExternalPoints(), measure, region)
     classify_query = make_classify(ExternalPoints(), classification)
     robin_query = make_robin_radius(ExternalPoints(), robin)
-    from surfaces.explicit.accelerators.bvh.warp import SamplingData, RobinData, CoefficientData, BoundaryCoreData, SilhouetteData
+    from sengi.bvh.warp import SamplingData, RobinData, CoefficientData, BoundaryCoreData, SilhouetteData
     sampling = SamplingData(array, array)
     sample_query(tree, wrong, sampling, array, 1.0, array)  # expect: reportArgumentType
     classify_query(tree, wrong, ExternalMetadata(), array)  # expect: reportArgumentType
@@ -146,5 +146,5 @@ def feature_payloads(tree: object, array: jax.Array, wrong: OtherData,
 
 def wrong_robin_host_metadata(tree: object, geometry: ExternalArrays, array: jax.Array) -> None:
     from tests.typing.warp_api.query_valid import robin_query
-    from surfaces.explicit.accelerators.bvh.warp import RobinData, CoefficientData
+    from sengi.bvh.warp import RobinData, CoefficientData
     robin_query(tree, geometry, RobinData(OtherMetadata(), OtherMetadata(), CoefficientData(array, array)), array)  # expect: reportArgumentType

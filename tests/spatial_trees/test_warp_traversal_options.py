@@ -6,11 +6,11 @@ import numpy as np
 import pytest
 
 wp = pytest.importorskip("warp")
-from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
+from sengi.bvh.warp import (  # noqa: E402
     Euclidean, NearestCallbacks, PointItem3, Points, Segments, build_tree,
     make_knn, make_nearest,
 )
-from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
+from sengi.protocol import Config  # noqa: E402
 from tests.spatial_trees.test_warp_knn import reference  # noqa: E402
 
 OPTIONS = list(product((False, True), repeat=3))
@@ -84,8 +84,8 @@ def test_segment_scheduling_override(cached, packed, grouped):
 
 @pytest.mark.parametrize("factory", [make_nearest, make_knn])
 def test_options_forward_independently_and_defaults_share_cache(monkeypatch, factory):
-    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries import knn as _warp_knn
-    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries import nearest as _warp_nearest
+    from sengi.bvh.backends.warp_queries.queries import knn as _warp_knn
+    from sengi.bvh.backends.warp_queries.queries import nearest as _warp_nearest
 
     module = _warp_nearest if factory is make_nearest else _warp_knn
     original = module.make_walk

@@ -9,13 +9,13 @@ wp = pytest.importorskip("warp")
 
 from scripts.bench.spatial_trees._warp_cases import scene  # noqa: E402
 
-from surfaces.explicit.accelerators.bvh.backends._warp_boundary import (  # noqa: E402
+from sengi.bvh.backends._warp_boundary import (  # noqa: E402
     SilhouetteMeta, build_boundary, resolve_boundary_adapter,
 )
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.primitives.builtin import Segments, Triangles  # noqa: E402
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.silhouette import make_silhouette  # noqa: E402
-from surfaces.explicit.accelerators.bvh.backends._warp_tree import DeviceTree  # noqa: E402
-from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
+from sengi.bvh.backends.warp_queries.primitives.builtin import Segments, Triangles  # noqa: E402
+from sengi.bvh.backends.warp_queries.queries.silhouette import make_silhouette  # noqa: E402
+from sengi.bvh.backends._warp_tree import DeviceTree  # noqa: E402
+from sengi.protocol import Config  # noqa: E402
 
 
 @wp.func

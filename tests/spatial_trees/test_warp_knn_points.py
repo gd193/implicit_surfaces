@@ -8,11 +8,11 @@ import numpy as np
 import pytest
 
 wp = pytest.importorskip("warp")
-from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
+from sengi.bvh.warp import (  # noqa: E402
     Euclidean, NearestCallbacks, Points, Segments, Triangles, build_tree,
     make_knn, make_nearest,
 )
-from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
+from sengi.protocol import Config  # noqa: E402
 from tests.spatial_trees.test_warp_factories import (  # noqa: E402
     Balls, BallArrays, ball_evaluate, ball_lower_bound, weighted_callbacks,
 )

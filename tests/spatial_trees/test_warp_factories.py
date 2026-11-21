@@ -10,10 +10,10 @@ import pytest
 
 wp = pytest.importorskip("warp")
 
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.domain import Ray  # noqa: E402
-from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
+from sengi.bvh.backends.warp_queries.domain import Ray  # noqa: E402
+from sengi.protocol import Config  # noqa: E402
 
-from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
+from sengi.bvh.warp import (  # noqa: E402
     Angular, Euclidean, Points, Segments, Silhouette, SilhouetteEdges, Triangles,
     build_tree, make_nearest, make_ray_query,
 )

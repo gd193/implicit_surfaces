@@ -1,7 +1,7 @@
 """Concrete structural and descriptor extensions agree on the four type axes."""
 from typing import assert_type
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     Euclidean, NearestOps, Primitive, PrimitiveSpec, make_nearest, warp_func,
 )
 from tests.typing.warp_api.valid import Device, Host, Item, callbacks

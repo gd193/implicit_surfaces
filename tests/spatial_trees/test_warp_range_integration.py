@@ -4,10 +4,10 @@ import jax
 import numpy as np
 import pytest
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     DeviceTree, Euclidean, Points, build_tree, make_radius,
 )
-from surfaces.explicit.accelerators.protocol import Config
+from sengi.protocol import Config
 from tests.spatial_trees._warp_device import device_payload, run_kernel
 from tests.typing.warp_api.range_valid import Context, SumState, reduction, traversal
 

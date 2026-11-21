@@ -15,8 +15,8 @@ from scripts.bench.spatial_trees._warp_cases import (  # noqa: E402
 )
 from scripts.bench.spatial_trees.warp_query_matrix import kernel_inputs  # noqa: E402
 from scripts.bench.spatial_trees._warp_timing import _make_case  # noqa: E402
-from surfaces.explicit.accelerators.bvh.warp import build_tree  # noqa: E402
-from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
+from sengi.bvh.warp import build_tree  # noqa: E402
+from sengi.protocol import Config  # noqa: E402
 from ._robin_oracle import brute_robin_radius  # noqa: E402
 
 
@@ -235,13 +235,13 @@ def test_unsupported_builtin_combinations_fail_explicitly():
 
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.id)
 def test_equivalent_static_policies_reuse_kernel(case):
-    from surfaces.explicit.accelerators.bvh.warp import RayOps
+    from sengi.bvh.warp import RayOps
 
-    from surfaces.explicit.accelerators.bvh.warp import (
+    from sengi.bvh.warp import (
         make_nearest, make_ray_query, make_star_radius, make_silhouette, make_classify, make_boundary_sample, make_robin_radius, make_overlap,
     )
-    from surfaces.explicit.accelerators.bvh.backends._warp_boundary import resolve_boundary_adapter
-    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.boundary import _uniform_measure, _euclidean_robin
+    from sengi.bvh.backends._warp_boundary import resolve_boundary_adapter
+    from sengi.bvh.backends.warp_queries.queries.boundary import _uniform_measure, _euclidean_robin
 
     class DelegatingMetric:
         def bind(self, primitive):

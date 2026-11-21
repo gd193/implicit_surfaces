@@ -5,10 +5,10 @@ from functools import lru_cache
 
 import pytest
 
-from surfaces.explicit.accelerators import list_backends, BVHAccelerator
-from surfaces.explicit.accelerators.protocol import Config
-from surfaces.explicit.accelerators.registry import get_backend
-from surfaces.explicit.primitives import Primitives
+from sengi import list_backends, BVHAccelerator
+from sengi.protocol import Config
+from sengi.registry import get_backend
+from sengi.primitives import Primitives
 
 
 _FLAVOR_TO_ACCEL = {

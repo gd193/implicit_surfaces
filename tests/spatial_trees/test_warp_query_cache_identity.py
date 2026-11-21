@@ -6,12 +6,12 @@ import pytest
 
 wp = pytest.importorskip("warp")
 
-from surfaces.explicit.accelerators.bvh.backends._warp_boundary import resolve_boundary_adapter  # noqa: E402
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.boundary import _ball_region, make_boundary_sample, make_robin_radius  # noqa: E402
-from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
+from sengi.bvh.backends._warp_boundary import resolve_boundary_adapter  # noqa: E402
+from sengi.bvh.backends.warp_queries.queries.boundary import _ball_region, make_boundary_sample, make_robin_radius  # noqa: E402
+from sengi.bvh.warp import (  # noqa: E402
     Euclidean, RayOps, Segments, make_ray_query, make_silhouette, make_star_radius,
 )
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.domain import Ray  # noqa: E402
+from sengi.bvh.backends.warp_queries.domain import Ray  # noqa: E402
 
 
 @pytest.mark.parametrize("mode", ["first", "any", "count", "all"])

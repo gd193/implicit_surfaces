@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import warp as wp
 
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     Angular, Euclidean, NearestCallbacks, Points, Primitive,
     as_warp_function, build_tree, make_nearest, warp_func,
 )

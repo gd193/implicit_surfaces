@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import trimesh
 
-from surfaces.explicit.accelerators import BVHAccelerator
+from sengi import BVHAccelerator
 from surfaces.explicit.trimesh import TriMeshSurface
 from ._warp_helpers import WARP_BVHS, _mesh, _build_mesh as _build
 

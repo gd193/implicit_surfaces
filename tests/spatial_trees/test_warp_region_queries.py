@@ -8,11 +8,11 @@ import trimesh
 
 wp = pytest.importorskip("warp")
 
-from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
+from sengi.bvh.warp import (  # noqa: E402
     DeviceTree, PointsData3, Points, Segments, Triangles, build_boundary,
     Euclidean, build_tree, make_knn, make_nearest, make_overlap, make_radius, make_ray_query,
 )
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.region import (  # noqa: E402
+from sengi.bvh.backends.warp_queries.queries.region import (  # noqa: E402
     RegionIntersectionPolicy, make_region, make_region_classify,
     point_region_policy, segment_region_policy, triangle_region_policy,
 )
@@ -106,7 +106,7 @@ def test_triangle_exact_not_just_bounding_box():
 
 @pytest.mark.parametrize("far,near", [(3., -.1), (1.e8, 1.)])
 def test_indexed_triangle_contact_at_original_vertices(far, near):
-    from surfaces.explicit.accelerators.protocol import Config
+    from sengi.protocol import Config
 
     primitive = Triangles()
     offsets = np.array([30., -20., 50., -40., 0., 20.], np.float32)

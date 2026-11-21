@@ -1,7 +1,7 @@
 """Typed traversal references and reductions use the same source on device."""
 from typing import assert_type
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     DeviceTree, Euclidean, PointItem3, Points, PointsData3, RadiusAccumulator,
     WarpRef, make_radius, make_traversal, warp_func, warp_struct,
 )

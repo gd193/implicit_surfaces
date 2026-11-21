@@ -14,7 +14,7 @@ import pytest
 import jax.numpy as jnp
 
 from surfaces.base import TriMesh
-from surfaces.explicit.primitives import TriMeshPrimitives
+from sengi.primitives import TriMeshPrimitives
 
 from ._harness import (parametrize_backends, build_accelerator,
                        DIST_RTOL, DIST_ATOL)

@@ -1,7 +1,7 @@
 """Custom selected structs preserve callback, primitive and output types."""
 from typing import assert_type
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     DeviceArray2D, DeviceTree, Euclidean, IdPoint, IdPointResult, Points,
     PointsData3, ResultPolicy, make_knn, make_nearest, warp_func, warp_struct,
 )

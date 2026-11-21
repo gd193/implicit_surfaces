@@ -3,7 +3,7 @@
 The tiny point policy deliberately has two events per primitive, making it
 possible to test stateful iteration independently of built-in intersections.
 """
-from surfaces.explicit.accelerators.bvh.warp import Ray, warp_func, warp_struct
+from sengi.bvh.warp import Ray, warp_func, warp_struct
 from typing import TYPE_CHECKING, NamedTuple, Protocol, TypeVar
 import jax
 import warp as wp
@@ -11,14 +11,14 @@ from tests.typing.warp_api.real_extension import ExternalData, ExternalItem
 from tests.typing.warp_api.native_math import squared_distance, vector_x
 from dataclasses import dataclass
 import numpy as np
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     BoundaryAdapter, BoundaryCore, BoundaryCoreData, PrimitiveSpec, RobinOps, SilhouetteMeta,
     TreeData, WarpFunction, WarpType,
 )
 from tests.typing.warp_api.real_extension import (
     ExternalArrays, VectorArray, external_bounds,
 )
-from surfaces.explicit.accelerators.bvh.warp import PointsData3
+from sengi.bvh.warp import PointsData3
 
 @warp_struct
 class Cursor:

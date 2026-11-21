@@ -2,7 +2,7 @@
 import numpy as np
 import pytest
 
-from surfaces.explicit.accelerators.bvh.backends._warp_host_metadata import (
+from sengi.bvh.backends._warp_host_metadata import (
     reduce_nodes, triangle_boundary_features, triangle_mesh_closed, triangle_metadata,
 )
 

@@ -1,7 +1,7 @@
 """A third-party extension uses only public contracts and concrete signatures."""
 from typing import Callable, assert_type
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     NearestCallbacks, NearestOps, NearestPolicy, PointItem3, Points, PrimitiveSpec,
     WarpFunction, as_warp_function, make_nearest, warp_func,
 )
