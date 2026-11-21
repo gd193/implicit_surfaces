@@ -1,6 +1,6 @@
 """Reject mode, context, state, primitive and geometry mismatches."""
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     DeviceTree, Euclidean, Points, PointsData3, Triangles, WarpRef, make_radius, warp_struct,
 )
 from tests.typing.warp_api.range_valid import Context, SumState, accumulator, reduction, traversal

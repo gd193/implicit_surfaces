@@ -1,7 +1,7 @@
 """Region factories preserve primitive and host/device metadata types."""
 from typing import assert_type
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     ClassificationOps, DeviceTree, Points, PointsData3, RegionIntersectionPolicy,
     make_region, make_region_classify, point_region_policy, warp_func,
 )

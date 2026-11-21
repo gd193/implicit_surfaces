@@ -1,6 +1,6 @@
 """Reject region callbacks for other primitives and swapped metadata."""
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     DeviceTree, Points, PointsData3, make_region, triangle_region_policy,
 )
 from tests.typing.warp_api.real_extension import ExternalArrays, ExternalData

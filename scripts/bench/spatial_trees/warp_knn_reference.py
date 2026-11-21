@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from importlib.resources import files
 import subprocess
 import numpy as np
 
@@ -65,8 +66,8 @@ def validate(
 
 
 def prepare_ours(data, leaf):
-    from surfaces.explicit.accelerators.bvh.warp import Points, build_tree
-    from surfaces.explicit.accelerators.protocol import Config
+    from sengi.bvh.warp import Points, build_tree
+    from sengi.protocol import Config
 
     primitive = Points(data.shape[1])
     tree, geometry = build_tree(
@@ -97,7 +98,7 @@ def ours(
         raise RuntimeError("CUDA GPU required for benchmark timing")
     import jax.numpy as jnp
     import warp as wp
-    from surfaces.explicit.accelerators.bvh.warp import Euclidean, make_knn
+    from sengi.bvh.warp import Euclidean, make_knn
     from scripts.bench.spatial_trees._warp_timing import _make_case, _measure
 
     primitive, tree, geometry = prepared or prepare_ours(data, leaf)
@@ -248,12 +249,12 @@ def main():
             ["git", "-C", str(repo), "status", "--porcelain"], text=True
         ),
     )
-    backend = repo / "surfaces/explicit/accelerators/bvh/backends"
+    backend = files("sengi") / "bvh/backends"
     for f in [
         *backend.glob("*.py"),
         *(backend / "warp_queries").rglob("*.py"),
         *(backend / "native").glob("*.h"),
-        repo / "surfaces/explicit/accelerators/protocol.py",
+        files("sengi") / "protocol.py",
     ]:
         report["source_sha256"][str(f)] = hashlib.sha256(f.read_bytes()).hexdigest()
     report["device"] = subprocess.check_output(

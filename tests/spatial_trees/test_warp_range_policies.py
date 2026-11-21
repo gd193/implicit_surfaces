@@ -9,14 +9,14 @@ import numpy as np
 import pytest
 import warp as wp
 
-from surfaces.explicit.accelerators.bvh.warp import Points, PointItem3, build_tree
-from surfaces.explicit.accelerators.protocol import Config
-from surfaces.explicit.accelerators.bvh.backends._warp_tree import DeviceTree
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.metrics import Euclidean, NearestCallbacks
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.range import (
+from sengi.bvh.warp import Points, PointItem3, build_tree
+from sengi.protocol import Config
+from sengi.bvh.backends._warp_tree import DeviceTree
+from sengi.bvh.backends.warp_queries.metrics import Euclidean, NearestCallbacks
+from sengi.bvh.backends.warp_queries.queries.range import (
     RadiusAccumulator, make_radius,
 )
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.traversal.policy import (
+from sengi.bvh.backends.warp_queries.traversal.policy import (
     make_traversal, make_traversal_state,
 )
 from tests.spatial_trees._warp_device import device_payload, run_kernel

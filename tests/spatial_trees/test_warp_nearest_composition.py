@@ -7,10 +7,10 @@ import pytest
 
 wp = pytest.importorskip("warp")
 
-from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
+from sengi.bvh.warp import (  # noqa: E402
     Euclidean, Points, TriangleItem3, Triangles, build_tree, make_knn, make_nearest,
 )
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.selection.candidates import (  # noqa: E402
+from sengi.bvh.backends.warp_queries.selection.candidates import (  # noqa: E402
     candidate_functions,
 )
 

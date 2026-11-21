@@ -1,0 +1,12 @@
+name: implicit-surfaces-warp
+channels:
+  - file:///system/user/publicwork/volkmann/conda-channel
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.14
+  - sengi=0.1.0=pyh4616a5c_0
+  - jax=0.10.2
+  - jaxlib=0.10.2
+  - warp-lang=1.18.0
+  - trimesh

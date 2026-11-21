@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from surfaces.explicit.accelerators import get_backend, list_backends
+from sengi import get_backend, list_backends
 
 
 _REMOVED_BACKENDS = (
@@ -38,7 +38,7 @@ def test_only_supported_query_backends_register():
 def test_legacy_builder_modules_do_not_restore_queries(name):
     flavor, algorithm, _ = name.split(".")
     module = importlib.import_module(
-        f"surfaces.explicit.accelerators.{flavor}.backends.{algorithm}_jax")
+        f"sengi.{flavor}.backends.{algorithm}_jax")
     assert callable(module.build)
     for query in _REMOVED_QUERIES:
         assert not hasattr(module, query), f"legacy traversal restored: {name}.{query}"
@@ -77,11 +77,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from surfaces.base import TriMesh
-from surfaces.explicit.primitives import TriMeshPrimitives
-from surfaces.explicit.accelerators import list_backends
-from surfaces.explicit.accelerators.bvh import build_lbvh, build_sah, build_snch
-from surfaces.explicit.accelerators.kd import build_left_balanced, build_sah as build_kd_sah
-from surfaces.explicit.accelerators.octree import build_morton_explicit
+from sengi.primitives import TriMeshPrimitives
+from sengi import list_backends
+from sengi.bvh import build_lbvh, build_sah, build_snch
+from sengi.kd import build_left_balanced, build_sah as build_kd_sah
+from sengi.octree import build_morton_explicit
 
 assert jax.devices()[0].platform == "cpu"
 assert list_backends() == []

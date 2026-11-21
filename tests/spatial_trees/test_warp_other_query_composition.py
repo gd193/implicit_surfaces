@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     RayOps, Segments, build_tree, make_classify, make_overlap, make_ray_query,
 )
 from tests.typing.warp_api.query_extension import Cursor, next_hit

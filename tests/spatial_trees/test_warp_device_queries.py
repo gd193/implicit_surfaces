@@ -7,7 +7,7 @@ import pytest
 wp = pytest.importorskip("warp")
 
 from scripts.bench.spatial_trees._warp_cases import scene  # noqa: E402
-from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
+from sengi.bvh.warp import (  # noqa: E402
     DeviceTree,
     Euclidean,
     PointItem3,

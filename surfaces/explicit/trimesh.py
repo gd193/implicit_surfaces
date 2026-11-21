@@ -8,8 +8,8 @@ import jax.numpy as jnp
 
 from surfaces.base import TriMesh
 from surfaces.explicit.base import ExplicitSurface
-from surfaces.explicit.accelerators.base import MeshAccelerator
-from surfaces.explicit.primitives import TriMeshPrimitives
+from sengi.base import MeshAccelerator
+from sengi.primitives import TriMeshPrimitives
 
 
 class TriMeshSurface(ExplicitSurface):

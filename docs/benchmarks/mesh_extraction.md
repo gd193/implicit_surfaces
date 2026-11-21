@@ -1,6 +1,6 @@
 # JAX mesh extraction
 
-Requires `requirements-warp.txt` (Warp 1.18.0) and CUDA JAX; tested with
+Requires `environment-warp.yml` (Warp 1.18.0) and CUDA JAX; tested with
 JAX/JAXLIB 0.10.2. SciPy and scikit-image are test dependencies.
 
 ```python

@@ -1,6 +1,6 @@
 """Reject host payloads, incorrect geometry and wrong device result buffers."""
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     DeviceArray, DeviceArray2D, DeviceTree, Euclidean, Points, PointsData3,
     Triangles, TrianglesData3, PointsArrays3, BoundaryCore, SilhouetteMeta,
     make_nearest, make_knn, make_ray_query, make_classify, make_star_radius, StarRadiusQuery, TrianglesArrays3, TriangleItem3,

@@ -1,4 +1,4 @@
-from surfaces.explicit.accelerators.bvh.warp import WarpFunction
+from sengi.bvh.warp import WarpFunction
 import warp as wp
 
 squared_distance: WarpFunction[[wp.vec3, wp.vec3], float]

@@ -28,7 +28,7 @@ _HOST_BUILDERS = {
 
 
 def _build_host(flavor, algorithm, primitives):
-    module = import_module(f"surfaces.explicit.accelerators.{flavor}")
+    module = import_module(f"sengi.{flavor}")
     return getattr(module, f"build_{algorithm}")(primitives)
 
 

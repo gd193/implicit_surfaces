@@ -10,7 +10,7 @@ import trimesh
 import jax.numpy as jnp
 
 from surfaces.base import TriMesh
-from surfaces.explicit.primitives import TriMeshPrimitives
+from sengi.primitives import TriMeshPrimitives
 
 
 class TriFixture(NamedTuple):

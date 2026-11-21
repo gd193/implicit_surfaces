@@ -9,13 +9,13 @@ import pytest
 
 wp = pytest.importorskip("warp")
 
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.domain import Ray  # noqa: E402
+from sengi.bvh.backends.warp_queries.domain import Ray  # noqa: E402
 
-from surfaces.explicit.accelerators.bvh.backends._warp_boundary import build_boundary, resolve_boundary_adapter  # noqa: E402
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.domain import ClassificationOps, RayOps  # noqa: E402
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.classification import make_classify  # noqa: E402
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.overlap import make_overlap  # noqa: E402
-from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
+from sengi.bvh.backends._warp_boundary import build_boundary, resolve_boundary_adapter  # noqa: E402
+from sengi.bvh.backends.warp_queries.domain import ClassificationOps, RayOps  # noqa: E402
+from sengi.bvh.backends.warp_queries.queries.classification import make_classify  # noqa: E402
+from sengi.bvh.backends.warp_queries.queries.overlap import make_overlap  # noqa: E402
+from sengi.bvh.warp import (  # noqa: E402
     Points, Segments, Triangles, build_tree, make_ray_query,
 )
 

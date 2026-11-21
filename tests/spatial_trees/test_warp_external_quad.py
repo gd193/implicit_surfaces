@@ -9,10 +9,10 @@ import pytest
 
 wp = pytest.importorskip("warp")
 
-from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
+from sengi.bvh.warp import (  # noqa: E402
     DeviceTree, Euclidean, build_tree, make_nearest, make_ray_query,
 )
-from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
+from sengi.protocol import Config  # noqa: E402
 from ._warp_device import device_payload, run_kernel  # noqa: E402
 
 

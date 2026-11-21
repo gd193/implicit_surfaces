@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     ClassificationOps, MeasureOps, RayOps, RegionOps, build_tree,
     make_boundary_sample, make_classify, make_ray_query,
 )
@@ -86,10 +86,10 @@ def test_external_sample_region_policies_compile_and_fuse():
 
 def test_external_robin_policy_compiles_and_fuses():
     import warp as wp
-    from surfaces.explicit.accelerators.bvh.warp import (
+    from sengi.bvh.warp import (
         BoundaryCore, RobinData, RobinOps, SilhouetteMeta, make_robin_radius,
     )
-    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.boundary import prepare_robin_coefficients
+    from sengi.bvh.backends.warp_queries.queries.boundary import prepare_robin_coefficients
     from tests.typing.warp_api.query_extension import (
         ExternalRobinMetric, radius_to_score, robin_feature, robin_node, robin_primitive,
         robin_valid, score_to_radius,
@@ -122,7 +122,7 @@ def test_external_robin_policy_compiles_and_fuses():
 
 
 def test_external_silhouette_and_star_adapter_compile():
-    from surfaces.explicit.accelerators.bvh.warp import (
+    from sengi.bvh.warp import (
         NearestCallbacks, build_boundary, make_silhouette, make_star_radius,
     )
     from tests.typing.warp_api.query_extension import external_adapter
@@ -145,7 +145,7 @@ def test_external_silhouette_and_star_adapter_compile():
 
 
 def test_builtin_payload_uses_same_external_ray_contract():
-    from surfaces.explicit.accelerators.bvh.warp import Points
+    from sengi.bvh.warp import Points
     from tests.typing.warp_api.query_extension import builtin_intersect
     primitive = Points(3)
     tree, data = build_tree(primitive, primitive.data([[2., 0., 0.]]))
@@ -158,7 +158,7 @@ def test_builtin_payload_uses_same_external_ray_contract():
 
 
 def test_external_overlap_preserves_primitive_aabb_semantics_and_fuses():
-    from surfaces.explicit.accelerators.bvh.warp import make_overlap
+    from sengi.bvh.warp import make_overlap
     primitive, tree, data = _tree()
     hit, status = _fused(make_overlap(primitive), tree, data,
         jnp.array([[-1., -1., -1.], [2., 2., 2.]]),

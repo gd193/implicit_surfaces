@@ -5,6 +5,7 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+from importlib.resources import files
 
 import jax
 import jax.numpy as jnp
@@ -14,7 +15,7 @@ import warp as wp
 from scripts.bench.spatial_trees._warp_cases import CASES, RAYS, arguments, query_factory, scene
 from scripts.bench.spatial_trees._warp_timing import _array_digest, _make_case, _measure
 
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.launch import struct_arrays
+from sengi.bvh.backends.warp_queries.launch import struct_arrays
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -61,12 +62,12 @@ def main():
     if jax.devices()[0].platform != "gpu":
         parser.error("CUDA-event timings require a GPU")
     device = wp.device_from_jax(jax.devices()[0])
-    paths = [*sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends").glob("*warp*.py")),
-             *sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends/warp_queries").rglob("*.py")),
-             *sorted((ROOT/"surfaces/explicit/accelerators/bvh/backends/native").glob("*.h")),
-             ROOT/"surfaces/explicit/accelerators/bvh/backends/sah_jax.py",
+    paths = [*sorted((files("sengi")/"bvh/backends").glob("*warp*.py")),
+             *sorted((files("sengi")/"bvh/backends/warp_queries").rglob("*.py")),
+             *sorted((files("sengi")/"bvh/backends/native").glob("*.h")),
+             files("sengi")/"bvh/backends/sah_jax.py",
              Path(__file__), Path(__file__).with_name("_warp_cases.py"), Path(__file__).with_name("_warp_timing.py")]
-    sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+    sources = {str(p.relative_to(ROOT) if p.is_relative_to(ROOT) else p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
     report = dict(gpu=device.name, cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES"), versions={p: importlib.metadata.version(p) for p in ("warp-lang", "jax", "jaxlib", "numpy", "trimesh")},
                   metric="cuda_event_graph_kernel_ms", launches_per_graph=args.launches, samples=args.repeats, warmup_launches=5,
                   fixture="Random points/segments; subdivided unit square/cube boundaries; Gaussian queries. Caps .75, except unbounded full-boundary sampling.",

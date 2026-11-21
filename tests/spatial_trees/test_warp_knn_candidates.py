@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 wp = pytest.importorskip("warp")
 
-from surfaces.explicit.accelerators.bvh.warp import Euclidean, Points, build_tree, make_knn  # noqa: E402
-from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
+from sengi.bvh.warp import Euclidean, Points, build_tree, make_knn  # noqa: E402
+from sengi.protocol import Config  # noqa: E402
 
 
 @wp.func

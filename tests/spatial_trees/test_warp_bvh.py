@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import trimesh
 
-from surfaces.explicit.accelerators import BVHAccelerator
-from surfaces.explicit.accelerators.protocol import Config
+from sengi import BVHAccelerator
+from sengi.protocol import Config
 
 
 from ._warp_helpers import (WARP_BVHS, SAH_WARP, _mesh, _sphere, _build,
@@ -104,7 +104,7 @@ def test_warp_bvh_closest_point_equal_distance_tie_across_children(backend_name)
      [600000, 800000, 0], [4, -3, 12], 13),
 ], ids=["face", "edge"])
 def test_warp_triangle_nonaxis_closed_distance_cap(vertices, foot, offset, cap):
-    from surfaces.explicit.accelerators.bvh.warp import (
+    from sengi.bvh.warp import (
         Euclidean, Triangles, build_tree, make_knn, make_nearest,
     )
 

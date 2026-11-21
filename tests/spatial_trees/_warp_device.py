@@ -3,7 +3,7 @@
 import numpy as np
 import warp as wp
 
-from surfaces.explicit.accelerators.bvh.warp import configure_query_kernel
+from sengi.bvh.warp import configure_query_kernel
 
 
 def device_payload(schema, host, device):

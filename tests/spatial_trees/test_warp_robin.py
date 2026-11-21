@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import trimesh
 
-from surfaces.explicit.accelerators import BVHAccelerator, list_backends
-from surfaces.explicit.accelerators.protocol import Config
+from sengi import BVHAccelerator, list_backends
+from sengi.protocol import Config
 
 from ._robin_oracle import brute_robin_radius
 from ._warp_helpers import _mesh

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from surfaces.explicit.accelerators.bvh.backends._warp_layout import _validate_tree
+from sengi.bvh.backends._warp_layout import _validate_tree
 
 
 def _tree():
@@ -38,8 +38,8 @@ def test_payload_rejects_cycle_before_postorder_walk():
 ])
 def test_build_rejects_invalid_binary_layout(monkeypatch, field, position, value, error):
     pytest.importorskip("warp")
-    from surfaces.explicit.accelerators.bvh.backends import lbvh_jax
-    from surfaces.explicit.accelerators.bvh.warp import Points, build_tree
+    from sengi.bvh.backends import lbvh_jax
+    from sengi.bvh.warp import Points, build_tree
 
     tree = _tree()
     getattr(tree, field)[position] = value

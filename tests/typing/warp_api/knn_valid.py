@@ -2,7 +2,7 @@
 from typing import assert_type
 import jax
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     Euclidean, NearestCallbacks, NearestPolicy, Points, PrimitiveSpec,
     make_knn, make_nearest, warp_func,
 )

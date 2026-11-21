@@ -1,6 +1,6 @@
 """Custom result queries are device-only and have typed output buffers."""
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     DeviceArray2D, DeviceTree, Euclidean, Points, make_nearest,
 )
 from tests.typing.warp_api.real_extension import ExternalData

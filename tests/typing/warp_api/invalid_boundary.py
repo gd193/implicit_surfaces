@@ -1,7 +1,7 @@
 """Core packing must preserve the adapter's declared host schema."""
 import warp as wp
 
-from surfaces.explicit.accelerators.bvh.warp import BoundaryAdapter, BoundaryCore, BoundaryCoreData, TreeData
+from sengi.bvh.warp import BoundaryAdapter, BoundaryCore, BoundaryCoreData, TreeData
 from tests.typing.warp_api.query_extension import FeatureArrays, FeatureData, MetadataArrays, prepare_core
 from tests.typing.warp_api.real_extension import ExternalArrays, ExternalData, ExternalItem
 

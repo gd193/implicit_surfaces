@@ -2,10 +2,10 @@
 import pytest
 import warp as wp
 
-from surfaces.explicit.accelerators.bvh.backends._warp_tree import DeviceTree
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.io.nodes import node_functions
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.traversal.deferred import deferred_functions
-from surfaces.explicit.accelerators.bvh.backends.warp_queries.traversal.scheduling import make_walk
+from sengi.bvh.backends._warp_tree import DeviceTree
+from sengi.bvh.backends.warp_queries.io.nodes import node_functions
+from sengi.bvh.backends.warp_queries.traversal.deferred import deferred_functions
+from sengi.bvh.backends.warp_queries.traversal.scheduling import make_walk
 
 
 @wp.struct

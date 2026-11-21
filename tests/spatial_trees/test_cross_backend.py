@@ -3,7 +3,7 @@ import jax
 import numpy as np
 import pytest
 
-from surfaces.explicit.accelerators import list_backends
+from sengi import list_backends
 from ._harness import build_accelerator
 
 

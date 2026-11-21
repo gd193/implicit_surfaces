@@ -1,7 +1,7 @@
 """Concrete kNN mismatches must be rejected by the public signatures."""
 import jax
 import warp as wp
-from surfaces.explicit.accelerators.bvh.warp import (
+from sengi.bvh.warp import (
     Euclidean, NearestCallbacks, NearestPolicy, Points, PrimitiveSpec, make_knn, make_nearest, warp_func,
 )
 from tests.typing.warp_api.valid import Device, Host, Item, OtherItem, evaluate, lower_bound

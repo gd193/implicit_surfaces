@@ -4,8 +4,8 @@ import numpy as np
 import trimesh
 
 from surfaces.base import TriMesh
-from surfaces.explicit.accelerators import BVHAccelerator, Config, list_backends
-from surfaces.explicit.primitives import TriMeshPrimitives
+from sengi import BVHAccelerator, Config, list_backends
+from sengi.primitives import TriMeshPrimitives
 
 WARP_BVHS = [n for n in list_backends("bvh", runtime="warp")
              if n in ("bvh.sah.warp", "bvh.snch.warp")]

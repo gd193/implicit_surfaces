@@ -10,6 +10,7 @@ import importlib.metadata
 import json
 import os
 from pathlib import Path
+from importlib.resources import files
 import sys
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -23,8 +24,8 @@ import warp as wp
 
 from scripts.bench.spatial_trees._warp_fixtures import _mesh, _queries
 from scripts.bench.spatial_trees._warp_timing import _array_digest, _make_case, _measure as measure
-from surfaces.explicit.accelerators import BVHAccelerator
-from surfaces.explicit.accelerators.protocol import Config
+from sengi import BVHAccelerator
+from sengi.protocol import Config
 
 _BLOCK_DIMS = {
     "first_hit": 128, "any_hit": 128, "count_hits": 128, "all_hits": 128,
@@ -210,11 +211,11 @@ def _measure(cases, n, device, launches, repeats):
 
 
 def _factory_case(query, primitive, tree, geometry, payload, query_args, n, block_dim):
-    from surfaces.explicit.accelerators.bvh.warp import (
+    from sengi.bvh.warp import (
         Euclidean, make_nearest, make_ray_query, make_classify, make_overlap,
         make_silhouette, make_boundary_sample, make_robin_radius,
     )
-    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.boundary import RobinData
+    from sengi.bvh.backends.warp_queries.queries.boundary import RobinData
 
 
     capacity, metadata = 64, []
@@ -293,11 +294,11 @@ def main():
         parser.error("CUDA-event measurements require a CUDA JAX device")
     wp.init()
     warp_device = wp.device_from_jax(device)
-    backend_dir = ROOT/"surfaces/explicit/accelerators/bvh/backends"
+    backend_dir = files("sengi")/"bvh/backends"
     source_paths = sorted(backend_dir.glob("*warp*.py")) + sorted((backend_dir/"warp_queries").rglob("*.py")) + sorted((backend_dir/"native").glob("*.h"))
     source_paths += [backend_dir/"snch_jax.py", backend_dir/"sah_jax.py", Path(__file__), Path(__file__).with_name("_warp_fixtures.py"), Path(__file__).with_name("_warp_timing.py")]
     source_paths.append(backend_dir.parent/"warp.py")
-    sources = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths}
+    sources = {str(p.relative_to(ROOT) if p.is_relative_to(ROOT) else p): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_paths}
     versions = {name: importlib.metadata.version(name) for name in ("jax", "jaxlib", "warp-lang", "trimesh", "numpy")}
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with jax.default_device(device), args.output.open("a", encoding="utf-8") as output:
@@ -305,7 +306,7 @@ def main():
         tree = BVHAccelerator.build(primitives, args.backend, Config(leaf_size_threshold=args.leaf_size))
         if "robin_radius" in args.queries:
             tree = tree.with_robin_coefficients(args.robin_coefficient)
-        from surfaces.explicit.accelerators.bvh.warp import Triangles
+        from sengi.bvh.warp import Triangles
 
         primitive = Triangles()
         factory_tree, geometry = tree.payload.tree, tree.payload.geometry
