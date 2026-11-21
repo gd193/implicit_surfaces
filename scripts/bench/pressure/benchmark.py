@@ -17,6 +17,7 @@ import importlib.util
 import json
 from pathlib import Path
 import platform
+from dataclasses import dataclass
 import socket
 import sys
 
@@ -26,7 +27,24 @@ import warp as wp
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
-from scripts.bench.spatial_trees._warp_timing import _array_digest, _make_case  # noqa: E402
+
+
+@dataclass
+class TimedGather:
+    implementation: str
+    graph: wp.Graph
+    partial_sums: wp.array
+    samples_ms: list[float]
+
+
+def _array_digest(values):
+    digest = hashlib.sha256()
+    for value in values:
+        array = np.asarray(value)
+        digest.update(str(array.shape).encode())
+        digest.update(array.dtype.str.encode())
+        digest.update(array.tobytes(order="C"))
+    return digest.hexdigest()
 
 
 def _load(path, name):
@@ -54,19 +72,19 @@ def _resident_case(module, name, dtype, regularization, hops, inputs, q, records
     kernel = module._gather_kernel(*args).kernel
     targets = block // partitions if cooperative else block
     n = ((q + targets - 1) // targets) * targets * partitions
-    case = _make_case(str(q), name, kernel, inputs, n, device, block,
-                      ((q if cooperative else q * partitions, 3),))
-    final = case.outputs[0]
+    partial = wp.empty((q if cooperative else q * partitions, 3),
+                       dtype=kernel.adj.args[-1].type.dtype, device=device)
+    final = partial
     reducer = None
     if partitions > 1 and not cooperative:
-        final = wp.empty((q, 3), dtype=case.outputs[0].dtype, device=device)
+        final = wp.empty((q, 3), dtype=partial.dtype, device=device)
         reducer = module._reduce_kernel(dtype, partitions).kernel
 
     def launch():
-        wp.launch(kernel, n, inputs=inputs, outputs=case.outputs,
+        wp.launch(kernel, n, inputs=inputs, outputs=[partial],
                   device=device, block_dim=block)
         if reducer is not None:
-            wp.launch(reducer, q, inputs=case.outputs, outputs=[final], device=device)
+            wp.launch(reducer, q, inputs=[partial], outputs=[final], device=device)
 
     with wp.ScopedDevice(device):
         for _ in range(5):
@@ -74,11 +92,10 @@ def _resident_case(module, name, dtype, regularization, hops, inputs, q, records
         with wp.ScopedCapture(device=device) as capture:
             for _ in range(3):
                 launch()
-        case.graph = capture.graph
-        wp.capture_launch(case.graph)
+        wp.capture_launch(capture.graph)
         wp.synchronize_device(device)
     scratch = q * partitions * 3 * dtype.itemsize if reducer is not None else 0
-    return case, final, partitions, scratch
+    return TimedGather(name, capture.graph, partial, []), final, partitions, scratch
 
 
 def _reference(points, velocities, records, regularization):

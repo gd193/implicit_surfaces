@@ -14,7 +14,7 @@ Generic kNN is implemented and correct on the tested workloads, but does not yet
 NVIDIA A40, float32 points and queries, independent trees. Medians use nine warmed CUDA-graph samples, with 30 launches per sample for small cases and 10 otherwise. Build, compilation, transfers, and host invocation are excluded. Selection, output ordering, ID remapping and stores are included. All paths emit scores, original IDs, counts, and status; external status is synthesized.
 
 Raw JSON samples, settings and provenance are generated artifacts kept outside
-the repository. [Build/run instructions](../../scripts/bench/spatial_trees/references/README.md)
+the repository. [Build/run instructions](https://github.com/gd193/sengi/blob/main/benchmarks/references/README.md)
 describe how to produce these reports; this document retains the results summary.
 
 ## Matched settings
@@ -191,10 +191,10 @@ Upstream pins: cuBQL `d2e62a39b83c1b8ca72c266703fdc0dfdcb67952`, cudaKDTree `37c
 
 ## Reproduction
 
-Build the pinned references using the linked instructions, then run:
+Build the pinned references using the linked instructions. From the Sengi checkout, run:
 
 ```sh
-CUDA_VISIBLE_DEVICES=0 JAX_PLATFORMS=cuda,cpu python -m scripts.bench.spatial_trees.warp_knn_reference \
+CUDA_VISIBLE_DEVICES=0 JAX_PLATFORMS=cuda,cpu python -m benchmarks.warp_knn_reference \
   --binaries "$ART/knn-bin" --output "$ART/medium" \
   --dimensions 2 3 --sizes 16384 --queries 32768 --launches 10 --repeats 9
 ```
@@ -258,7 +258,7 @@ Their before/after checks assess the refactor only. Raw timings, compiler resour
 records, source hashes, test logs, and the frozen baseline remain outside Git under
 `/local00/bioinf/volkmann/warp-composition-jmiq7gho/`.
 
-Reproduce the point comparison with `warp_knn_reference.py`, the pinned binaries,
+Reproduce the point comparison with `python -m benchmarks.warp_knn_reference`, the pinned binaries,
 `--dimensions 3 --sizes 16384 --queries 32768 --k 4 16 64 --launches 10 --repeats 9`.
 For k=128/256 use `--k 128 256 --launches 3 --repeats 7`. Run ours again with
 `--implementations ours --node-access indexed --scheduling grouped` into a separate

@@ -8,9 +8,8 @@ against. Two subhierarchies satisfy it:
     (interval / Lipschitz / autobound / NIQ) provides `empty_sphere`,
     `ray_step`, `classify_box`.
   * `surfaces.explicit.ExplicitSurface` — geometry given as primitives
-    (mesh triangles, point cloud, NURBS, ...). A `MeshAccelerator` (BVH /
-    kd / octree / grid) backs the same query methods via closest-point
-    and ray-triangle intersection.
+    (mesh triangles, point cloud, NURBS, ...). Triangle surfaces bind
+    closest-point and ray-intersection queries to a Sengi BVH.
 
 Both types are interchangeable from a consumer's view. Capability flags
 (class attributes) advertise which optional methods are available;

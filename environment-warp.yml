@@ -5,7 +5,7 @@ channels:
   - nodefaults
 dependencies:
   - python=3.14
-  - sengi=0.1.0=pyh4616a5c_0
+  - sengi=0.2.0
   - jax=0.10.2
   - jaxlib=0.10.2
   - warp-lang=1.18.0
