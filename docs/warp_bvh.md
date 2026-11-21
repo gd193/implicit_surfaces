@@ -17,7 +17,7 @@ mamba env create -f environment-warp.yml
 mamba activate implicit-surfaces-warp
 ```
 
-Outside the lab, build Sengi 0.3.0 using its conda recipe and replace the lab
+Outside the lab, build Sengi 0.3.1 using its conda recipe and replace the lab
 channel in `environment-warp.yml` with the resulting local channel URL.
 [Sengi installation instructions](https://github.com/gd193/sengi#readme)
 
