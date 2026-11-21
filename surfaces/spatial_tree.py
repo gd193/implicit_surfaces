@@ -2,9 +2,8 @@
 
 A `SpatialTree` is the full node graph produced by an `ImplicitTree`
 builder when invoked via `build_with_topology`. It captures every node
-visited during subdivision (root + internals + leaves) so that downstream
-consumers — chiefly mesh accelerators (`sengi`)
-— can reuse the partition without rebuilding.
+visited during subdivision (root + internals + leaves) so that downstream consumers
+can reuse the subdivision topology.
 
 Distinct from `meshExtractor.base.Leaves`, which is the surviving
 frontier only. `SpatialBuildResult` bundles both plus a frontier→node-id
@@ -46,10 +45,8 @@ class SpatialTree(NamedTuple):
 class SpatialBuildResult(NamedTuple):
     """Full output of `ImplicitTree.build_with_topology`.
 
-    `leaves` matches the legacy `build()` return value verbatim so
-    existing extractor code keeps working. `leaf_node_ids` maps each
-    surviving frontier entry to its node id in `tree`, enabling mesh
-    accelerators to attach triangle payloads to the right nodes.
+    `leaves` contains the surviving frontier. `leaf_node_ids` maps each
+    entry to its node in `tree`.
     """
     tree: SpatialTree
     leaves: "Leaves"  # forward ref to meshExtractor.base.Leaves
