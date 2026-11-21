@@ -1,62 +1,79 @@
 """Triangle surfaces with optional vertex-velocity differentiation."""
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
 
 from surfaces.base import TriMesh
 from surfaces.explicit.base import ExplicitSurface
-from sengi.base import MeshAccelerator
-from sengi.primitives import TriMeshPrimitives
+
+if TYPE_CHECKING:
+    from sengi.boundary.data import BoundaryCoreData, BoundaryData, SilhouetteData
+    from sengi.bvh import Index
+    from sengi.primitives.data import TrianglesArrays3
 
 
 class TriMeshSurface(ExplicitSurface):
-    """Triangle surface with even-odd signs on closed meshes."""
+    """Triangle surface with even-odd signs on closed meshes.
+
+    Build the index and prepare its boundary from the same source mesh.
+    """
 
     dim: int = 3
 
     def __init__(self,
                  mesh: TriMesh,
-                 accelerator: MeshAccelerator,
+                 index: Index[Any, TrianglesArrays3],
+                 boundary: BoundaryData[BoundaryCoreData, SilhouetteData],
                  *,
                  vertex_velocity_fn: Optional[Callable[..., Any]] = None):
-        self.mesh = mesh
-        self.accelerator = accelerator
-        self._vertex_velocity_fn = vertex_velocity_fn
+        from sengi import queries
+        from sengi.metrics.nearest import Euclidean
+        from sengi.primitives.triangles import Triangles
 
-        if not isinstance(accelerator.primitives, TriMeshPrimitives):
-            raise TypeError(
-                f"TriMeshSurface requires a triangle-primitive accelerator; "
-                f"got primitives of type {type(accelerator.primitives).__name__}."
-            )
+        if index.spec.primitive is not Triangles():
+            raise TypeError("TriMeshSurface requires an index over Triangles().")
+
+        self.mesh = mesh
+        self.index = index
+        self._vertex_velocity_fn = vertex_velocity_fn
+        self._boundary = boundary
+        self._nearest = queries.nearest.bind(index.spec, Euclidean())
+        self._ray = queries.rays.bind(index.spec, "first")
+        self._overlap = queries.overlap.bind(index.spec)
+        self._classify = queries.classification.bind(index.spec)
+
+        # Boundary normals follow leaf order. Surface methods use source face IDs.
+        normals = boundary.core.primitive_normal
+        self._face_normals = jnp.zeros_like(normals).at[index.data.tree.prim_ids].set(normals)
 
         self.is_differentiable_wrt_params = vertex_velocity_fn is not None
 
     def closest_point(self, params: Any, x: jnp.ndarray
                       ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        return self.accelerator.closest_point(x)
+        return self._nearest(self.index.data, x)[:3]
 
     def first_hit(self, params: Any, ray_origin: jnp.ndarray,
                   ray_direction: jnp.ndarray, max_t: jnp.ndarray
                   ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        return self.accelerator.first_hit(ray_origin, ray_direction, max_t)
+        return self._ray(self.index.data, ray_origin, ray_direction, max_t)[:3]
 
     def _primitive_normal(self, prim_idx: jnp.ndarray) -> jnp.ndarray:
-        return self.accelerator.primitives.primitive_normal(prim_idx)
+        return self._face_normals[prim_idx]
 
     def classify_box(self, params: Any,
                      lower: jnp.ndarray, upper: jnp.ndarray) -> jnp.ndarray:
         """Conservative box sign; 0 means unknown or intersecting."""
-        overlaps = self.accelerator.aabb_overlap(lower, upper)
+        overlaps, status = self._overlap(self.index.data, lower, upper)
         center = 0.5 * (lower + upper)
         sign = self._inside_sign(params, center)
         sign = jnp.where(jnp.isfinite(sign), sign, 0).astype(jnp.int8)
-        return jnp.where(overlaps, jnp.int8(0), sign)
+        return jnp.where(overlaps | (status < 0), jnp.int8(0), sign)
 
     def _inside_sign(self, params: Any, x: jnp.ndarray) -> jnp.ndarray:
-        return self.accelerator.classify_point(x)
+        return self._classify(self.index.data, self._boundary, x)[0]
 
     def surface_velocity_normal(self, params: Any, x: jnp.ndarray,
                                 normal: jnp.ndarray) -> Any:

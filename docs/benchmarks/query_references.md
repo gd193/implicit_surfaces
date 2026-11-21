@@ -4,7 +4,7 @@
 reaches point-nearest parity on all six measured fixtures. NVIDIA A40, GPU 0,
 resident CUDA kernels only. Medians use
 30 launches per graph and 15 samples. Build, JIT, copies and host dispatch are
-excluded. [Harness](../../scripts/bench/spatial_trees/references/README.md),
+excluded. [Harness](https://github.com/gd193/sengi/blob/main/benchmarks/references/README.md),
 [samples, settings and provenance](query_references.json).
 
 Times below are **ours / reference, in µs**. Small: 1,024 primitives and 8,192
