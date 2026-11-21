@@ -24,16 +24,15 @@ def _index_mesh(mesh, builder):
     source = primitive.indexed(model.vertices, model.faces)
     index = bvh.build(primitive, source, builder=builder)
     boundary = bvh.prepare_boundary(index, source, silhouettes=False)
-    return model, index, boundary
+    return model, boundary
 
 
 @pytest.mark.parametrize("builder", ["sah", "lbvh"])
 def test_trimesh_surface_signed_value_and_first_hit(builder):
-    mesh, index, boundary = _index_mesh(
+    mesh, boundary = _index_mesh(
         trimesh.creation.box(extents=[2, 2, 2]), builder
     )
-    surface = TriMeshSurface(mesh, index, boundary)
-    assert surface.index is index
+    surface = TriMeshSurface(mesh, boundary)
     assert surface.has_box_bounds
     lower = jnp.ones(3, jnp.float32) * 0.1
     assert int(surface.classify_box(None, lower, -lower)) == 0
@@ -68,15 +67,15 @@ def test_trimesh_surface_signed_value_and_first_hit(builder):
 @pytest.mark.parametrize("builder", ["sah", "lbvh"])
 def test_surface_normals_and_vertex_velocity_use_original_face_ids(builder):
     mesh = trimesh.creation.icosphere(subdivisions=1)
-    model, index, boundary = _index_mesh(mesh, builder)
-    assert not np.array_equal(index.data.tree.prim_ids, np.arange(len(mesh.faces)))
+    model, boundary = _index_mesh(mesh, builder)
+    assert not np.array_equal(boundary.data.tree.prim_ids, np.arange(len(mesh.faces)))
     weights = np.array([0.2, 0.3, 0.5], np.float32)
     points = jnp.asarray(weights @ mesh.triangles, jnp.float32)
     velocities = (
         np.random.default_rng(81).normal(size=mesh.vertices.shape).astype(np.float32)
     )
     surface = TriMeshSurface(
-        model, index, boundary, vertex_velocity_fn=lambda field, ids: field[ids]
+        model, boundary, vertex_velocity_fn=lambda field, ids: field[ids]
     )
     normals = jax.vmap(surface.normal_at, in_axes=(None, 0))(None, points)
     speeds = jax.vmap(surface.surface_velocity_normal, in_axes=(None, 0, 0))(
@@ -85,3 +84,11 @@ def test_surface_normals_and_vertex_velocity_use_original_face_ids(builder):
     np.testing.assert_allclose(normals, mesh.face_normals, atol=2e-6)
     expected = np.sum((weights @ velocities[mesh.faces]) * mesh.face_normals, axis=1)
     np.testing.assert_allclose(speeds, expected, atol=3e-6)
+
+
+def test_surface_rejects_different_mesh_with_same_array_shapes():
+    mesh, boundary = _index_mesh(trimesh.creation.box(), "sah")
+    for other in (TriMesh(mesh.vertices + 1, mesh.faces),
+                  TriMesh(mesh.vertices, mesh.faces[::-1])):
+        with pytest.raises(ValueError):
+            TriMeshSurface(other, boundary)

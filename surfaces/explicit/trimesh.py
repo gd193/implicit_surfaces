@@ -5,13 +5,13 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from surfaces.base import TriMesh
 from surfaces.explicit.base import ExplicitSurface
 
 if TYPE_CHECKING:
     from sengi.boundary.data import BoundaryCoreData, BoundaryData, SilhouetteData
-    from sengi.bvh import Index
     from sengi.primitives.data import TrianglesArrays3
 
 
@@ -25,40 +25,46 @@ class TriMeshSurface(ExplicitSurface):
 
     def __init__(self,
                  mesh: TriMesh,
-                 index: Index[Any, TrianglesArrays3],
-                 boundary: BoundaryData[BoundaryCoreData, SilhouetteData],
+                 boundary: BoundaryData[TrianglesArrays3, BoundaryCoreData, SilhouetteData],
                  *,
                  vertex_velocity_fn: Optional[Callable[..., Any]] = None):
         from sengi import queries
         from sengi.metrics.nearest import Euclidean
         from sengi.primitives.triangles import Triangles
 
-        if index.spec.primitive is not Triangles():
+        spec = boundary.data.spec
+        if spec.primitive is not Triangles():
             raise TypeError("TriMeshSurface requires an index over Triangles().")
 
+        tree, geometry = boundary.data
+        faces = np.asarray(mesh.faces)
+        if (faces.shape != geometry.indices.shape
+                or not np.array_equal(mesh.vertices, geometry.vertices)
+                or not np.array_equal(faces[np.asarray(tree.prim_ids)], geometry.indices)):
+            raise ValueError("surface mesh does not match the packed triangle index")
+
         self.mesh = mesh
-        self.index = index
         self._vertex_velocity_fn = vertex_velocity_fn
         self._boundary = boundary
-        self._nearest = queries.nearest.bind(index.spec, Euclidean())
-        self._ray = queries.rays.bind(index.spec, "first")
-        self._overlap = queries.overlap.bind(index.spec)
-        self._classify = queries.classification.bind(index.spec)
+        self._nearest = queries.nearest.bind(spec, Euclidean())
+        self._ray = queries.rays.bind(spec, "first")
+        self._overlap = queries.overlap.bind(spec)
+        self._classify = queries.classification.bind(spec)
 
         # Boundary normals follow leaf order. Surface methods use source face IDs.
         normals = boundary.core.primitive_normal
-        self._face_normals = jnp.zeros_like(normals).at[index.data.tree.prim_ids].set(normals)
+        self._face_normals = jnp.zeros_like(normals).at[tree.prim_ids].set(normals)
 
         self.is_differentiable_wrt_params = vertex_velocity_fn is not None
 
     def closest_point(self, params: Any, x: jnp.ndarray
                       ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        return self._nearest(self.index.data, x)[:3]
+        return self._nearest(self._boundary.data, x)[:3]
 
     def first_hit(self, params: Any, ray_origin: jnp.ndarray,
                   ray_direction: jnp.ndarray, max_t: jnp.ndarray
                   ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-        return self._ray(self.index.data, ray_origin, ray_direction, max_t)[:3]
+        return self._ray(self._boundary.data, ray_origin, ray_direction, max_t)[:3]
 
     def _primitive_normal(self, prim_idx: jnp.ndarray) -> jnp.ndarray:
         return self._face_normals[prim_idx]
@@ -66,14 +72,14 @@ class TriMeshSurface(ExplicitSurface):
     def classify_box(self, params: Any,
                      lower: jnp.ndarray, upper: jnp.ndarray) -> jnp.ndarray:
         """Conservative box sign; 0 means unknown or intersecting."""
-        overlaps, status = self._overlap(self.index.data, lower, upper)
+        overlaps, status = self._overlap(self._boundary.data, lower, upper)
         center = 0.5 * (lower + upper)
         sign = self._inside_sign(params, center)
         sign = jnp.where(jnp.isfinite(sign), sign, 0).astype(jnp.int8)
         return jnp.where(overlaps | (status < 0), jnp.int8(0), sign)
 
     def _inside_sign(self, params: Any, x: jnp.ndarray) -> jnp.ndarray:
-        return self._classify(self.index.data, self._boundary, x)[0]
+        return self._classify(self._boundary, x)[0]
 
     def surface_velocity_normal(self, params: Any, x: jnp.ndarray,
                                 normal: jnp.ndarray) -> Any:
