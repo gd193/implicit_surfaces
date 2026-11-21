@@ -236,8 +236,8 @@ def test_warp_bvh_ray_preserves_large_int32_source_face_id(backend_name):
     faces = np.asarray([[0, 1, 2]], np.int32)
     accel = _build(backend_name, vertices, faces)
     source_id = np.int32(2**24 + 1)
-    payload = accel.payload._replace(
-        prim_ids=jnp.asarray([source_id], dtype=jnp.int32))
+    index = accel.payload.tree._replace(prim_ids=jnp.asarray([source_id], dtype=jnp.int32))
+    payload = accel.payload._replace(tree=index)
 
     query = jax.jit(lambda p, o, d, cap: accel.backend.first_hit_with_status(
         p, o, d, cap))
@@ -344,8 +344,7 @@ def test_warp_payload_reuse_nested_vmap_jit_and_lax_loop(backend_name):
     probe = jax.make_jaxpr(jax.vmap(
         lambda payload, q: backend.closest_point(payload, q),
         in_axes=(None, 0)))(accel.payload, jnp.zeros((batch, 3), jnp.float32))
-    from surfaces.explicit.accelerators.bvh.backends.sah_warp import _factory_data
-    _, source_tree, source_geometry = _factory_data(accel.payload)
+    source_tree, source_geometry = accel.payload.tree, accel.payload.geometry
     source_shapes = [tuple(x.shape) for x in (*source_tree, *source_geometry)]
     def ffi_inputs(jaxpr):
         calls = []
@@ -779,3 +778,44 @@ def test_warp_snch_silhouette_geometry_regressions(case, scale):
             axis = payload.node_cone_axis[node].astype(np.float64)
             angles = np.arctan2(np.linalg.norm(np.cross(normals, axis), axis=1), normals @ axis)
             assert angles.max() <= np.arctan2(float(sin_alpha), float(cos_alpha))+1e-7
+
+
+@pytest.mark.parametrize("backend_name", WARP_BVHS, ids=WARP_BVHS)
+def test_warp_mesh_payload_shares_indexed_geometry(backend_name):
+    prims, _, faces = _sphere(1)
+    payload = BVHAccelerator.build(prims, backend_name).payload
+    ids = np.asarray(payload.tree.prim_ids)
+    assert not np.array_equal(ids, np.arange(len(faces)))
+    np.testing.assert_array_equal(payload.geometry.indices, faces[ids])
+    assert payload.mesh_vertices is prims.mesh.vertices
+    assert payload.boundary.core.vertices is payload.geometry.vertices
+    assert payload.boundary.core.indices is payload.geometry.indices
+    assert payload.sampling.primitive_weight is payload.boundary.core.primitive_measure
+    assert (payload.boundary.silhouette is not None) == (backend_name == "bvh.snch.warp")
+
+
+def test_snch_warp_preserves_edge_and_sampled_face_ids():
+    vertices = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, -1, 0]]
+    primitives, _, _ = _mesh(vertices, [[2, 0, 1], [1, 0, 3]])
+    accel = BVHAccelerator.build(primitives, "bvh.snch.warp", Config(leaf_size_threshold=1))
+    point, distance, edge_id, status = accel.closest_silhouette_with_status(
+        jnp.asarray([.5, 0., 0.], jnp.float32), max_distance=0.)
+    np.testing.assert_array_equal(point, [.5, 0., 0.])
+    assert float(distance) == 0. and int(edge_id) == 1 and int(status) == 1
+    # Fixed draws on opposite children returned these source faces at 9bdc06f.
+    draws = jnp.array([[.2, .3, .4], [.8, .3, .4]])
+    np.testing.assert_array_equal(accel.sample_boundary(jnp.zeros((2, 3)), jnp.inf, draws)[3], [1, 0])
+
+
+def test_snch_warp_keeps_legacy_doubled_area_threshold_and_manifold_check():
+    def triangle_area(scale):
+        return [[0, 0, 0], [scale, 0, 0], [0, scale, 0]]
+
+    with pytest.raises(ValueError, match="non-degenerate"):
+        _build("bvh.snch.warp", triangle_area(0.5e-15), [[0, 1, 2]])
+    payload = _build("bvh.snch.warp", triangle_area(1.2e-15), [[0, 1, 2]]).payload
+    np.testing.assert_allclose(payload.boundary.core.primitive_measure, [0.72e-30], rtol=1e-6, atol=0.)
+
+    vertices = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1]]
+    with pytest.raises(ValueError, match="rejects non-manifold edges"):
+        _build("bvh.snch.warp", vertices, [[0, 1, 2], [1, 0, 3], [0, 1, 4]])

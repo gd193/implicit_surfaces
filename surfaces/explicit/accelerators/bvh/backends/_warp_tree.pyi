@@ -1,5 +1,5 @@
-"""Array schemas used by query callbacks; construction algorithms are unchanged."""
-from typing import NamedTuple, TypeVar
+"""Binary tree array schemas and construction API."""
+from typing import Literal, NamedTuple, TypeVar
 
 import jax
 import warp as wp
@@ -43,4 +43,5 @@ class TreeData(NamedTuple):
 
 
 def build_tree(primitive: PrimitiveSpec[H, D, I, P], data: H,
-               config: Config | None = ...) -> tuple[TreeData, H]: ...
+               config: Config | None = ..., *,
+               builder: Literal["sah", "lbvh"] = ...) -> tuple[TreeData, H]: ...

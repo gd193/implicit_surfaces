@@ -164,6 +164,23 @@ def test_warp_inside_trimesh_surface_signed_value(backend):
         assert np.all(distances >= float(lower)) and np.all(distances <= float(upper))
 
 
+@pytest.mark.parametrize("backend", WARP_BVHS)
+def test_surface_normals_and_vertex_velocity_use_original_face_ids(backend):
+    mesh = trimesh.creation.icosphere(subdivisions=1)
+    accel = _build(mesh, backend)
+    assert not np.array_equal(accel.payload.prim_ids, np.arange(len(mesh.faces)))
+    weights = np.array([.2, .3, .5], np.float32)
+    points = jnp.asarray(weights @ mesh.triangles, jnp.float32)
+    velocities = np.random.default_rng(81).normal(size=mesh.vertices.shape).astype(np.float32)
+    surface = TriMeshSurface(accel.primitives.mesh, accel, vertex_velocity_fn=lambda field, ids: field[ids])
+    normals = jax.vmap(surface.normal_at, in_axes=(None, 0))(None, points)
+    speeds = jax.vmap(surface.surface_velocity_normal, in_axes=(None, 0, 0))(
+        jnp.asarray(velocities), points, normals)
+    np.testing.assert_allclose(normals, mesh.face_normals, atol=2e-6)
+    expected = np.sum((weights @ velocities[mesh.faces]) * mesh.face_normals, axis=1)
+    np.testing.assert_allclose(speeds, expected, atol=3e-6)
+
+
 def test_warp_inside_vertex_rays_and_rotated_contacts():
     mesh = trimesh.creation.icosphere(subdivisions=2)
     a = _build(mesh)

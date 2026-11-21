@@ -50,12 +50,7 @@ def _spread3_u64(x: np.ndarray) -> np.ndarray:
 def _morton_encode_np(positions: np.ndarray, bounds_min: np.ndarray,
                       bounds_max: np.ndarray) -> np.ndarray:
     """63-bit Morton encode for `(N, 3)` positions inside [bmin, bmax]."""
-    # Degenerate-axis guard: when bmax==bmin along an axis (single primitive,
-    # planar/line/point clouds), or when caller's epsilon was absorbed by
-    # float32 rounding in `bmax = bmin + eps`, the divide produces NaN. All
-    # primitives collapse to the same coordinate along that axis, so map to
-    # mid-grid (0.5) deterministically — Morton order along a zero-extent
-    # axis is undefined but all primitives share the bucket, which is correct.
+    # Map a collapsed axis to the same mid-grid bucket for every primitive.
     extent = bounds_max - bounds_min
     degenerate = extent == 0
     safe_extent = np.where(degenerate, np.float32(1.0), extent)
@@ -73,8 +68,7 @@ def _morton_encode_np(positions: np.ndarray, bounds_min: np.ndarray,
 
 
 # =====================================================================
-# CLZ (uint64) and LCP via Python int (built-in bit_length) — only
-# used for occasional checks. The Karras solve below uses NumPy CLZ.
+# Count leading zeros for radix tree prefix comparisons.
 # =====================================================================
 
 
@@ -101,11 +95,6 @@ def _clz_u64_np(x: np.ndarray) -> np.ndarray:
         n = n + np.where(zero, add, 0).astype(np.int32)
         x = np.where(zero, x << upd_shift, x)
     return np.where(x == 0, np.int32(64), n)
-
-
-def _lcp_codes_np(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    xor = np.bitwise_xor(a.astype(np.uint64), b.astype(np.uint64))
-    return np.where(xor == np.uint64(0), np.int32(64), _clz_u64_np(xor))
 
 
 # =====================================================================
@@ -157,9 +146,9 @@ def _karras_internal_solve_np(leaf_codes: np.ndarray, num_leaves: int):
     first = np.minimum(indices, end_idx)
     last = np.maximum(indices, end_idx)
 
-    first_code = leaf_codes[first]
-    last_code = leaf_codes[last]
-    common_prefix = _lcp_codes_np(first_code, last_code)
+    # Use the same leaf-index suffix for the split as for the range.
+    # Morton codes can coincide even for spatially distinct primitives.
+    common_prefix = _delta_vec(first, last)
 
     # Note step build:8 — binary-search the split (31 steps).
     split = first.copy()
@@ -167,7 +156,7 @@ def _karras_internal_solve_np(leaf_codes: np.ndarray, num_leaves: int):
         step = np.int32(1 << k)
         mid = split + step
         safe_mid = np.where(mid < last, mid, last)
-        cmp = _lcp_codes_np(first_code, leaf_codes[safe_mid])
+        cmp = _delta_vec(first, safe_mid)
         cond = (mid < last) & (cmp > common_prefix)
         split = np.where(cond, mid, split)
 
@@ -254,11 +243,17 @@ def _build_payload(prim_lo_np: np.ndarray, prim_hi_np: np.ndarray,
     n = int(prim_lo_np.shape[0])
     assert n >= 1, "Need at least one primitive"
 
-    centroids = (0.5 * (prim_lo_np + prim_hi_np)).astype(np.float32)
-    bmin = centroids.min(axis=0)
-    bmax = centroids.max(axis=0)
-    span = np.maximum(bmax - bmin, 1e-20)
-    bmax = bmin + span
+    # Preserve the original Morton quantization for the host builder.
+    with np.errstate(over="ignore", invalid="ignore"):
+        centroids = (0.5 * (prim_lo_np + prim_hi_np)).astype(np.float32)
+        bmin = centroids.min(axis=0)
+        bmax = bmin + np.maximum(centroids.max(axis=0) - bmin, 1e-20)
+        finite_extent = np.isfinite(bmax - bmin).all()
+    if not finite_extent:
+        # The full float32 coordinate range needs wider midpoint and extent arithmetic.
+        centroids = 0.5 * (prim_lo_np.astype(np.float64) + prim_hi_np)
+        bmin = centroids.min(axis=0)
+        bmax = bmin + np.maximum(centroids.max(axis=0) - bmin, 1e-20)
 
     # Note step build:1 — encode 63-bit Morton codes.
     codes = _morton_encode_np(centroids, bmin, bmax)
@@ -270,7 +265,7 @@ def _build_payload(prim_lo_np: np.ndarray, prim_hi_np: np.ndarray,
 
     # Note step build:3 — partition sorted stream into Morton leaves.
     leaf_starts = np.arange(0, n, leaf_size, dtype=np.int32)
-    leaf_ends = np.minimum(leaf_starts + leaf_size, n).astype(np.int32)
+    leaf_ends = np.minimum(leaf_starts.astype(np.int64) + leaf_size, n).astype(np.int32)
     num_leaves = int(leaf_starts.shape[0])
     num_internal = num_leaves - 1
     total = num_internal + num_leaves

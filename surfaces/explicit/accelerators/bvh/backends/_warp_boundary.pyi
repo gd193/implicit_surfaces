@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable, Generic, NamedTuple, Protocol, TypeVar, overload
+from typing import Callable, Generic, Literal, NamedTuple, Protocol, TypeVar, overload
 import warp as wp
 from jax.typing import ArrayLike
 from .warp_queries.contracts import DeviceArray, PrimitiveSpec, WarpFunction
@@ -90,7 +90,8 @@ def resolve_boundary_adapter(primitive: BoundaryPrimitive[H, D, ItemT, P, CH, CD
 @overload
 def build_boundary(primitive: PrimitiveSpec[H, D, ItemT, P], data: H, config: object = ..., *,
     adapter: BoundaryAdapter[H, D, ItemT, P, CH, CD, FH, FD, FI],
-    silhouettes: bool = ...) -> tuple[TreeData, H, BoundaryData[CH, FH]]: ...
+    silhouettes: bool = ..., builder: Literal["sah", "lbvh"] = ...) -> tuple[TreeData, H, BoundaryData[CH, FH]]: ...
 @overload
 def build_boundary(primitive: BoundaryPrimitive[H, D, ItemT, P, CH, CD, FH, FD, FI], data: H, config: object = ..., *,
-    adapter: None = ..., silhouettes: bool = ...) -> tuple[TreeData, H, BoundaryData[CH, FH]]: ...
+    adapter: None = ..., silhouettes: bool = ...,
+    builder: Literal["sah", "lbvh"] = ...) -> tuple[TreeData, H, BoundaryData[CH, FH]]: ...

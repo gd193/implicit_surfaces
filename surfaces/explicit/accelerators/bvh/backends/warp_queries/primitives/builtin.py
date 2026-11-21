@@ -4,7 +4,8 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable, Generic, Literal, TypeVar, cast, overload
 
 from ..._triangle_frames import pack_triangle_frames
-from ..contracts import PrimitiveSpec as PrimitiveSpec, WarpFunction, WarpType, as_warp_function
+from ..contracts import FusedNearestOps, WarpFunction, WarpType, as_warp_function
+from ..contracts import PrimitiveSpec as PrimitiveSpec
 
 import jax
 import jax.numpy as jnp
@@ -58,6 +59,10 @@ class Primitive(Generic[HostDataT, DeviceDataT, ItemT, PointT]):
     closest_euclidean_at: WarpFunction[[PointT, DeviceDataT, int], PointT] | None = None
     group_leaves: bool = False
     cache_nearest_bounds: bool = True
+    bind_fused_euclidean: Callable[
+        [PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]],
+        FusedNearestOps[PointT, DeviceDataT, ItemT, PointT] | None,
+    ] | None = None
 
     def data(self, *arrays: Any) -> HostDataT:
         if self.prepare_data is None:
@@ -93,6 +98,7 @@ def _array_data(payload, dimension, count, name, *, segment=False):
 
 def _indexed_data(payload, dimension, width):
     def prepare(vertices, indices):
+        source_vertices = vertices
         vertices, indices = np.asarray(vertices, np.float32), np.asarray(indices)
         if vertices.ndim != 2 or vertices.shape[1:] != (dimension,):
             raise ValueError(f"vertices must have shape (V, {dimension})")
@@ -105,7 +111,7 @@ def _indexed_data(payload, dimension, width):
                   if width == 3 else (items[:, 0], items[:, 1]))
         if any(not np.isfinite(a).all() for a in arrays):
             raise ValueError("primitive data must be finite float32")
-        fields = (*arrays, vertices, indices.astype(np.int32))
+        fields = (*arrays, jnp.asarray(source_vertices, dtype=jnp.float32), indices.astype(np.int32))
         if width == 3:
             fields += (items[:, 1], items[:, 2], pack_triangle_frames(items))
         return payload(*(jnp.asarray(field) for field in fields))
@@ -172,7 +178,7 @@ def _primitive(kind, dimension):
     def normal_sides(item: Any):
         return item.a, item.n0, item.n1
 
-    score_at = closest_at = None
+    score_at = closest_at = bind_fused_euclidean = None
     if kind == "triangles":
         @wp.func_native("return bvh::triangle_score(query, data, slot);")
         def score_at(query: Vec, data: Data, slot: int) -> wp.float64: ...
@@ -182,6 +188,43 @@ def _primitive(kind, dimension):
 
         @wp.func_native("return bvh::closest_triangle(query, item.a, item.b, item.c);")
         def closest(query: Vec, item: Item) -> Vec: ...
+
+        @wp.func_native("return bvh::triangle_nearest_at(query, data, slot, limit);")
+        def nearest_at(query: Vec, data: Data, slot: int, limit: float) -> wp.vec4: ...
+
+        @wp.func_native("return bvh::triangle_nearest_candidate(query, item.a, item.b, item.c, limit);")
+        def nearest_item(query: Vec, item: Item, limit: float) -> wp.vec4: ...
+
+        @wp.func
+        def candidate_at(query: Vec, data: Data, slot: int, limit: float):
+            evaluated = nearest_at(query, data, slot, limit)
+            return wp.vec3(evaluated[0], evaluated[1], evaluated[2]), evaluated[3]
+
+        @wp.func
+        def candidate_item(query: Vec, item: Item, limit: float):
+            evaluated = nearest_item(query, item, limit)
+            return wp.vec3(evaluated[0], evaluated[1], evaluated[2]), evaluated[3]
+
+        @wp.func_native("return bvh::conservative_box_score<true>(query, lower, upper);")
+        def nearest_bound(query: Vec, lower: wp.vec3, upper: wp.vec3) -> float: ...
+
+        fused = FusedNearestOps(as_warp_function(candidate_at),
+                                as_warp_function(candidate_item),
+                                as_warp_function(nearest_bound))
+
+        def bind_fused_euclidean(primitive):
+            # The slot evaluator reads the original triangle layout directly.
+            # Copied descriptors may supply a different geometry operation.
+            if (primitive.dimension == dimension and primitive.point_type is Vec
+                    and primitive.data_type is Data and primitive.item_type is Item
+                    and primitive.load is load and primitive.bounds_of_item is item_bounds
+                    and primitive.closest_euclidean is closest
+                    and primitive.score_euclidean_at is score_at
+                    and primitive.closest_euclidean_at is closest_at
+                    and primitive.host_bounds is host_bounds
+                    and primitive.host_pack is host_pack):
+                return fused
+            return None
     elif kind == "points":
         @wp.func
         def closest(query: Vec, item: Any):
@@ -238,7 +281,7 @@ def _primitive(kind, dimension):
                      point_bounds=kind == "points", group_leaves=kind == "triangles",
                      cache_nearest_bounds=kind != "triangles", name=kind, payload_type=Payload,
                      prepare_data=prepare_data, prepare_indexed=prepare_indexed,
-                     boundary_adapter=boundary_adapter)
+                     boundary_adapter=boundary_adapter, bind_fused_euclidean=bind_fused_euclidean)
 
 
 @overload

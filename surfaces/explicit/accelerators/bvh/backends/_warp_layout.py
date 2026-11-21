@@ -1,59 +1,127 @@
 """Array-only JAX pytree for Warp BVHs."""
 from __future__ import annotations
 
-from typing import NamedTuple
+from operator import attrgetter
+from typing import TYPE_CHECKING, NamedTuple
 
 import jax.numpy as jnp
 import numpy as np
 
-from ._triangle_frames import TRIANGLE_FRAME_WORDS, pack_triangle_frames
-from ._warp_host_metadata import reduce_nodes, triangle_mesh_closed, triangle_metadata
+if TYPE_CHECKING:
+    from ._warp_boundary import BoundaryCoreData, BoundaryData, SilhouetteData
+    from ._warp_tree import TreeData
+    from .warp_queries.primitives.data import TrianglesArrays3
+    from .warp_queries.queries.boundary import CoefficientData, SamplingData
 
 
 _PACKED_PAYLOAD_LIMIT = 1 << 31
 
 
 class WarpBVHPayload(NamedTuple):
-    # Root=0; prim_ids maps leaf slots to original face IDs.
-    node_lower: jnp.ndarray
-    node_upper: jnp.ndarray
-    node_left: jnp.ndarray
-    node_right: jnp.ndarray
-    node_leaf_offset: jnp.ndarray
-    node_leaf_count: jnp.ndarray
-    prim_ids: jnp.ndarray
-    root: jnp.ndarray
-    # SNCH data; empty for ordinary SAH.
-    node_cone_axis: jnp.ndarray
-    node_cone_sin_cos: jnp.ndarray
-    node_cone_radius: jnp.ndarray
-    node_silhouette_offset: jnp.ndarray
-    node_silhouette_count: jnp.ndarray
-    silhouette_refs: jnp.ndarray
-    silhouette_v0: jnp.ndarray
-    silhouette_v1: jnp.ndarray
-    silhouette_n0: jnp.ndarray
-    silhouette_n1: jnp.ndarray
-    # Packed triangles in leaf order.
-    tri_b: jnp.ndarray
-    tri_c: jnp.ndarray
-    tri_frame: jnp.ndarray
-    tri_v0: jnp.ndarray
-    tri_e1: jnp.ndarray
-    tri_e2: jnp.ndarray
-    tri_normal: jnp.ndarray
-    tri_area: jnp.ndarray
-    node_area: jnp.ndarray
-    # Ray nodes: float4 xyz=bounds, w=uint32 metadata.
-    node_ray_lower: jnp.ndarray
-    node_ray_upper: jnp.ndarray
-    # Shared vertices avoid cracks from reconstructing packed triangle edges.
-    mesh_vertices: jnp.ndarray
-    tri_indices: jnp.ndarray
-    mesh_closed: jnp.ndarray
-    # Optional Robin coefficient intervals.
-    tri_robin_bounds: jnp.ndarray
-    node_robin_bounds: jnp.ndarray
+    """Built mesh data using the generic query schemas.
+
+    The legacy named array attributes remain available as views. Tuple fields
+    follow the generic grouping, so flat positional construction and flat
+    tuple serialization from earlier versions require migration.
+    """
+
+    tree: TreeData
+    geometry: TrianglesArrays3
+    boundary: BoundaryData[BoundaryCoreData, SilhouetteData]
+    sampling: SamplingData
+    coefficients: CoefficientData
+
+    @property
+    def root(self):
+        return jnp.asarray(0, jnp.int32)
+
+    @property
+    def node_cone_axis(self):
+        features = self.boundary.silhouette
+        if features is None:
+            return jnp.zeros_like(self.tree.node_lower)
+        return features.node_cone_axis
+
+    @property
+    def node_cone_sin_cos(self):
+        features = self.boundary.silhouette
+        if features is None:
+            return jnp.broadcast_to(jnp.asarray([1., 0.], jnp.float32), (len(self.tree.node_left), 2))
+        return features.node_cone_sin_cos
+
+    @property
+    def node_cone_radius(self):
+        features = self.boundary.silhouette
+        if features is None:
+            return jnp.zeros_like(self.sampling.node_weight)
+        return features.node_cone_radius
+
+    def _silhouette_view(self, name, *, index=False, node=False):
+        features = self.boundary.silhouette
+        if features is not None:
+            return getattr(features, name)
+        if node:
+            return jnp.zeros_like(self.tree.node_left)
+        if index:
+            return self.tree.prim_ids[:0]
+        return self.geometry.a[:0]
+
+    @property
+    def node_silhouette_offset(self):
+        return self._silhouette_view("node_feature_offset", node=True)
+
+    @property
+    def node_silhouette_count(self):
+        return self._silhouette_view("node_feature_count", node=True)
+
+    @property
+    def silhouette_refs(self):
+        return self._silhouette_view("feature_refs", index=True)
+
+    @property
+    def silhouette_v0(self):
+        return self._silhouette_view("feature_a")
+
+    @property
+    def silhouette_v1(self):
+        return self._silhouette_view("feature_b")
+
+    @property
+    def silhouette_n0(self):
+        return self._silhouette_view("feature_n0")
+
+    @property
+    def silhouette_n1(self):
+        return self._silhouette_view("feature_n1")
+
+
+def _payload_view(path):
+    return property(attrgetter(path))
+
+
+# Compatibility aliases for clients reading the original flat named arrays.
+for _field in ("node_lower", "node_upper", "node_left", "node_right",
+               "node_leaf_offset", "node_leaf_count", "prim_ids",
+               "node_ray_lower", "node_ray_upper"):
+    setattr(WarpBVHPayload, _field, _payload_view(f"tree.{_field}"))
+
+for _field, _path in {
+    "tri_v0": "geometry.a",
+    "tri_e1": "geometry.e1",
+    "tri_e2": "geometry.e2",
+    "tri_b": "geometry.b",
+    "tri_c": "geometry.c",
+    "tri_frame": "geometry.frame",
+    "mesh_vertices": "geometry.vertices",
+    "tri_indices": "geometry.indices",
+    "tri_normal": "boundary.core.primitive_normal",
+    "tri_area": "boundary.core.primitive_measure",
+    "mesh_closed": "boundary.core.closed",
+    "node_area": "sampling.node_weight",
+    "tri_robin_bounds": "coefficients.primitive_bounds",
+    "node_robin_bounds": "coefficients.node_bounds",
+}.items():
+    setattr(WarpBVHPayload, _field, _payload_view(_path))
 
 
 def _int32_array(name, value):
@@ -151,180 +219,3 @@ def _pack_ray_nodes(node_lower, node_upper, left, right, offset, count):
     ray_lower[:, 3] = lower_bits.view(np.float32)
     ray_upper[:, 3] = upper_bits.view(np.float32)
     return ray_lower, ray_upper
-
-
-def make_warp_payload(tree, vertices_np, faces_np, snch=None, *, mesh_vertices=None):
-    """Pack triangles in leaf order; preserve original face IDs."""
-    vertices = np.asarray(vertices_np, dtype=np.float32)
-    faces = np.asarray(faces_np, dtype=np.int32)
-    if vertices.ndim != 2 or vertices.shape[1:] != (3,):
-        raise ValueError("mesh vertices must have shape (V, 3)")
-    if faces.ndim != 2 or faces.shape[1:] != (3,):
-        raise ValueError("mesh faces must have shape (F, 3)")
-    if faces.size and (np.any(faces < 0) or np.any(faces >= len(vertices))):
-        raise ValueError("mesh faces contain an invalid vertex index")
-    prim_ids = _int32_array("prim_ids", tree.prim_ids)
-    if prim_ids.ndim != 1 or (prim_ids.size and (
-            np.any(prim_ids < 0) or np.any(prim_ids >= len(faces)))):
-        raise ValueError("tree primitive references contain an invalid face index")
-
-    node_lower = np.asarray(tree.node_lower, dtype=np.float32)
-    node_upper = np.asarray(tree.node_upper, dtype=np.float32)
-    if node_lower.ndim != 2 or node_lower.shape[1:] != (3,):
-        raise ValueError("tree lower bounds must have shape (N, 3)")
-    if node_upper.shape != node_lower.shape:
-        raise ValueError("tree upper bounds must match lower bound shape")
-    if (not np.isfinite(node_lower).all() or not np.isfinite(node_upper).all()
-            or np.any(node_lower > node_upper)):
-        raise ValueError("tree bounds must be finite and ordered")
-    n_nodes = node_lower.shape[0]
-    tree_arrays, depths, postorder = _validate_tree(tree, prim_ids.size)
-    if n_nodes != len(tree_arrays["node_left"]):
-        raise ValueError("tree bounds and index arrays must have matching node counts")
-    tris = vertices[faces[prim_ids]]
-    if not np.isfinite(tris).all():
-        raise ValueError("packed triangle geometry requires finite referenced vertices")
-    if prim_ids.size:
-        v0 = tris[:, 0]
-        e1 = tris[:, 1] - v0
-        e2 = tris[:, 2] - v0
-        normal, area, _ = triangle_metadata(tris)
-        if (not all(np.isfinite(a).all() for a in (v0, e1, e2, normal, area))
-                or np.any(area > np.finfo(np.float32).max)):
-            raise ValueError("packed triangle geometry overflows float32")
-        normal, area = normal.astype(np.float32), area.astype(np.float32)
-    else:
-        v0 = e1 = e2 = normal = np.zeros((0, 3), dtype=np.float32)
-        area = np.zeros((0,), dtype=np.float32)
-
-    # Postorder supports arbitrary node numbering.
-    left = tree_arrays["node_left"]
-    right = tree_arrays["node_right"]
-    offset = tree_arrays["node_leaf_offset"]
-    count = tree_arrays["node_leaf_count"]
-    node_area = reduce_nodes(
-        area, left, right, offset, count, postorder,
-        lambda values: np.sum(values, axis=0, dtype=np.float32))
-    if not np.isfinite(node_area).all():
-        raise ValueError("subtree triangle area overflows float32")
-
-    if snch is None:
-        cone_axis = np.zeros((n_nodes, 3), dtype=np.float32)
-        cone_sin_cos = np.tile(np.asarray([1., 0.], np.float32), (n_nodes, 1))
-        cone_radius = np.zeros((n_nodes,), dtype=np.float32)
-        silh_offset = silh_count = np.zeros((n_nodes,), dtype=np.int32)
-        silh_refs = np.zeros((0,), dtype=np.int32)
-        silh_v0 = silh_v1 = silh_n0 = silh_n1 = np.zeros((0, 3), dtype=np.float32)
-    else:
-        cone_axis = np.asarray(snch.node_cone_axis, dtype=np.float32)
-        cone_half_angle = np.asarray(snch.node_cone_half_angle, dtype=np.float32)
-        cone_sin_cos = np.stack([np.sin(cone_half_angle), np.cos(cone_half_angle)], axis=-1)
-        cone_sin_cos[cone_half_angle >= 1.5707953] = [1., 0.]
-        # Half the box diagonal encloses whole edges.
-        cone_radius = .5 * np.linalg.norm(node_upper - node_lower, axis=1)
-        silh_offset = np.asarray(snch.node_silhouette_offset, dtype=np.int32)
-        silh_count = np.asarray(snch.node_silhouette_count, dtype=np.int32)
-        silh_refs = np.asarray(snch.silhouette_refs, dtype=np.int32)
-        # SNCH pads empty edge arrays with one safe row.
-        silh_v0 = np.asarray(snch.silhouette_v0, dtype=np.float32)
-        silh_v1 = np.asarray(snch.silhouette_v1, dtype=np.float32)
-        silh_n0 = np.asarray(snch.silhouette_n0, dtype=np.float32)
-        silh_n1 = np.asarray(snch.silhouette_n1, dtype=np.float32)
-
-        has_silhouette = np.zeros((n_nodes,), dtype=bool)
-        for node in postorder:
-            if count[node] > 0:
-                has_silhouette[node] = silh_count[node] > 0
-            else:
-                has_silhouette[node] = has_silhouette[left[node]] or has_silhouette[right[node]]
-        # sin<0 marks empty subtrees; cos=0 disables cone pruning.
-        cone_sin_cos[~has_silhouette] = [-1., 0.]
-
-    ray_lower, ray_upper = _pack_ray_nodes(
-        node_lower, node_upper, left, right, offset, count)
-
-    return WarpBVHPayload(
-        node_lower=jnp.asarray(node_lower),
-        node_upper=jnp.asarray(node_upper),
-        node_left=jnp.asarray(left),
-        node_right=jnp.asarray(right),
-        node_leaf_offset=jnp.asarray(offset),
-        node_leaf_count=jnp.asarray(count),
-        prim_ids=jnp.asarray(prim_ids),
-        root=jnp.asarray(0, dtype=jnp.int32),
-        node_cone_axis=jnp.asarray(cone_axis),
-        node_cone_sin_cos=jnp.asarray(cone_sin_cos),
-        node_cone_radius=jnp.asarray(cone_radius),
-        node_silhouette_offset=jnp.asarray(silh_offset),
-        node_silhouette_count=jnp.asarray(silh_count),
-        silhouette_refs=jnp.asarray(silh_refs),
-        silhouette_v0=jnp.asarray(silh_v0),
-        silhouette_v1=jnp.asarray(silh_v1),
-        silhouette_n0=jnp.asarray(silh_n0),
-        silhouette_n1=jnp.asarray(silh_n1),
-        tri_b=jnp.asarray(tris[:, 1]),
-        tri_c=jnp.asarray(tris[:, 2]),
-        tri_frame=jnp.asarray(pack_triangle_frames(tris)),
-        tri_v0=jnp.asarray(v0),
-        tri_e1=jnp.asarray(e1),
-        tri_e2=jnp.asarray(e2),
-        tri_normal=jnp.asarray(normal),
-        tri_area=jnp.asarray(area),
-        node_area=jnp.asarray(node_area),
-        node_ray_lower=jnp.asarray(ray_lower),
-        node_ray_upper=jnp.asarray(ray_upper),
-        mesh_vertices=jnp.asarray(vertices if mesh_vertices is None else mesh_vertices,
-                                  dtype=jnp.float32),
-        tri_indices=jnp.asarray(faces[prim_ids]),
-        mesh_closed=jnp.asarray([triangle_mesh_closed(vertices, faces)], jnp.int32),
-        tri_robin_bounds=jnp.zeros((0, 2), jnp.float32),
-        node_robin_bounds=jnp.zeros((0, 2), jnp.float32),
-    ), int(depths.max(initial=0))
-
-
-def empty_warp_payload():
-    empty3 = jnp.zeros((0, 3), dtype=jnp.float32)
-    empty1 = jnp.zeros((0,), dtype=jnp.float32)
-    emptyi = jnp.zeros((0,), dtype=jnp.int32)
-    empty4 = jnp.zeros((0, 4), dtype=jnp.float32)
-    return WarpBVHPayload(
-        node_lower=empty3,
-        node_upper=empty3,
-        node_left=emptyi,
-        node_right=emptyi,
-        node_leaf_offset=emptyi,
-        node_leaf_count=emptyi,
-        prim_ids=emptyi,
-        root=jnp.asarray(0, jnp.int32),
-        node_cone_axis=empty3,
-        node_cone_sin_cos=jnp.zeros((0, 2), dtype=jnp.float32),
-        node_cone_radius=empty1,
-        node_silhouette_offset=emptyi,
-        node_silhouette_count=emptyi,
-        silhouette_refs=emptyi,
-        silhouette_v0=empty3,
-        silhouette_v1=empty3,
-        silhouette_n0=empty3,
-        silhouette_n1=empty3,
-        tri_b=empty3, tri_c=empty3, tri_v0=empty3,
-        tri_frame=jnp.zeros((0, TRIANGLE_FRAME_WORDS), jnp.uint32),
-        tri_e1=empty3,
-        tri_e2=empty3,
-        tri_normal=empty3,
-        tri_area=empty1,
-        node_area=empty1,
-        node_ray_lower=empty4,
-        node_ray_upper=empty4,
-        mesh_vertices=empty3,
-        tri_indices=jnp.zeros((0, 3), jnp.int32),
-        mesh_closed=jnp.ones((1,), jnp.int32),
-        tri_robin_bounds=jnp.zeros((0, 2), jnp.float32),
-        node_robin_bounds=jnp.zeros((0, 2), jnp.float32),
-    )
-
-
-def with_robin_coefficients(payload, minimum, maximum=None):
-    from .warp_queries.queries.boundary import prepare_robin_coefficients
-
-    data = prepare_robin_coefficients(payload, minimum, maximum)
-    return payload._replace(tri_robin_bounds=data.primitive_bounds, node_robin_bounds=data.node_bounds)

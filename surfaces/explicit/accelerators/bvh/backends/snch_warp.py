@@ -2,32 +2,14 @@
 from __future__ import annotations
 
 import jax.numpy as jnp
-import numpy as np
 
 from surfaces.explicit.accelerators.protocol import Config
 from surfaces.explicit.accelerators.registry import register_backend
 from surfaces.explicit.primitives import Primitives
 
-from ._warp_build import finite_primitive_bounds, validate_warp_mesh_and_config
-from ._warp_host_metadata import triangle_metadata
-from ._warp_layout import empty_warp_payload, make_warp_payload, with_robin_coefficients
-from .sah_warp import BVHSahWarpBackend, _factory_data, _factory_boundary
-from .snch_jax import _build_payload_snch
-
-
-def _reject_nonmanifold(faces):
-    edges = {}
-    for face_id, face in enumerate(faces):
-        a, b, c = map(int, face)
-        for u, v in ((a, b), (b, c), (c, a)):
-            key = (u, v) if u < v else (v, u)
-            edges.setdefault(key, []).append(face_id)
-    bad = [edge for edge, incident in edges.items() if len(incident) > 2]
-    if bad:
-        raise ValueError(
-            "bvh.snch.warp rejects non-manifold edges with more than two "
-            f"incident faces; found {len(bad)}"
-        )
+from ._warp_build import build_warp_mesh
+from .sah_warp import BVHSahWarpBackend
+from .warp_queries.primitives.builtin import Triangles
 
 
 @register_backend
@@ -41,28 +23,7 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
     has_robin_query = True
 
     def build(self, primitives: Primitives, config: Config):
-        vertices, faces = validate_warp_mesh_and_config(
-            primitives, config, "bvh.snch.warp")
-        if faces.shape[0] == 0:
-            return empty_warp_payload()
-        used = vertices[faces]
-        _reject_nonmanifold(faces)
-        normals, _, lengths = triangle_metadata(used)
-        if np.any(lengths <= 1e-30):
-            raise ValueError("bvh.snch.warp requires non-degenerate triangles")
-
-        lo_np, hi_np = finite_primitive_bounds(primitives)
-        tree = _build_payload_snch(
-            lo_np, hi_np, int(config.leaf_size_threshold), faces, vertices, normals=normals)
-        payload, depth = make_warp_payload(
-            tree, vertices, faces, snch=tree, mesh_vertices=primitives.mesh.vertices)
-        if depth > config.max_stack_depth:
-            raise ValueError(
-                f"built SNCH tree depth {depth} exceeds configured "
-                f"max_stack_depth={config.max_stack_depth}"
-            )
-
-        return payload
+        return build_warp_mesh(primitives, config, snch=True)
 
     def closest_silhouette(self, payload, x, max_distance=jnp.inf):
         return self.closest_silhouette_with_status(
@@ -72,15 +33,14 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
                                        max_distance=jnp.inf):
         from .warp_queries.queries.silhouette import make_silhouette
 
-        primitive, tree, geometry = _factory_data(payload)
-        return make_silhouette(primitive)(tree, geometry, _factory_boundary(payload), x, max_distance)
+        return make_silhouette(Triangles())(
+            payload.tree, payload.geometry, payload.boundary, x, max_distance)
 
     def sample_boundary(self, payload, points, radii, randoms):
-        from .warp_queries.queries.boundary import SamplingData, make_boundary_sample
+        from .warp_queries.queries.boundary import make_boundary_sample
 
-        primitive, tree, geometry = _factory_data(payload)
-        data = SamplingData(payload.tri_area, payload.node_area)
-        return make_boundary_sample(primitive)(tree, geometry, data, points, radii, randoms)
+        return make_boundary_sample(Triangles())(
+            payload.tree, payload.geometry, payload.sampling, points, radii, randoms)
 
     def star_radius(self, payload, points, cap):
         return self.star_radius_with_status(payload, points, cap)[0]
@@ -88,22 +48,21 @@ class BVHSnchWarpBackend(BVHSahWarpBackend):
     def star_radius_with_status(self, payload, points, cap):
         from .warp_queries.queries.silhouette import make_star_radius
 
-        primitive, tree, geometry = _factory_data(payload)
-        return make_star_radius(primitive)(tree, geometry, _factory_boundary(payload), points, cap)
+        return make_star_radius(Triangles())(payload.tree, payload.geometry, payload.boundary, points, cap)
 
     def with_robin_coefficients(self, payload, minimum, maximum=None):
-        return with_robin_coefficients(payload, minimum, maximum)
+        from .warp_queries.queries.boundary import prepare_robin_coefficients
+
+        data = prepare_robin_coefficients(payload.tree, minimum, maximum)
+        return payload._replace(coefficients=data)
 
     def robin_radius(self, payload, points, cap):
         return self.robin_radius_with_status(payload, points, cap)[0]
 
     def robin_radius_with_status(self, payload, points, cap):
-        from .warp_queries.queries.boundary import CoefficientData, RobinData, make_robin_radius
+        from .warp_queries.queries.boundary import RobinData, make_robin_radius
 
-        if payload.node_robin_bounds.shape != (payload.node_left.shape[0], 2):
+        if payload.coefficients.node_bounds.shape != (payload.tree.node_left.shape[0], 2):
             raise ValueError("configure Robin coefficients with with_robin_coefficients first")
-        primitive, tree, geometry = _factory_data(payload)
-        boundary = _factory_boundary(payload)
-        data = RobinData(boundary.core, boundary.silhouette,
-                         CoefficientData(payload.tri_robin_bounds, payload.node_robin_bounds))
-        return make_robin_radius(primitive)(tree, geometry, data, points, cap)
+        data = RobinData(payload.boundary.core, payload.boundary.silhouette, payload.coefficients)
+        return make_robin_radius(Triangles())(payload.tree, payload.geometry, data, points, cap)

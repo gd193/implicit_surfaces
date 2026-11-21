@@ -4,7 +4,8 @@ These helpers preserve callable signatures while exposing Warp's runtime
 Function markers to static checking. They return the actual Warp descriptors;
 they never wrap a device callable.
 """
-from typing import TYPE_CHECKING, Any, Callable, ParamSpec, Protocol, TypeAlias, TypeVar, cast, overload
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable, Generic, ParamSpec, Protocol, TypeAlias, TypeVar, cast, overload
 
 import jax
 import numpy as np
@@ -16,6 +17,7 @@ HostDataT = TypeVar("HostDataT")
 DeviceDataT = TypeVar("DeviceDataT")
 ItemT = TypeVar("ItemT")
 PointT = TypeVar("PointT", covariant=True)
+QueryT = TypeVar("QueryT")
 T_co = TypeVar("T_co", covariant=True)
 StructT = TypeVar("StructT")
 ElementT = TypeVar("ElementT")
@@ -112,6 +114,22 @@ def as_warp_function(function: Callable[P, R]) -> WarpFunction[P, R]:
     if not isinstance(function, wp.Function):
         raise TypeError("expected a decorated Warp Function")
     return cast(WarpFunction[P, R], function)
+
+
+@dataclass(frozen=True)
+class FusedNearestOps(Generic[QueryT, DeviceDataT, ItemT, PointT]):
+    """Optional evaluators and matching bound for single-nearest selection.
+
+    Both candidate functions return the closest point and score in the
+    bound metric's score units. They can return a finite negative score for
+    a candidate beyond the supplied limit, or a nonfinite score on failure.
+    The node bound must be conservative for the same score computation.
+    Equal scores retain the first candidate in traversal order.
+    """
+
+    candidate_at: WarpFunction[[QueryT, DeviceDataT, int, float], tuple[PointT, float]]
+    candidate_item: WarpFunction[[QueryT, ItemT, float], tuple[PointT, float]]
+    node_bound: WarpFunction[[QueryT, wp.vec3, wp.vec3], float]
 
 
 class PrimitiveSpec(Protocol[HostDataT, DeviceDataT, ItemT, PointT]):
