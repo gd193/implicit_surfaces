@@ -2,8 +2,8 @@
 
 `TriMeshSurface` uses a Sengi BVH for closest points, ray intersections, box
 overlap and inside/outside classification. A surface takes the source
-`TriMesh`, the index, and boundary data prepared from the same vertices and
-faces. Build the index once and prepare its boundary before creating the
+`TriMesh` and boundary data prepared from the same vertices and faces.
+The prepared boundary carries its index data. Build the index once and prepare its boundary before creating the
 surface. Queries return
 face IDs in the original mesh order, so surface normals and per-vertex
 velocity interpolation use the source mesh.
@@ -17,7 +17,7 @@ mamba env create -f environment-warp.yml
 mamba activate implicit-surfaces-warp
 ```
 
-Outside the lab, build Sengi 0.2.0 using its conda recipe and replace the lab
+Outside the lab, build Sengi 0.3.0 using its conda recipe and replace the lab
 channel in `environment-warp.yml` with the resulting local channel URL.
 [Sengi installation instructions](https://github.com/gd193/sengi#readme)
 
@@ -40,7 +40,7 @@ triangles = Triangles()
 source = triangles.indexed(mesh.vertices, mesh.faces)
 index = bvh.build(triangles, source)
 boundary = bvh.prepare_boundary(index, source, silhouettes=False)
-surface = TriMeshSurface(mesh, index, boundary)
+surface = TriMeshSurface(mesh, boundary)
 
 point, distance, face = jax.jit(surface.closest_point)(None, points)
 signed_distance = jax.jit(surface.signed_value)(None, points)
