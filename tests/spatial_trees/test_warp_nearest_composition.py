@@ -1,12 +1,14 @@
 """Static nearest/kNN composition keeps query identity and one fused call."""
+from dataclasses import replace
+
 import jax
 import numpy as np
 import pytest
 
-pytest.importorskip("warp")
+wp = pytest.importorskip("warp")
 
 from surfaces.explicit.accelerators.bvh.warp import (  # noqa: E402
-    Euclidean, Points, build_tree, make_knn, make_nearest,
+    Euclidean, Points, TriangleItem3, Triangles, build_tree, make_knn, make_nearest,
 )
 from surfaces.explicit.accelerators.bvh.backends.warp_queries.selection.candidates import (  # noqa: E402
     candidate_functions,
@@ -57,3 +59,37 @@ def test_nearest_and_knn_output_policies_are_fused_and_cached():
     for composed in (nearest, ids, points):
         hlo = jax.jit(composed).lower(tree, geometry, query).as_text()
         assert hlo.count("stablehlo.custom_call") == 1
+
+
+def test_triangle_fused_nearest_respects_replaced_geometry_and_metric():
+    primitive = Triangles()
+    metric = Euclidean()
+
+    @wp.func
+    def first_vertex(query: wp.vec3, item: TriangleItem3):
+        return item.a
+
+    @wp.func
+    def weighted_vertex(query: wp.vec3, item: TriangleItem3):
+        return item.a, 4.0 * wp.length_sq(query - item.a)
+
+    class CustomMetric:
+        def bind(self, primitive):
+            return replace(metric.bind(primitive), closest=weighted_vertex, score_at=None, point_at=None)
+
+    raw = primitive.indexed([[0., 0., 0.], [1., 0., 0.], [0., 1., 0.]], [[0, 1, 2]])
+    tree, data = build_tree(primitive, raw)
+    query = np.array([.25, .25, 0.], np.float32)
+    # The slot callbacks take precedence until a provider opts out of both.
+    modified = replace(primitive, closest_euclidean=first_vertex)
+    for provider, policy, point, distance in (
+        (modified, metric, query, 0.),
+        (replace(modified, score_euclidean_at=None, closest_euclidean_at=None),
+         metric, [0., 0., 0.], np.linalg.norm(query)),
+        (primitive, CustomMetric(), [0., 0., 0.], 2 * np.linalg.norm(query)),
+    ):
+        nearest = make_nearest(provider, policy)
+        assert nearest.ops.bind_fused(nearest.ops) is None
+        actual = nearest(tree, data, query)
+        np.testing.assert_array_equal(actual[0], point)
+        np.testing.assert_allclose(actual[1:], [distance, 0, 1])

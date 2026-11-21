@@ -214,8 +214,7 @@ def _factory_case(query, primitive, tree, geometry, payload, query_args, n, bloc
         Euclidean, make_nearest, make_ray_query, make_classify, make_overlap,
         make_silhouette, make_boundary_sample, make_robin_radius,
     )
-    from surfaces.explicit.accelerators.bvh.backends.sah_warp import _factory_boundary
-    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.boundary import SamplingData, CoefficientData, RobinData
+    from surfaces.explicit.accelerators.bvh.backends.warp_queries.queries.boundary import RobinData
 
 
     capacity, metadata = 64, []
@@ -232,7 +231,7 @@ def _factory_case(query, primitive, tree, geometry, payload, query_args, n, bloc
                             stack_capacity=capacity, block_dim=block_dim)
         args = query_args
     else:
-        boundary = _factory_boundary(payload)
+        boundary = payload.boundary
         args = query_args
         if query == "classify_point":
             call = make_classify(primitive, stack_capacity=capacity, block_dim=block_dim)
@@ -245,12 +244,12 @@ def _factory_case(query, primitive, tree, geometry, payload, query_args, n, bloc
         elif query == "sample_boundary":
             call = make_boundary_sample(primitive,
                                         block_dim=block_dim)
-            metadata = [SamplingData(payload.tri_area, payload.node_area)]
+            metadata = [payload.sampling]
         elif query == "robin_radius":
             call = make_robin_radius(primitive,
                                     stack_capacity=capacity, block_dim=block_dim)
             data = RobinData(boundary.core, boundary.silhouette,
-                             CoefficientData(payload.tri_robin_bounds, payload.node_robin_bounds))
+                             payload.coefficients)
             metadata = [data.core, data.silhouette, data.coefficients]
     return call.kernel, [*args, *tree, *geometry, *(a for group in metadata for a in group)]
 
@@ -306,9 +305,10 @@ def main():
         tree = BVHAccelerator.build(primitives, args.backend, Config(leaf_size_threshold=args.leaf_size))
         if "robin_radius" in args.queries:
             tree = tree.with_robin_coefficients(args.robin_coefficient)
-        from surfaces.explicit.accelerators.bvh.backends.sah_warp import _factory_data
+        from surfaces.explicit.accelerators.bvh.warp import Triangles
 
-        primitive, factory_tree, geometry = _factory_data(tree.payload)
+        primitive = Triangles()
+        factory_tree, geometry = tree.payload.tree, tree.payload.geometry
         mesh = None
         if args.native_warp:
             mesh = wp.Mesh(points=wp.from_jax(primitives.mesh.vertices, dtype=wp.vec3),

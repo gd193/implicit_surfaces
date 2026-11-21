@@ -4,9 +4,9 @@ Warp's dynamically selected vector/matrix annotations are compiled by Warp,
 not interpreted as Python generics. This stub retains the host connections.
 """
 from dataclasses import dataclass
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Callable, Generic, Protocol, TypeVar
 import warp as wp
-from .contracts import PrimitiveSpec, WarpFunction, WarpType
+from .contracts import FusedNearestOps, PrimitiveSpec, WarpFunction, WarpType
 from .._warp_boundary import BoundaryCore, SilhouetteMeta
 from .queries.boundary import RobinOps
 
@@ -39,6 +39,10 @@ class NearestOps(Generic[QueryT, ItemT, PointT]):
     cache_nearest_bounds: bool = True
     score_at: WarpFunction[[QueryT, Any, int], float] | None = ...
     point_at: WarpFunction[[QueryT, Any, int], PointT] | None = ...
+    # Single-nearest resolves this optional capability before generating its walker.
+    bind_fused: Callable[
+        ["NearestOps[QueryT, ItemT, PointT]"], FusedNearestOps[QueryT, Any, ItemT, PointT] | None,
+    ] | None = ...
 
 class NearestPolicy(Protocol[DeviceDataT, ItemT, PointT, QueryT]):
     def bind(self, primitive: PrimitiveSpec[HostDataT, DeviceDataT, ItemT, PointT]) -> NearestOps[QueryT, ItemT, PointT]: ...

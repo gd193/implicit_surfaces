@@ -14,7 +14,8 @@ from .backends.warp_queries.queries.range import (
     RadiusAccumulator, RadiusQuery, RadiusReduction, make_radius,
 )
 from .backends.warp_queries.contracts import (
-    DeviceArray, DeviceArray2D, PrimitiveSpec, WarpFunction, WarpRef, WarpType, as_warp_function, warp_func, warp_struct,
+    DeviceArray, DeviceArray2D, FusedNearestOps, PrimitiveSpec, WarpFunction, WarpRef,
+    WarpType, as_warp_function, warp_func, warp_struct,
 )
 from .backends.warp_queries.primitives.builtin import (
     Points, Primitive, Segments, SilhouetteEdges, Triangles,
@@ -57,7 +58,8 @@ __all__ = [
     "RadiusAccumulator", "RadiusQuery", "RadiusReduction", "make_radius",
     "Angular", "AngularQuery", "BoundaryAdapter", "BoundaryCore", "BoundaryCoreData",
     "BoundaryData", "BoundaryPrimitive", "BoundarySampleQuery", "ClassificationOps", "ClassifyQuery",
-    "CoefficientData", "CoefficientMeta", "DeviceArray", "DeviceArray2D", "DeviceTree", "Euclidean", "MeasureOps",
+    "CoefficientData", "CoefficientMeta", "DeviceArray", "DeviceArray2D", "DeviceTree", "Euclidean",
+    "FusedNearestOps", "MeasureOps",
     "KnnQuery", "MetricSpec", "NearestCallbacks", "NearestOps", "NearestPolicy", "NearestPredicate",
     "NearestQuery", "OverlapQuery", "PointItem2", "PointItem3", "Points", "PointsArrays2",
     "PointsArrays3", "PointsData2", "PointsData3", "Primitive", "PrimitiveSpec", "Ray", "RayOps",

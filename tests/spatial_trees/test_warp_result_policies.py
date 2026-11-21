@@ -1,4 +1,6 @@
 """Selected-result policy device contract and native CPU compilation."""
+from dataclasses import replace
+
 import jax
 import numpy as np
 import pytest
@@ -160,13 +162,14 @@ def test_triangle_predicate_and_selected_result_use_winning_item():
     def build(query: wp.vec3, item: TriangleItem3, index: int, point: wp.vec3, value: float):
         return CustomResult(index, point, item.e2[1], value)
 
-    primitive = Triangles()
+    primitive = replace(Triangles(), group_leaves=False)
     vertices = []
     for z, height in ((0, 1), (1, 2), (2, 3)):
         vertices.extend([[0, 0, z], [2, 0, z], [0, height, z]])
     tree, geometry = build_tree(primitive, primitive.indexed(vertices, np.arange(9).reshape(3, 3)))
     query = make_nearest(primitive, Euclidean(), predicate=accept,
                          result_policy=ResultPolicy(CustomResult, build))
+    assert query.ops.bind_fused(query.ops) is not None
     hit, status = _selected_nearest(query, tree, geometry, [[0.25, 0.25, 0.]])
     np.testing.assert_array_equal(status, [1])
     np.testing.assert_array_equal(hit['original_id'], [1])

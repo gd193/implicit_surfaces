@@ -33,15 +33,12 @@ def bind_nearest(primitive, metric):
     return metric.bind(primitive)
 
 
-@wp.func_native("return bvh::conservative_box_score<true>(query, lower, upper);")
-def _triangle_box_score(query: wp.vec3, lower: wp.vec3, upper: wp.vec3) -> float: ...
-
-
 @lru_cache(maxsize=None)
-def nearest_functions(primitive, metric, predicate, Context, State, *, fused_triangle=False):
+def nearest_functions(primitive, metric, predicate, Context, State, *, node_bound=None):
     ops = bind_nearest(primitive, metric)
     accepts = predicate.bind(primitive, ops) if hasattr(predicate, "bind") else predicate
-    node_bound = _triangle_box_score if fused_triangle else ops.node_bound
+    if node_bound is None:
+        node_bound = ops.node_bound
 
     # Select the callback combination on the host. The resulting device
     # function contains only the calls needed by this particular policy.

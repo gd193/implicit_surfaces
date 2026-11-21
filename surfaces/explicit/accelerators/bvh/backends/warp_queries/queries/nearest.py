@@ -1,5 +1,5 @@
 """Nearest queries with static primitive and metric callbacks."""
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Generic, TypeVar
 
@@ -10,8 +10,6 @@ from ..launch import BoundQuery, bind_query
 from ..io.arrays import load_array
 from ..traversal.scheduling import make_walk
 from ..contracts import make_struct
-from ..metrics import Euclidean
-from ..primitives.builtin import Triangles
 from ..._warp_tree import DeviceTree, STACK_CAPACITY
 from .nearest_ops import bind_nearest as _bind_nearest, nearest_functions, resolve_metric
 from .results import resolve_result
@@ -51,12 +49,6 @@ class SelectedNearestQuery(BoundQuery, Generic[HostDataT, DeviceDataT, ItemT, Po
     result_policy: object
 
 
-def _builtin_triangle(primitive):
-    builtin = Triangles()
-    return (primitive is builtin or
-            (type(primitive) is type(builtin) and replace(primitive, name=builtin.name) == builtin))
-
-
 def make_nearest(primitive, metric=None, *, evaluate=None, lower_bound=None, predicate=None,
                  stack_capacity=STACK_CAPACITY, block_dim=64, cache_bounds=None,
                  packed_nodes=True, group_leaves=None, result_policy=None):
@@ -91,22 +83,23 @@ def _make_nearest(primitive, metric, *, predicate=None,
     ops = _bind_nearest(primitive, metric)
     score_at = getattr(ops, "score_at", None)
     point_at = getattr(ops, "point_at", None)
-    fused_triangle = _builtin_triangle(primitive) and ops == Euclidean().bind(primitive)
-    defer_point = not fused_triangle and score_at is not None and point_at is not None
+    bind_fused = getattr(ops, "bind_fused", None)
+    fused = None if bind_fused is None else bind_fused(ops)
+    defer_point = fused is None and score_at is not None and point_at is not None
     Query, Point, Geometry = ops.query_type, primitive.point_type, primitive.data_type
     Context = make_struct("NearestContext", {"query": Query, "geometry": Geometry, "initial": wp.float32})
     state_fields = {"limit": wp.float32, "failed": wp.bool, "stop": wp.bool,
                     "index": wp.int32}
     if not defer_point:
         state_fields["point"] = Point
-    if defer_point or (result_policy is not None and not fused_triangle):
+    if defer_point or (result_policy is not None and fused is None):
         state_fields["slot"] = wp.int32
-    if fused_triangle and result_policy is not None:
+    if fused is not None and result_policy is not None:
         state_fields["item"] = primitive.item_type
     State = make_struct("NearestState", state_fields)
 
     functions = nearest_functions(primitive, metric, predicate, Context, State,
-                                  fused_triangle=fused_triangle)
+                                  node_bound=None if fused is None else fused.node_bound)
     accepts, bounds, resume = functions.accepts, functions.bounds, functions.resume
 
     @wp.func
@@ -140,12 +133,8 @@ def _make_nearest(primitive, metric, *, predicate=None,
         return
 
     visit = visit_generic
-    if fused_triangle:
-        @wp.func_native("return bvh::triangle_nearest_at(query, geometry, slot, limit);")
-        def candidate(query: Query, geometry: Geometry, slot: int, limit: float) -> wp.vec4: ...
-
-        @wp.func_native("return bvh::triangle_nearest_candidate(query, a, b, c, limit);")
-        def candidate_vertices(query: Query, a: Point, b: Point, c: Point, limit: float) -> wp.vec4: ...
+    if fused is not None:
+        candidate_at, candidate_item = fused.candidate_at, fused.candidate_item
 
         @wp.func
         def visit(ctx: Context, tree: DeviceTree, node: int, begin: int, end: int, tag: bool,
@@ -156,13 +145,12 @@ def _make_nearest(primitive, metric, *, predicate=None,
                     if wp.static(accepts is not None):
                         if not wp.static(accepts)(ctx.query, item):
                             continue
-                    evaluated = wp.static(candidate_vertices)(ctx.query, item.a, item.b, item.c, state.limit)
+                    point, score = wp.static(candidate_item)(ctx.query, item, state.limit)
                 else:
-                    evaluated = wp.static(candidate)(ctx.query, ctx.geometry, slot, state.limit)
-                score = evaluated[3]
+                    point, score = wp.static(candidate_at)(ctx.query, ctx.geometry, slot, state.limit)
                 if score >= 0.0 and (score < state.limit or (state.index < 0 and score == state.limit)):
                     state.limit = score
-                    state.point = wp.vec3(evaluated[0], evaluated[1], evaluated[2])
+                    state.point = point
                     state.index = load_array(tree.prim_ids, slot)
                     if wp.static(result_policy is not None):
                         state.item = item
@@ -239,7 +227,7 @@ def _make_nearest(primitive, metric, *, predicate=None,
             distance = wp.static(ops.to_distance)(state.limit)
             if not wp.isfinite(point) or not wp.isfinite(distance) or distance < 0.0:
                 return result, -1
-            if wp.static(fused_triangle):
+            if wp.static(fused is not None):
                 item = state.item
             else:
                 item = wp.static(primitive.load)(geometry, state.slot)

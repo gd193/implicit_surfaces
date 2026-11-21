@@ -53,6 +53,30 @@ def test_warp_boundary_sample_measure_batching_and_nulls(dimension):
     np.testing.assert_array_equal(rejected[4], 0)
 
 
+def test_lbvh_boundary_metadata_uses_topology_order():
+    primitive = Segments(2)
+    x = np.array([4, 0, 7, 2, 6, 1, 5, 3], np.float32)
+    a = np.column_stack((x, np.zeros_like(x)))
+    b = np.column_stack((x, x + 1))
+    indices = np.column_stack((np.arange(8), np.arange(8) + 8))
+    source = primitive.indexed(np.vstack((a, b)), indices)
+    tree, geometry, boundary = build_boundary(primitive, source, Config(leaf_size_threshold=1), builder="lbvh")
+    left = np.asarray(tree.node_left)
+    assert np.any((left >= 0) & (left < np.arange(len(left))))
+    ids = np.asarray(tree.prim_ids)
+    assert not np.array_equal(ids, np.arange(len(x)))
+    sampling = prepare_boundary_sample(tree, boundary)
+    coefficients = prepare_robin_coefficients(tree, x + 1)
+    np.testing.assert_array_equal(sampling.primitive_weight, x[ids] + 1)
+    np.testing.assert_array_equal(sampling.node_weight[0], (x + 1).sum())
+    np.testing.assert_array_equal(coefficients.primitive_bounds[:, 0], x[ids] + 1)
+    np.testing.assert_array_equal(coefficients.node_bounds[0], [1., 8.])
+    point, _, pdf, face, status = make_boundary_sample(primitive)(
+        tree, geometry, sampling, jnp.zeros(2), jnp.inf, jnp.array([.2, .3, .4]))
+    assert status == 1 and point[0] == x[face]
+    np.testing.assert_allclose(pdf, 1. / (x + 1).sum())
+
+
 def test_warp_triangle_boundary_sample_uses_indexed_vertices():
     from ._warp_helpers import _build
 

@@ -1,9 +1,9 @@
 """Static nearest-query policies; bounds and minimizers share score units."""
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, Generic, Protocol, TypeVar
 
-from .contracts import PrimitiveSpec, WarpFunction, WarpType
+from .contracts import FusedNearestOps, PrimitiveSpec, WarpFunction, WarpType
 
 import warp as wp
 
@@ -38,6 +38,10 @@ class NearestOps(Generic[QueryT, ItemT, PointT]):
     # Slot-based evaluation keeps coordinate reconstruction out of selection.
     score_at: WarpFunction[[QueryT, Any, int], float] | None = None
     point_at: WarpFunction[[QueryT, Any, int], PointT] | None = None
+    # Single-nearest resolves this optional capability before generating its walker.
+    bind_fused: Callable[
+        ["NearestOps[QueryT, ItemT, PointT]"], FusedNearestOps[QueryT, Any, ItemT, PointT] | None,
+    ] | None = None
 
 
 class NearestPolicy(Protocol[DeviceDataT, ItemT, PointT, QueryT]):
@@ -164,10 +168,19 @@ class Euclidean:
                 return wp.where(score < wp.inf, score, wp.nan)
 
         node_bound = _conservative_box_score if score_at is not None and dimension == 3 else bound
-        return NearestOps(Vec, (dimension,), valid, node_bound, closest, to_score, to_distance,
-                          cull_limit, viewpoint=viewpoint, group_leaves=group_leaves,
-                          cache_nearest_bounds=getattr(primitive, "cache_nearest_bounds", True),
-                          score_at=score_at, point_at=point_at)
+        bind_primitive_fused = getattr(primitive, "bind_fused_euclidean", None)
+
+        def bind_fused(ops):
+            # Custom metrics may derive their operations from Euclidean.
+            # The primitive's fast path requires the original score policy.
+            return bind_primitive_fused(primitive) if ops == bound else None
+
+        bound = NearestOps(Vec, (dimension,), valid, node_bound, closest, to_score, to_distance,
+                           cull_limit, viewpoint=viewpoint, group_leaves=group_leaves,
+                           cache_nearest_bounds=getattr(primitive, "cache_nearest_bounds", True),
+                           score_at=score_at, point_at=point_at,
+                           bind_fused=bind_fused if bind_primitive_fused is not None else None)
+        return bound
 
 
 @dataclass(frozen=True)

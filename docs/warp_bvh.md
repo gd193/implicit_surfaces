@@ -1,17 +1,47 @@
 # GPU BVH queries with Warp and JAX
 
-`bvh.sah.warp` builds static binary SAH trees on the host and executes queries
-with Warp on CPU or GPU. `bvh.snch.warp` adds normal cones, silhouette queries
-and boundary sampling. Geometry stays shared under JIT and nested `vmap`.
+Build a binary BVH from a primitive provider and its data, then bind the queries
+the provider supports. Points, segments, triangles and user-defined primitives
+share this API. A provider supplies bounding boxes, packs its data in leaf order,
+and implements the geometric operations it needs. The bound queries accept JAX
+arrays and support JIT, nested vmap and direct calls from Warp kernels.
 
-## Query scope and retained builders
+## Build and query
 
-The supported explicit query backends are `bvh.sah.warp` and `bvh.snch.warp`.
-Use `BVHAccelerator`, `Config` and the static factories in
-`surfaces.explicit.accelerators.bvh.warp` as shown below. JAX arrays, pytrees,
-FFI, `jax.jit` and nested `jax.vmap` remain supported, including Warp execution
-on CPU. There is no pure-JAX explicit tree traversal fallback. Without Warp,
-query discovery returns no backends.
+```python
+from surfaces.explicit.accelerators.bvh.warp import Points, Triangles, Euclidean, build_tree, make_nearest
+
+primitive = Points(3)
+source = primitive.data(coordinates)
+# An indexed mesh uses the same build and query calls:
+# primitive = Triangles()
+# source = primitive.indexed(vertices, faces)
+
+tree, geometry = build_tree(primitive, source, builder="sah")
+nearest = make_nearest(primitive, Euclidean())
+point, distance, original_id, status = nearest(tree, geometry, query_points)
+```
+
+Choose `builder="lbvh"` to partition by Morton order. Both builders prepare the
+same binary tree representation. Reuse the same bound query with either tree
+and its matching packed geometry. Use `build_boundary` when a query needs
+connectivity or feature metadata. The [factory examples](#static-query-factories)
+cover other queries and [indexed boundaries](#indexed-boundaries).
+
+## Triangle mesh compatibility API and host builders
+
+`BVHAccelerator.build` retains the named triangle mesh adapters
+`bvh.sah.warp` and `bvh.snch.warp`. SNCH adds normal cones, silhouette
+queries and boundary sampling. Without Warp, host construction remains
+available and query discovery returns no backends.
+
+The mesh adapter stores `tree`, `geometry`, `boundary`, `sampling` and
+`coefficients` in its `WarpBVHPayload`. Existing named array reads such as
+`payload.prim_ids` and `payload.mesh_vertices` still work. Code that
+constructs, unpacks or updates the old flat tuple by field must migrate to
+the nested fields. Rebuild serialized flat payloads from the source mesh.
+The named SNCH adapter retains its historical split, edge IDs and cone
+construction for callers that consume silhouette and sampling results.
 
 The removed query registrations are `bvh.lbvh.jax`, `bvh.sah.jax`,
 `bvh.snch.jax`, `kd.left_balanced.jax`, `kd.sah.jax` and
@@ -51,7 +81,7 @@ and backend discovery do not initialize CUDA. Set `CUDA_VISIBLE_DEVICES`
 before starting Python. Use `JAX_PLATFORMS=cpu` for CPU execution and
 `XLA_PYTHON_CLIENT_PREALLOCATE=false` to disable JAX's GPU memory reservation.
 
-## Usage
+## Triangle mesh adapter example
 
 ```python
 import jax
@@ -122,6 +152,16 @@ bounding box, and projects onto surviving triangles in float32. It keeps the
 closest point with the winning squared distance and original ID. If multiple
 triangles attain the same float32 score, any of them may be returned.
 The nearest query accepts a first hit exactly at its distance cap.
+
+An external provider can use ordinary nearest operations, as the
+[planar quad example](../tests/spatial_trees/test_warp_external_quad.py) does.
+For a specialized single-nearest evaluator, the metric can supply
+`NearestOps.bind_fused`. At factory creation it returns either `None` or
+`FusedNearestOps` with a slot evaluator, a loaded-item evaluator for
+predicates, and a conservative node bound in the same score units. The
+Euclidean policy also accepts this specialization from a primitive through
+`bind_fused_euclidean`. k-nearest and radius queries keep their own scoring
+and tie rules.
 
 The shared triangle payload also supports kNN and radius queries. Their
 built-in Euclidean scorers use a longest-edge coordinate frame prepared by
@@ -292,10 +332,12 @@ The estimator evaluates actual coefficients and boundary data.
 
 ## Construction and extension
 
-Builders require finite referenced float32 vertices and valid triangle
-indices. SAH accepts degenerate triangles; SNCH rejects them and edges with
-more than two incident faces. Winding determines normals. Build separate
-absorbing/reflecting subset trees for mixed boundary conditions.
+Generic builders consume finite, ordered primitive bounds representable in
+float32. The named mesh adapters also validate referenced vertices and
+triangle indices. The SAH mesh adapter accepts degenerate triangles. The
+SNCH mesh adapter rejects triangles with doubled area at or below `1e-30`
+and edges with more than two incident faces. Winding determines normals.
+Build separate absorbing/reflecting subset trees for mixed boundary conditions.
 
 Topology, leaf ranges and packed indices are validated. Leaf size is an SAH
 threshold; retained leaves can exceed it. Tree depth must fit
@@ -308,9 +350,9 @@ flattens query axes without tiling geometry. Factories bind typed geometry and o
 existing triangle backend methods delegate to them. SNCH cones enclose whole edges.
 Packed float4 nodes hold bounds and topology for cached nearest, ray, overlap and
 classification queries.
-Closest point caches node bounds in eight-byte stack entries; silhouette and Robin
-use four-byte indices/tags and recompute cheap bounds when popping. These choices
-specialize by query semantics, independently of primitives and metrics. FFI arrays are contiguous.
+Nearest queries can cache node bounds in eight-byte stack entries. The default
+Euclidean triangle-nearest path, silhouette and Robin queries use four-byte
+indices/tags and recompute bounds on pop. FFI arrays are contiguous.
 Rebuild the tree when changing bounds or topology.
 
 Adapted ray helpers retain Warp's

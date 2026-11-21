@@ -28,10 +28,12 @@ class BVHAccelerator(MeshAccelerator):
         self.primitives = primitives
         self.payload = payload
         self.backend = backend
-        self.has_silhouette_query = bool(backend.has_silhouette_query)
+        has_features = payload.boundary.silhouette is not None
+        self.has_silhouette_query = bool(backend.has_silhouette_query and has_features)
         self.has_boundary_sampling = bool(backend.has_boundary_sampling)
         self.has_ray_interval = bool(backend.has_ray_interval)
-        self.has_robin_query = bool(backend.has_robin_query)
+        # Robin coefficients can be configured after construction.
+        self.has_robin_query = bool(backend.has_robin_query and has_features)
         self.has_point_classification = bool(backend.has_point_classification)
         self.has_all_hits = bool(backend.has_all_hits)
 

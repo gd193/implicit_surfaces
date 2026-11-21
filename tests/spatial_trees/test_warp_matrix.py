@@ -15,6 +15,8 @@ from scripts.bench.spatial_trees._warp_cases import (  # noqa: E402
 )
 from scripts.bench.spatial_trees.warp_query_matrix import kernel_inputs  # noqa: E402
 from scripts.bench.spatial_trees._warp_timing import _make_case  # noqa: E402
+from surfaces.explicit.accelerators.bvh.warp import build_tree  # noqa: E402
+from surfaces.explicit.accelerators.protocol import Config  # noqa: E402
 from ._robin_oracle import brute_robin_radius  # noqa: E402
 
 
@@ -96,9 +98,17 @@ def _robin2(raw, boundary, point, cap):
     return result
 
 
-@pytest.mark.parametrize("case", CASES, ids=lambda c: c.id)
-def test_builtin_query_matrix(case):
+@pytest.mark.parametrize("case,builder", [
+    *[pytest.param(case, "sah", id=case.id) for case in CASES],
+    *[pytest.param(QueryCase(name, "nearest", "euclidean"), "lbvh", id=f"{name}/nearest/lbvh")
+      for name in ("points3", "segments2", "triangles")],
+])
+def test_builtin_query_matrix(case, builder):
     geometry = scene(case.primitive)
+    if builder == "lbvh":
+        tree, packed = build_tree(PRIMITIVES[case.primitive], geometry.raw,
+                                  Config(leaf_size_threshold=4), builder=builder)
+        geometry = geometry._replace(tree=tree, geometry=packed, boundary=None)
     args, kwargs = arguments(case, geometry, 19)
     if case.query == "overlap":
         args = (*args[:2], args[2].at[-2].set(np.nan).at[-1].set(2.), args[3].at[-1].set(1.))

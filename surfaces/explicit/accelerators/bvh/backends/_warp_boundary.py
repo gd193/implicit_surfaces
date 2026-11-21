@@ -99,7 +99,7 @@ class BoundaryPrimitive(PrimitiveSpec[H, D, ItemT, P], Protocol[H, D, ItemT, P, 
     def boundary_adapter(self) -> BoundaryAdapter[H, D, ItemT, P, CH, CD, FH, FD, FI] | None: ...
 
 
-def _core(primitive, data, dimension):
+def _core(data, dimension, *, snch_compatibility=False):
     vertices, indices = np.asarray(data.vertices), np.asarray(data.indices)
     if len(data.a) and not len(indices):
         raise ValueError("boundary queries require indexed connectivity; use Segments(2).indexed")
@@ -121,6 +121,15 @@ def _core(primitive, data, dimension):
             or np.any(measure > np.finfo(np.float32).max)):
         raise ValueError("boundary normals and measures must be finite float32")
     _, counts = np.unique(boundary_features, axis=0, return_counts=True)
+    if snch_compatibility:
+        nonmanifold = np.count_nonzero(counts > 2)
+        if nonmanifold:
+            raise ValueError(
+                "bvh.snch.warp rejects non-manifold edges with more than two "
+                f"incident faces; found {nonmanifold}"
+            )
+        if np.any(lengths <= 1e-30):
+            raise ValueError("bvh.snch.warp requires non-degenerate triangles")
     closed = int(np.all(counts == 2) and np.all(lengths > 0))
     if dimension == 2:
         vertices, normal = (np.pad(a, ((0, 0), (0, 1))) for a in (vertices, normal))
@@ -130,11 +139,11 @@ def _core(primitive, data, dimension):
 
 
 def _segments_core(primitive, data):
-    return _core(primitive, data, 2)
+    return _core(data, 2)
 
 
-def _triangles_core(primitive, data):
-    return _core(primitive, data, 3)
+def _triangles_core(primitive, data, *, snch_compatibility=False):
+    return _core(data, 3, snch_compatibility=snch_compatibility)
 
 
 def _features(core, tree, geometry):
@@ -266,7 +275,8 @@ def _pack_builtin_core(core, data, tree, geometry):
     shared = (core.indices is getattr(data, "indices", None)
               and hasattr(geometry, "indices"))
     indices = geometry.indices if shared else jnp.asarray(core.indices)[ids]
-    return BoundaryCoreData(jnp.asarray(core.vertices), indices, jnp.asarray(core.closed),
+    vertices = geometry.vertices if core.vertices is data.vertices else jnp.asarray(core.vertices)
+    return BoundaryCoreData(vertices, indices, jnp.asarray(core.closed),
                             jnp.asarray(core.primitive_normal)[ids],
                             jnp.asarray(core.primitive_measure)[ids])
 
@@ -299,9 +309,9 @@ def resolve_boundary_adapter(primitive, adapter=None):
     raise TypeError("boundary queries require an explicit BoundaryAdapter")
 
 
-def build_boundary(primitive, data, config=None, *, adapter=None, silhouettes=True):
+def build_boundary(primitive, data, config=None, *, adapter=None, silhouettes=True, builder="sah"):
     adapter = resolve_boundary_adapter(primitive, adapter)
-    tree, geometry = build_tree(primitive, data, config)
+    tree, geometry = build_tree(primitive, data, config, builder=builder)
     core = adapter.prepare(primitive, data)
     meta = None
     if silhouettes:
