@@ -85,6 +85,18 @@ def test_surface_normals_and_vertex_velocity_use_original_face_ids(builder):
     np.testing.assert_allclose(speeds, expected, atol=3e-6)
 
 
+@pytest.mark.parametrize("side", [1e-20, 1e-9, 2e19])
+def test_triangle_vertex_velocity_across_scales(side):
+    mesh = trimesh.Trimesh(vertices=[[0, 0, 0], [side, 0, 0], [0, side, 0]],
+                           faces=[[0, 1, 2]], process=False)
+    model, boundary = _index_mesh(mesh, "sah")
+    surface = TriMeshSurface(model, boundary, vertex_velocity_fn=lambda field, ids: field[ids])
+    normal = jnp.array([0., 0., 1.], jnp.float32)
+    field = jnp.zeros_like(model.vertices).at[1].set(normal)
+    speed = jax.jit(surface.surface_velocity_normal)(field, model.vertices[1], normal)
+    np.testing.assert_allclose(speed, 1., rtol=1e-5)
+
+
 def test_surface_rejects_different_mesh_with_same_array_shapes():
     mesh, boundary = _index_mesh(trimesh.creation.box(), "sah")
     for other in (TriMesh(mesh.vertices + 1, mesh.faces),

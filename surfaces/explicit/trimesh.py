@@ -64,6 +64,14 @@ class TriMeshSurface(ExplicitSurface):
         normals = boundary.core.primitive_normal
         self._face_normals = jnp.zeros_like(normals).at[tree.prim_ids].set(normals)
 
+        if vertex_velocity_fn is not None:
+            # Normalize each length before taking the area product. The square
+            # root keeps the cached FP32 factor finite even for subnormal areas.
+            area = np.asarray(boundary.core.primitive_measure)
+            scale = np.zeros_like(area)
+            np.divide(np.sqrt(np.float32(0.5)), np.sqrt(area), out=scale, where=area > 0)
+            self._barycentric_scale = jnp.zeros_like(normals[:, 0]).at[tree.prim_ids].set(scale)
+
         self.is_differentiable_wrt_params = vertex_velocity_fn is not None
 
     def closest_point(self, params: Any, x: jnp.ndarray
@@ -99,7 +107,8 @@ class TriMeshSurface(ExplicitSurface):
             )
         cp, _dist, face_idx = self.closest_point(params, x)
         v_idx = self.mesh.faces[face_idx]
-        bary = _barycentric(cp, self.mesh.vertices[v_idx])
+        bary = _barycentric(cp, self.mesh.vertices[v_idx], self._face_normals[face_idx],
+                            self._barycentric_scale[face_idx])
         dV = self._vertex_velocity_fn(params, v_idx)
 
         def _blend(g):
@@ -108,18 +117,10 @@ class TriMeshSurface(ExplicitSurface):
         return jax.tree.map(_blend, dV)
 
 
-def _barycentric(p: jnp.ndarray, tri: jnp.ndarray) -> jnp.ndarray:
-    """Barycentric coordinates for a coplanar point."""
-    v0 = tri[1] - tri[0]
-    v1 = tri[2] - tri[0]
-    v2 = p - tri[0]
-    d00 = jnp.dot(v0, v0)
-    d01 = jnp.dot(v0, v1)
-    d11 = jnp.dot(v1, v1)
-    d20 = jnp.dot(v2, v0)
-    d21 = jnp.dot(v2, v1)
-    denom = d00 * d11 - d01 * d01 + 1e-30
-    v = (d11 * d20 - d01 * d21) / denom
-    w = (d00 * d21 - d01 * d20) / denom
-    u = 1.0 - v - w
-    return jnp.array([u, v, w])
+def _barycentric(p, tri, face_normal, scale):
+    """Signed subtriangle areas divided by the face's double area."""
+    a, b, c = tri
+    transverse = jnp.cross(face_normal, (p - a) * scale)
+    v = jnp.dot(transverse, (c - a) * scale)
+    w = -jnp.dot(transverse, (b - a) * scale)
+    return jnp.stack((1 - v - w, v, w))
