@@ -52,9 +52,8 @@ NaN and are counted `INVALID`. Without `normal_fn` the normal is NaN, so data
 that reads it fails explicitly. Gradients with respect to data params are not
 estimated.
 
-`WoSIntegrator` accepts vector-valued `g` with a scalar or zero source term;
-the estimate has shape `(N, m)`. A vector source term is not supported: the
-walker value has one component. `DifferentialWoSIntegrator` runs with scalar
+`WoSIntegrator` accepts vector-valued `g` and scalar or matching vector source
+terms; the estimate has shape `(N, m)`. `DifferentialWoSIntegrator` runs with scalar
 `g`. With vector `g` it is correct only for scalar parameter leaves: the
 `V_n (g - u)` product broadcasts each leaf against the `m` components, which
 fails or, when a leaf has `m` entries, silently mixes them.

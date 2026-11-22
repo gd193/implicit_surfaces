@@ -58,10 +58,11 @@ def generate_antialiased_ray(camera: Camera, pixel_i: jnp.ndarray, pixel_j: jnp.
     offset_v = jr.uniform(key2, minval=-0.5, maxval=0.5)
     pixel_center = camera.pixel_origin + ((pixel_i + offset_u) * camera.pixel_du) + ((pixel_j + offset_v) * camera.pixel_dv)
 
-    if camera.defocus_angle > 0.0:
-        ray_origin = defocus_disk_sample(camera, key3)
-    else:
-        ray_origin = camera.camera_center
+    ray_origin = jnp.where(
+        camera.defocus_angle > 0.0,
+        defocus_disk_sample(camera, key3),
+        camera.camera_center,
+    )
     ray_direction = normalize(pixel_center - ray_origin)
 
     return ray_origin, ray_direction

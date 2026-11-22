@@ -1,10 +1,10 @@
 import jax.numpy as jnp
 
-from .base import implicitSurface
+from .base import ImplicitSurface
 from .primitives import sdfnd
 
 
-class lipschitzImplicit(implicitSurface):
+class lipschitzImplicit(ImplicitSurface):
     @staticmethod
     def update_ray_trust_region(trust_region, distance, backend_flag):
         # This backend's ray distance does not depend on a local trust region.

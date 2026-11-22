@@ -27,8 +27,8 @@ import jax.random as jr
 import jnp_bounds.autobounds as jb
 
 # Surface module imports also set jax_default_matmul_precision='highest'.
-from implicitSurfaces.niImplicitSurface import niImplicitSurface
-from implicitSurfaces.jnpboundedImplicit import jnpboundedImplicit
+from surfaces.implicit.ni import niImplicitSurface
+from surfaces.implicit.jnp_bounded import jnpboundedImplicit
 from sphereWalker.integrator import WoSIntegrator
 from utils.rejection_sampling import sample_points_batched
 from utils.paper_utils.results import record, make_id, record_failure

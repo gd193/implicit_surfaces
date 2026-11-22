@@ -7,8 +7,7 @@ import pytest
 import trimesh
 
 from sengi import bvh
-from surfaces.base import TriMesh
-from surfaces.explicit.trimesh import TriMeshSurface
+from surfaces.explicit.trimesh import TriMesh, TriMeshSurface
 
 
 pytest.importorskip("warp")

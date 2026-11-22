@@ -13,7 +13,7 @@ jax.config.update("jax_default_matmul_precision", "highest")
 import jax.numpy as jnp
 import jnp_bounds.autobounds as autobounds
 
-from .base import implicitSurface
+from .base import ImplicitSurface
 from jnp_bounds import interval_arithmetic as interval_arithmetic
 from jnp_bounds import mixed_polynomials_arithmetic as polynomial_arithmetic
 from jnp_bounds.polynomial_roots import RootStatus, first_root, ray_envelope_roots
@@ -32,7 +32,7 @@ def _scalar_pair(value):
     return tuple(_scalar(x) for x in interval_arithmetic.endpoints(value))
 
 
-class jnpboundedImplicit(implicitSurface):
+class jnpboundedImplicit(ImplicitSurface):
     """
     A class for implicit surfaces that can bounded by the jnp autobound library.
     Current limitations of autobound:

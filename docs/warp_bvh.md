@@ -29,8 +29,7 @@ import jax.numpy as jnp
 
 from sengi import bvh
 from sengi.primitives.triangles import Triangles
-from surfaces.base import TriMesh
-from surfaces.explicit.trimesh import TriMeshSurface
+from surfaces.explicit.trimesh import TriMesh, TriMeshSurface
 
 mesh = TriMesh(
     vertices=jnp.asarray(vertices, dtype=jnp.float32),

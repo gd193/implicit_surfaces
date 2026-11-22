@@ -126,8 +126,7 @@ def worker(args):
     vertices, faces = host_mesh(mesh)
     validation = validate_mesh(vertices, faces, scene, args.resolutions[0])
     no_op = args.phase[0] == "extraction" and (
-        (args.backend[0] == "legacy" and not len(faces)) or
-        (args.backend[0] == "warp-sparse" and details["cells"] == 0))
+        args.backend[0] == "warp-sparse" and details["cells"] == 0)
     device_samples, kernels = trace_samples(trace_file, allow_no_kernels=no_op or args.capacity is not None)
     if len(device_samples) != args.repeats:
         raise RuntimeError("incomplete device trace")

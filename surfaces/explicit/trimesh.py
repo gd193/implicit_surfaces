@@ -1,18 +1,27 @@
 """Triangle surfaces with optional vertex-velocity differentiation."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from surfaces.base import TriMesh
 from surfaces.explicit.base import ExplicitSurface
 
 if TYPE_CHECKING:
     from sengi.boundary.data import BoundaryCoreData, BoundaryData, SilhouetteData
     from sengi.primitives.data import TrianglesArrays3
+
+
+class TriMesh(NamedTuple):
+    """Plain triangle mesh container.
+
+    `vertices`: (V, 3) float32 — vertex positions.
+    `faces`:    (F, 3) int32   — vertex indices per triangle (CCW).
+    """
+    vertices: jnp.ndarray
+    faces: jnp.ndarray
 
 
 class TriMeshSurface(ExplicitSurface):

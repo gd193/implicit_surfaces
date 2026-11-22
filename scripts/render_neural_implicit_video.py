@@ -99,7 +99,7 @@ def main():
     import numpy as np
     import optax
 
-    from implicitSurfaces.jnpboundedImplicit import jnpboundedImplicit
+    from surfaces.implicit.jnp_bounded import jnpboundedImplicit
     from rayMarcher.camera import Camera
     from rayMarcher.marcher import SimpleIntegrator
 

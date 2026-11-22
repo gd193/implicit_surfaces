@@ -48,8 +48,8 @@ DTYPE = jnp.float64 if _X64 else jnp.float32
 sys.path.insert(0, '/system/user/volkmann/implicit_surfaces_project')
 
 import jnp_bounds.autobounds as jb
-from implicitSurfaces.niImplicitSurface import niImplicitSurface
-from implicitSurfaces.jnpboundedImplicit import jnpboundedImplicit
+from surfaces.implicit.ni import niImplicitSurface
+from surfaces.implicit.jnp_bounded import jnpboundedImplicit
 
 
 # ----------------------------------------------------------------------------

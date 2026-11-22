@@ -45,12 +45,9 @@ def test_mesh_adapters_against_dense_reference(name, level, phase):
             continue
         for source, target in ((vertices, reference), (reference, vertices)):
             assert cKDTree(target).query(source)[0].max() < 2e-5, backend
-        if backend != "legacy":
-            assert len(vertices) == len(reference), backend
+        assert len(vertices) == len(reference), backend
         if name != "gyroid":
-            # Weld the legacy triangle soup solely for topology validation.
-            welded = cKDTree(reference).query(vertices)[1][faces] if backend == "legacy" else faces
-            edges = np.sort(welded[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
+            edges = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
             _, counts = np.unique(edges, axis=0, return_counts=True)
             assert np.all(counts == 2), backend
 

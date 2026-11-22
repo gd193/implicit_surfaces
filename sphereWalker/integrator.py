@@ -197,6 +197,34 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         step = jax.vmap(self.step, in_axes=(None, 0))
         return jax.lax.fori_loop(0, steps, lambda i, s: step(params, s), states, unroll=unroll)
 
+    def _accumulate_completed(self,
+                              params: Any,
+                              current_states: StateT,
+                              current_parents: jnp.ndarray,
+                              is_done: jnp.ndarray,
+                              sums: Any,
+                              counts: jnp.ndarray,
+                              drop_idx: int) -> Tuple[Any, jnp.ndarray]:
+        to_accumulate = jax.vmap(self._compute_accumulator_update, in_axes=(None, 0))(params, current_states)
+        successful = is_done & self._contributing_status(current_states.status)
+        finite = jnp.ones_like(successful)
+        for leaf in jax.tree.leaves(to_accumulate):
+            finite &= jnp.all(jnp.isfinite(leaf).reshape((leaf.shape[0], -1)), axis=1)
+        terminal_status = jnp.where(successful & ~finite, WT.INVALID, current_states.status)
+        successful &= finite
+
+        done_parents = jnp.where(is_done, current_parents, drop_idx)
+        done_w = jax.tree.map(lambda leaf: mask_leaf(leaf, successful), to_accumulate)
+
+        updated_sums = jax.tree.map(
+            lambda acc_leaf, to_add_leaf: acc_leaf.at[done_parents].add(to_add_leaf, mode='drop'),
+            sums,
+            done_w,
+        )
+        updated_counts = counts.at[done_parents, terminal_status].add(
+            is_done.astype(counts.dtype), mode='drop')
+        return updated_sums, updated_counts
+
     @partial(jax.jit, static_argnames=['self','active_buffer_size', 'N_total_samples', 'n_samples', 'steps_between_refill', 'unroll_loop'])
     def _process_active_states(self,
                                # dynamic state
@@ -225,34 +253,15 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         is_done = self._check_if_done(current_states, current_parents)
 
         sums, counts = current_accumulated_w
-        to_accumulate = jax.vmap(self._compute_accumulator_update, in_axes=(None, 0))(params, current_states)
-        successful = is_done & self._contributing_status(current_states.status)
-        finite = jnp.ones_like(successful)
-        for leaf in jax.tree.leaves(to_accumulate):
-            finite &= jnp.all(jnp.isfinite(leaf).reshape((leaf.shape[0], -1)), axis=1)
-        terminal_status = jnp.where(successful & ~finite, WT.INVALID, current_states.status)
-        successful &= finite
-        
-        # Accumulate results
-        # Use N_total_samples + 1 as safe drop index for logic, 
-        # but for accumulation into buffers of size N_positions, we need a safe index relative to N_positions.
-        # We use current_accumulated_nSteps.shape[0] as the safe out-of-bounds index.
+        # Use current_accumulated_nSteps.shape[0] as the safe out-of-bounds index for buffers of size N_positions.
         drop_idx = current_accumulated_nSteps.shape[0]
-        
+        updated_sums, updated_counts = self._accumulate_completed(
+            params, current_states, current_parents, is_done, sums, counts, drop_idx
+        )
         done_parents = jnp.where(is_done, current_parents, drop_idx)
         done_nSteps = jnp.where(is_done, current_states.nSteps, 0)
-        done_w = jax.tree.map(lambda leaf: mask_leaf(leaf, successful), to_accumulate)
-
-        updated_accumulated_w = jax.tree.map(
-            lambda acc_leaf, to_add_leaf: acc_leaf.at[done_parents].add(to_add_leaf, mode='drop'),
-            sums,
-            done_w
-        )
         updated_accumulated_nSteps = current_accumulated_nSteps.at[done_parents].add(done_nSteps, mode='drop')
-
-        updated_counts = counts.at[done_parents, terminal_status].add(
-            is_done.astype(counts.dtype), mode='drop')
-        updated_accumulated_w = (updated_accumulated_w, updated_counts)
+        updated_accumulated_w = (updated_sums, updated_counts)
 
         # Refill active states
         free_indices_mask = jnp.nonzero(is_done, size=active_buffer_size, fill_value=active_buffer_size)[0]
@@ -338,20 +347,21 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                                     max_active_states: int = 1000**2,
                                     jit_buck_size: int = 1000,
                                     n_compactions: int = 20,
-                                    compaction_mode: str = 'uniform') -> None:
-        """Force one JIT compile per compaction-bucket size.
+                                    compaction_mode: str = 'uniform',
+                                    *,
+                                    refill_rounds: int = 1) -> None:
+        """Force one JIT compile per compaction-bucket size (and grouped refill rounds).
 
         `_process_active_states` is jitted with `active_buffer_size` as a
         static_argname, so each unique buffer size triggers a fresh compile.
-        Random-key warmup runs visit only the buckets the walker absorbing-
-        time distribution happens to hit, leaving the others uncached. This
-        method invokes `_process_active_states` once per bucket size with
-        synthetic state, guaranteeing the JIT cache covers all of them
-        before timed runs.
+        When `refill_rounds > 1`, `_process_refill_rounds` is also warmed for
+        the initial active buffer size used during the refill phase.
         """
         initial_position_batch = self._prepare_positions(
             initial_position_batch, n_samples, steps_between_refill,
             max_active_states, jit_buck_size, n_compactions)
+        if isinstance(refill_rounds, bool) or not isinstance(refill_rounds, Integral) or refill_rounds < 1:
+            raise ValueError('refill_rounds must be a positive integer')
         if initial_position_batch.shape[0] == 0:
             return
         positions_padded, N_original = _pad_to_bucket(initial_position_batch, bucket_size=jit_buck_size)
@@ -385,6 +395,27 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                 int(buf),                     # active_buffer_size — STATIC
                 N_total_samples, n_samples,
                 steps_between_refill, unroll_loop,
+            )
+            jax.block_until_ready(out[0].position)
+
+        if refill_rounds > 1 and active_buffer_size > 0:
+            buf = int(active_buffer_size)
+            dummy_keys = jax.vmap(lambda i: jr.fold_in(rng_key, i))(jnp.arange(buf))
+            dummy_pos = jnp.broadcast_to(positions_padded[0:1], (buf, positions_padded.shape[1]))
+            dummy_state = self._get_initial_state(
+                dummy_pos, dummy_keys, init_trust_region_size, buf,
+            )
+            dummy_parents = jnp.zeros((buf,), dtype=jnp.int32)
+            out = self._process_refill_rounds(
+                dummy_state, dummy_parents,
+                accumulated_w, accumulated_nSteps,
+                next_task_index_dummy,
+                params, positions_padded, rng_key,
+                init_trust_region_size,
+                buf,
+                N_total_samples, n_samples,
+                steps_between_refill, unroll_loop,
+                rounds=int(refill_rounds),
             )
             jax.block_until_ready(out[0].position)
 
@@ -639,9 +670,13 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         # Guard the source-Greens accumulation against radius=0 (empty-sphere classifier
         # failed → no ball to integrate over → contribution is 0, not NaN). Without this,
         # weighted_greens(0, 0) → NaN poisons state.w forever.
+        source = jnp.asarray(self._source(params, sample_ball_position), dtype=state.w.dtype)
+        if jnp.broadcast_shapes(source.shape, state.w.shape) != state.w.shape:
+            raise ValueError(
+                f"Source shape {source.shape} must broadcast to boundary value shape {state.w.shape}"
+            )
         source_contrib = jnp.where(radius > 0,
-                                   self._source(params, sample_ball_position) *
-                                       self.weighted_greens_fn(r=sample_ball_radius, R=radius),
+                                   source * self.weighted_greens_fn(r=sample_ball_radius, R=radius),
                                    jnp.asarray(0.0, dtype=state.w.dtype))
         new_w = jnp.where(is_done, state.w, state.w + source_contrib)
         new_nSteps, new_position, new_w = cast(jnp.ndarray, new_nSteps), cast(jnp.ndarray, new_position), cast(jnp.ndarray, new_w) # type hints b.c. of jnp.where
@@ -656,11 +691,14 @@ class WoSIntegrator(BaseIntegrator[WalkerState]):
         return finish_step(state, updated)
     
     def _get_initial_state(self, init_position_batch, rng_keys, init_tr, buffer_size) -> WalkerState:
+        dtype = init_position_batch.dtype
+        point = jax.ShapeDtypeStruct((self.dim,), dtype)
+        value_shape = jnp.broadcast_shapes((1,), jax.eval_shape(self.boundary_condition_fn, point).shape)
         return WalkerState(
             position=init_position_batch,
             nSteps=jnp.zeros((buffer_size,), dtype=jnp.int32),
-            w=jnp.zeros((buffer_size, 1), dtype=init_position_batch.dtype),
-            trust_region_size=jnp.full((buffer_size,), init_tr, dtype=init_position_batch.dtype),
+            w=jnp.zeros((buffer_size,) + value_shape, dtype=dtype),
+            trust_region_size=jnp.full((buffer_size,), init_tr, dtype=dtype),
             rng_key=rng_keys,
             status=jnp.zeros((buffer_size,), dtype=jnp.int32),
             done_flag=jnp.zeros((buffer_size,), dtype=bool)
@@ -1092,9 +1130,67 @@ class DifferentialWoSIntegrator(BaseIntegrator[DifferentialWalkerState]):
             params,
             state.boundary_hit_position,
             state.w + self.boundary_condition_fn(state.position),
-            # Inactive/failed slots are evaluated too, but never accumulated.
+            # Guard the division; only completed contributing walkers reach here.
             jnp.where(state.offset_length > 0, state.offset_length, 1.)
         )
+
+    def _accumulate_completed(self,
+                              params: Any,
+                              current_states: DifferentialWalkerState,
+                              current_parents: jnp.ndarray,
+                              is_done: jnp.ndarray,
+                              sums: Any,
+                              counts: jnp.ndarray,
+                              drop_idx: int) -> Tuple[Any, jnp.ndarray]:
+        """Evaluate Df and V_n only on completed contributing walkers in chunks."""
+        successful = is_done & self._contributing_status(current_states.status)
+        failed_done = is_done & ~successful
+        failed_parents = jnp.where(failed_done, current_parents, drop_idx)
+        counts = counts.at[failed_parents, current_states.status].add(
+            failed_done.astype(counts.dtype), mode='drop')
+
+        n_states = successful.shape[0]
+        bucket = min(self.transition_bucket_size, n_states)
+        count = jnp.sum(successful, dtype=jnp.int32)
+        indices = jnp.nonzero(successful, size=n_states, fill_value=n_states)[0].astype(jnp.int32)
+        indices = jnp.concatenate([indices, jnp.full((bucket,), n_states, jnp.int32)])
+        eval_chunk = jax.vmap(self._compute_accumulator_update, in_axes=(None, 0))
+
+        def cond(carry):
+            chunk, _, _ = carry
+            return chunk * bucket < count
+
+        def body(carry):
+            chunk, cur_sums, cur_counts = carry
+            idx = jax.lax.dynamic_slice(indices, (chunk * bucket,), (bucket,))
+            active = idx < n_states
+            # Pad the tail with a real completed walker (count > 0 here) so Df,
+            # V_n and the boundary condition never see a zero-filled state.
+            safe_idx = jnp.where(active, idx, indices[0])
+            picked = jax.tree.map(lambda a: a[safe_idx], current_states)
+            chunk_vals = eval_chunk(params, picked)
+            finite = jnp.ones((bucket,), dtype=bool)
+            for leaf in jax.tree.leaves(chunk_vals):
+                finite &= jnp.all(jnp.isfinite(leaf).reshape((bucket, -1)), axis=1)
+            chunk_status = jnp.where(finite, picked.status, WT.INVALID)
+            chunk_ok = active & finite
+            chunk_parents = jnp.where(
+                active,
+                current_parents.at[idx].get(mode='fill', fill_value=drop_idx),
+                drop_idx,
+            )
+            chunk_w = jax.tree.map(lambda leaf: mask_leaf(leaf, chunk_ok), chunk_vals)
+            cur_sums = jax.tree.map(
+                lambda acc, add: acc.at[chunk_parents].add(add, mode='drop'),
+                cur_sums,
+                chunk_w,
+            )
+            cur_counts = cur_counts.at[chunk_parents, chunk_status].add(
+                active.astype(cur_counts.dtype), mode='drop')
+            return chunk + jnp.int32(1), cur_sums, cur_counts
+
+        _, sums, counts = jax.lax.while_loop(cond, body, (jnp.int32(0), sums, counts))
+        return sums, counts
     
 
 def get_scatter_fn(free_indices: jnp.ndarray, is_valid_mask: jnp.ndarray, N_total_samples: int):

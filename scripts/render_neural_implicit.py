@@ -59,7 +59,7 @@ def main():
     import matplotlib.pyplot as plt
     import optax
 
-    from implicitSurfaces.jnpboundedImplicit import jnpboundedImplicit
+    from surfaces.implicit.jnp_bounded import jnpboundedImplicit
     from rayMarcher.camera import Camera
     from rayMarcher.marcher import SimpleIntegrator
 

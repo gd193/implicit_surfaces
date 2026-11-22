@@ -1,6 +1,4 @@
-import jax
 import jax.numpy as jnp
-import jax.random as jr
 
 from typing import NamedTuple
 
@@ -23,6 +21,7 @@ class Camera(NamedTuple):
     defocus_disk_v: jnp.array
     defocus_angle: jnp.array
 
+    @staticmethod
     def setup_Camera( 
                  image_width: int, 
                  image_height: int, 
@@ -34,7 +33,6 @@ class Camera(NamedTuple):
                  focus_distance: float = 1.0):
 
         aspect_ratio = image_width / image_height
-        focal_length = float(jnp.linalg.norm(lookfrom - lookat))
 
 
         theta = jnp.deg2rad(vfov)

@@ -1,7 +1,5 @@
 """Top-level surface package.
 
-Houses the universal `Surface` protocol and shared spatial structures
-consumed by rayMarcher / sphereWalker / meshExtractor. Implicit and
-explicit subhierarchies live in `surfaces.implicit` and
-`surfaces.explicit`.
+Houses implicit surfaces (`surfaces.implicit`), explicit surfaces
+(`surfaces.explicit`), and shared query adapters (`surfaces.queries`).
 """

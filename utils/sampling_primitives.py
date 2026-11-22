@@ -40,15 +40,16 @@ def sample_uniform_ray_bbox_2d(key: jax.Array, bbox_mins: jnp.ndarray, bbox_maxs
     ray_origin = plane_origin - direction * box_bounding_radius
 
     # determine if the ray o+d*t intersects the bbox using the slab method
-    t_min = (bbox_mins - ray_origin) / (direction + jnp.sign(direction) * 1e-12)
-    t_max = (bbox_maxs - ray_origin) / (direction + jnp.sign(direction) * 1e-12)
-    t_close = jnp.minimum(t_min, t_max)
-    t_close = jnp.max(t_close)
-    t_far = jnp.maximum(t_min, t_max)
-    t_far = jnp.min(t_far)
+    parallel = direction == 0
+    divisor = jnp.where(parallel, jnp.asarray(1.0, dtype=dtype), direction)
+    t_min = (bbox_mins - ray_origin) / divisor
+    t_max = (bbox_maxs - ray_origin) / divisor
+    t_close = jnp.max(jnp.where(parallel, jnp.asarray(-jnp.inf, dtype=dtype), jnp.minimum(t_min, t_max)))
+    t_far = jnp.min(jnp.where(parallel, jnp.asarray(jnp.inf, dtype=dtype), jnp.maximum(t_min, t_max)))
+    outside_parallel = jnp.any(parallel & ((ray_origin < bbox_mins) | (ray_origin > bbox_maxs)))
 
     # if t_close <= t_far, the ray intersects the bbox, otherwise it does not
-    intersects_flag = jnp.logical_and(t_close <= t_far, t_far > 0.0)
+    intersects_flag = (~outside_parallel) & (t_close <= t_far) & (t_far > 0.0)
     intersection_point = ray_origin + direction * t_close
     max_t_in_box = t_far - t_close
 
@@ -81,10 +82,12 @@ def sample_uniform_ray_bbox_3d(key: jax.Array, bbox_mins: jnp.ndarray, bbox_maxs
     key_direction, key_offset = jr.split(key)
     direction = sample_uniform_2sphere(key_direction, dtype=dtype) 
 
-    #get normal and binormal vectors to d using SVD, full_matrices=True to get the full set of singular vectors
-    _, __, vh = jnp.linalg.svd(jnp.expand_dims(direction, axis=0), full_matrices=True)
-    n_vec = vh[1] # normal vector to d
-    b_vec = vh[2] # binormal vector to d
+    # Build an orthonormal basis (n_vec, b_vec) perpendicular to unit direction (Duff et al. 2017)
+    sign = jnp.where(direction[2] >= 0, jnp.asarray(1.0, dtype=dtype), jnp.asarray(-1.0, dtype=dtype))
+    a = jnp.asarray(-1.0, dtype=dtype) / (sign + direction[2])
+    b = direction[0] * direction[1] * a
+    n_vec = jnp.stack([1.0 + sign * direction[0] * direction[0] * a, sign * b, -sign * direction[0]])
+    b_vec = jnp.stack([b, sign + direction[1] * direction[1] * a, -direction[1]])
 
     #random offset values uniformly sampled in range(0, bbox diagonal length)
     Us = jr.uniform(key_offset, shape=(2,), minval=0.0, maxval=1.0, dtype=dtype) * 2.0 - 1.0
@@ -95,15 +98,16 @@ def sample_uniform_ray_bbox_3d(key: jax.Array, bbox_mins: jnp.ndarray, bbox_maxs
     ray_origin = ray_origin - direction * box_bounding_radius
 
     #determine if the ray o+d*t intersects the bbox using the slab method
-    t_min = (bbox_mins - ray_origin) / (direction + jnp.sign(direction) * 1e-12)
-    t_max = (bbox_maxs - ray_origin) / (direction + jnp.sign(direction) * 1e-12)
-    t_close = jnp.minimum(t_min, t_max)
-    t_close = jnp.max(t_close)
-    t_far = jnp.maximum(t_min, t_max)
-    t_far = jnp.min(t_far)
+    parallel = direction == 0
+    divisor = jnp.where(parallel, jnp.asarray(1.0, dtype=dtype), direction)
+    t_min = (bbox_mins - ray_origin) / divisor
+    t_max = (bbox_maxs - ray_origin) / divisor
+    t_close = jnp.max(jnp.where(parallel, jnp.asarray(-jnp.inf, dtype=dtype), jnp.minimum(t_min, t_max)))
+    t_far = jnp.min(jnp.where(parallel, jnp.asarray(jnp.inf, dtype=dtype), jnp.maximum(t_min, t_max)))
+    outside_parallel = jnp.any(parallel & ((ray_origin < bbox_mins) | (ray_origin > bbox_maxs)))
 
     # if t_close <= t_far, the ray intersects the bbox, otherwise it does not
-    intersects_flag = jnp.logical_and(t_close <= t_far, t_far > 0.0)
+    intersects_flag = (~outside_parallel) & (t_close <= t_far) & (t_far > 0.0)
     intersection_point = ray_origin + direction * t_close
     max_t_in_box = t_far - t_close
 

@@ -42,7 +42,7 @@ def configure_device(device: str) -> None:
 def build_scene(sdf_name: str):
     """Returns (sdf_fn, params) for the named primitive. All entries assume Lipschitz constant 1."""
     import jax.numpy as jnp
-    from implicitSurfaces.sdf_primitives import sphere_sdf, bbox_sdf
+    from surfaces.implicit.primitives import sphere_sdf, bbox_sdf
 
     if sdf_name == "sphere":
         return sphere_sdf, {
@@ -65,7 +65,7 @@ def main():
     import jax.numpy as jnp
     import matplotlib.pyplot as plt
 
-    from implicitSurfaces.lipschitzImplicit import sdfImplicit
+    from surfaces.implicit.lipschitz import sdfImplicit
     from rayMarcher.camera import Camera
     from rayMarcher.marcher import SimpleIntegrator
 

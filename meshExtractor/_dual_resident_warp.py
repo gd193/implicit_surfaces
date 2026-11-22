@@ -162,7 +162,9 @@ def decode_points(codes: wp.array(dtype=wp.int64), count: wp.array(dtype=int), s
         rem = code - x * stride * stride
         y = rem // stride
         z = rem - y * stride
-        point = wp.vec3(ox, oy, oz) + wp.cw_mul(
-            wp.vec3(sx, sy, sz), wp.vec3(float(wp.int32(x)), float(wp.int32(y)), float(wp.int32(z)))
+        point = shared.grid_position(
+            wp.vec3i(wp.int32(x), wp.int32(y), wp.int32(z)),
+            wp.vec3(ox, oy, oz),
+            wp.vec3(sx, sy, sz),
         )
     points[i] = point

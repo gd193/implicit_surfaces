@@ -22,7 +22,7 @@ def scatter(materials: Material, material_idx: int, current_direction: jnp.ndarr
     ref_idx = materials.ref_idx[material_idx]
 
     # Split into more keys to avoid reuse
-    key_diffuse, key_metal, key_glass_reflect, key_glass_random, key_recursive = jr.split(key, 5)
+    key_diffuse, key_metal, _key_glass_reflect, key_glass_random, key_recursive = jr.split(key, 5)
 
     # Diffuse scattering
     diffuse_scatter = hit_normal + generate_random_unit_ray(key_diffuse)
@@ -36,7 +36,8 @@ def scatter(materials: Material, material_idx: int, current_direction: jnp.ndarr
     # Glass refraction/reflection
     front_face = jnp.dot(current_direction, hit_normal) < 0
     outward_normal = jnp.where(front_face, hit_normal, -hit_normal)
-    eta_ration = jnp.where(front_face, 1.0 / ref_idx, ref_idx)
+    safe_ref_idx = jnp.where(ref_idx > 0, ref_idx, 1.0)
+    eta_ration = jnp.where(front_face, 1.0 / safe_ref_idx, safe_ref_idx)
 
     unit_direction = utils.normalize(current_direction)
     cos_theta = jnp.minimum(-jnp.dot(unit_direction, outward_normal), 1.0)

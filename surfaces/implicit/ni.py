@@ -9,6 +9,7 @@ classification is UNKNOWN we return radius = 0 and shrink next σ — the walker
 will not move that step but will retry at half the cube size.
 """
 from typing import Optional, Tuple
+import os
 import sys
 
 import jax
@@ -18,10 +19,10 @@ import jax
 jax.config.update("jax_default_matmul_precision", "highest")
 import jax.numpy as jnp
 
-from .base import implicitSurface
+from .base import ImplicitSurface
 
 
-_NIQ_SRC = "/system/user/volkmann/neural-implicit-queries/src"
+_NIQ_SRC = os.environ.get("NIQ_SRC", "/system/user/volkmann/neural-implicit-queries/src")
 
 
 def _import_niq():
@@ -69,7 +70,7 @@ def _import_niq():
     return _impl_mlp_utils, _impl_fn
 
 
-class niImplicitSurface(implicitSurface):
+class niImplicitSurface(ImplicitSurface):
     """Empty-sphere via neural-implicit-queries' classify_general_box.
 
     Modes (mode kwarg): one of
@@ -93,6 +94,11 @@ class niImplicitSurface(implicitSurface):
                  min_trust_region_size: float = 1e-6,
                  ray_safety_factor: float = 0.98,
                  **affine_kwargs):
+        if level_set != 0.0:
+            raise ValueError(
+                "niImplicitSurface only supports level_set=0.0 because NIQ's "
+                "classify_general_box classifies against the zero level set"
+            )
         impl_mlp_utils, impl_fn = _import_niq()
         SIGN_UNKNOWN = impl_fn.SIGN_UNKNOWN
 

@@ -1,8 +1,8 @@
 """Explicit-surface protocol layer.
 
 `ExplicitSurface` adds two abstract foundation primitives —
-`closest_point` and `first_hit` — and provides default reductions of all
-universal `Surface` methods (`signed_value`, `empty_sphere`, `ray_step`,
+`closest_point` and `first_hit` — and provides default reductions of the
+query methods (`signed_value`, `empty_sphere`, `ray_step`,
 `classify_box`, `box_bounds`, `normal_at`) on top of them. Concrete reps
 (triangle mesh, point cloud, ...) only implement the two primitives plus
 any per-rep specifics.
@@ -17,21 +17,19 @@ from typing import Any, Optional, Tuple
 
 import jax.numpy as jnp
 
-from surfaces.base import Surface
 
-
-class ExplicitSurface(Surface):
+class ExplicitSurface(abc.ABC):
+    dim: int = 3
     # Capability flags — explicit reps have explicit normals (no autograd
     # for shading) and conservative signed-distance box bounds.
     needs_grad_for_normals: bool = False
     has_box_bounds: bool = True
-    has_classify_subcubes: bool = False
     is_differentiable_wrt_params: bool = False  # subclasses flip when
                                                 #   vertex_velocity_fn is provided
 
     # =====================================================================
     # Foundation primitives — every explicit rep must implement these.
-    # All other Surface methods reduce to them by default.
+    # All other query methods reduce to them by default.
     # =====================================================================
 
     @abc.abstractmethod
@@ -64,7 +62,7 @@ class ExplicitSurface(Surface):
         """
 
     # =====================================================================
-    # Default Surface protocol implementations — derived from primitives.
+    # Default query implementations — derived from primitives.
     # =====================================================================
 
     def signed_value(self, params: Any, x: jnp.ndarray) -> jnp.ndarray:

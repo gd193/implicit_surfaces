@@ -11,7 +11,7 @@ from meshExtractor._field import _FieldEvaluator
 from meshExtractor.warp import _extract_dense, _extract_sparse
 
 FIELDS = ("sphere", "torus", "neural", "gyroid")
-MC_BACKENDS = ("legacy", "warp-dense", "warp-sparse", "compact-dense")
+MC_BACKENDS = ("warp-dense", "warp-sparse", "compact-dense")
 BACKENDS = MC_BACKENDS + ("dual-dense", "dual-sparse")
 LOWER, UPPER = (-1., -1., -1.), (1., 1., 1.)
 
@@ -97,28 +97,6 @@ def make_runner(backend, scene, cells, phase, batch_size, root_steps=0, *,
         details.update(gradient_evaluation_in_timed_region=True, root_steps=root_steps,
                        topology="dual_contouring", capacity=capacity,
                        sparse_capacity=sparse_capacity, resident=resident)
-        return run, details
-    if backend == "legacy":
-        from meshExtractor.extractors.marching_cubes import MarchingCubes
-        from meshExtractor.trees.octree import Octree
-        from surfaces.implicit.lipschitz import lipschitzImplicit
-
-        if cells & (cells - 1):
-            raise ValueError("legacy requires a power-of-two cell resolution")
-        surface = lipschitzImplicit(fn=scene, lipschitz_bound=scene.lipschitz,
-                                   level_set=scene.level, dim=3)
-        tree, extractor = Octree(cells.bit_length() - 1), MarchingCubes()
-
-        def build():
-            return tree.build(surface, scene.params, jnp.array(LOWER), jnp.array(UPPER))
-
-        leaves = build() if phase == "extraction" else None
-
-        def run():
-            return extractor.extract(surface, scene.params, build() if leaves is None else leaves)
-
-        if phase == "extraction":
-            details["input"] = "leaf_boxes; includes corner evaluation"
         return run, details
 
     if backend in ("warp-dense", "compact-dense"):

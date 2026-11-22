@@ -3,20 +3,15 @@ import jax.numpy as jnp
 from typing import Callable, Optional, Tuple, Any
 import abc
 
-from surfaces.base import Surface
 from .primitives import safe_norm
 
 
-class ImplicitSurface(Surface):
+class ImplicitSurface(abc.ABC):
     # Whether `classify_subcubes` is meaningfully tighter/cheaper than N independent
     # `classify_box` calls. Surfaces with a local model (autobound polynomial) override
-    # this to True; the tree builder uses it to pick the right driver (parent-classifies-
-    # children vs classify-then-split). Class-level default; subclasses may flip per-instance.
+    # this to True so callers can prune subcubes from one parent-level model.
+    # Class-level default; subclasses may flip per-instance.
     use_classify_subcubes: bool = False
-
-    # Capability flags for the universal `Surface` protocol.
-    is_differentiable_wrt_params: bool = True
-    needs_grad_for_normals: bool = True
 
     def __init__(self, fn: Callable[[Any, jnp.ndarray], jnp.ndarray], level_set: float, dim: int):
         self.fn = fn
@@ -25,14 +20,14 @@ class ImplicitSurface(Surface):
 
 
     def __call__(self, params: Any, x: jnp.ndarray) -> jnp.ndarray:
-        """Raw fn-eval at `x` (NOT shifted by level_set). Back-compat alias;
-        new consumers should use `signed_value` for level-set-aware comparisons.
+        """Raw fn-eval at `x` (NOT shifted by level_set). Use `signed_value`
+        for level-set-aware comparisons.
         """
         return self.fn(params, x).squeeze()
 
 
     def signed_value(self, params: Any, x: jnp.ndarray) -> jnp.ndarray:
-        """f(x) − level_set. Universal protocol method consumed by integrators."""
+        """f(x) − level_set, the residual consumed by integrators."""
         return self.fn(params, x).squeeze() - self.level_set
     
     
@@ -98,12 +93,14 @@ class ImplicitSurface(Surface):
         """
         center = 0.5 * (lower + upper)
         half_diag = 0.5 * jnp.linalg.norm(upper - lower)
-        # Convention: trust_region_size = 2 * half_diag — empty_sphere uses 0.5 * tr internally
-        # in jnpbounded/harmonic/ni, so this matches the circumscribed-sphere radius.
-        fn_val, radius, _ = self.empty_sphere(params, center, 2.0 * half_diag)
-        sign = jnp.sign(fn_val - self.level_set).astype(jnp.int8)
-        # Tolerance absorbs floating clamp at trust_region_size/2 in jnpbounded.
-        classified = radius >= half_diag * (1.0 - 1e-6)
+        # empty_sphere uses 0.5 * tr internally and backends such as jnpbounded clamp
+        # the radius to it, so query a TR slightly larger than the circumscribed
+        # sphere. The radius must then strictly exceed half_diag with a margin, so a
+        # plane clipping a corner cannot be falsely certified.
+        margin = 1e-6
+        fn_val, radius, _ = self.empty_sphere(params, center, 2.0 * half_diag * (1.0 + 2.0 * margin))
+        sign = jnp.sign(fn_val).astype(jnp.int8)
+        classified = radius > half_diag * (1.0 + margin)
         return jnp.where(classified, sign, jnp.int8(0))
 
 
@@ -215,9 +212,9 @@ class ImplicitSurface(Surface):
 
 
     def surface_velocity_normal(self, params: Any, x: jnp.ndarray, normal: jnp.ndarray) -> Any:
-        """Universal-protocol form of normal_surface_velocity. `normal` arg
-        is unused on implicit surfaces (the implicit form uses ∇f directly);
-        kept in the signature so explicit surfaces can satisfy the same call.
+        """normal_surface_velocity with the call signature shared with explicit
+        surfaces. `normal` is unused on implicit surfaces (the implicit form
+        uses ∇f directly).
         """
         return self.normal_surface_velocity(params, x)
 
@@ -237,17 +234,3 @@ class ImplicitSurface(Surface):
         normal_vec = self.normal_at(params, x)
         del_g_del_n = jax.jvp(g, (x,), (normal_vec,))[1] # del g / del n normal derivative of g
         return jax.tree.map(lambda V_n_i: del_g_del_n * V_n_i, V_n)
-
-
-    ### Helper function, prevents code duplication/exessive lambda usage in sampling functions
-    def is_above_level_set(self, fn_val: jnp.ndarray) -> jnp.ndarray:
-        return fn_val.squeeze() > self.level_set
-    
-
-    def is_below_level_set(self, fn_val: jnp.ndarray) -> jnp.ndarray:
-        return fn_val.squeeze() < self.level_set
-
-
-# Back-compat alias — old subclasses + scripts use the lowercase name. Keep
-# until callers migrate; remove in a follow-up release.
-implicitSurface = ImplicitSurface
