@@ -67,7 +67,7 @@ def main():
 
     from surfaces.implicit.lipschitz import sdfImplicit
     from rayMarcher.camera import Camera
-    from rayMarcher.marcher import SimpleIntegrator
+    from rayMarcher.integrator import SimpleIntegrator
 
     print(f"JAX running on: {[d.platform for d in jax.devices()]}")
 

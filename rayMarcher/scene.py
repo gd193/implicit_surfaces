@@ -50,18 +50,32 @@ class ImplicitScene:
         material_ids = jnp.zeros(count, dtype=jnp.int32)
         niters = jnp.zeros(count, dtype=jnp.int32)
         statuses = []
-        for index, (marcher, normal_fn, surface_params) in enumerate(zip(self.marchers, self._normal_fns, params)):
+        for index, (marcher, surface_params) in enumerate(zip(self.marchers, params)):
             result = marcher.first_hit(surface_params, ray_origins, ray_directions,
                                        init_trust_region_size, active_mask)
             statuses.append(result.status)
             distance = jnp.linalg.norm(result.ray_position - ray_origins, axis=-1)
             closer = result.hit_flag & (distance < nearest)
-            candidate_normals = bounded_map(
-                lambda positions: normal_fn(surface_params, positions), result.ray_position,
-                max_active_states=marcher.max_active_states)
             nearest = jnp.where(closer, distance, nearest)
             positions = jnp.where(closer[:, None], result.ray_position, positions)
-            normals = jnp.where(closer[:, None], candidate_normals, normals)
             material_ids = jnp.where(closer, index, material_ids)
             niters = niters + result.niter
-        return SceneHit(jnp.isfinite(nearest), positions, normals, material_ids, nearest, niters, jnp.stack(statuses, axis=-1))
+
+        hit_flag = jnp.isfinite(nearest)
+        for index, (marcher, normal_fn, surface_params) in enumerate(
+                zip(self.marchers, self._normal_fns, params)):
+            won = hit_flag & (material_ids == index)
+            winners = int(jnp.count_nonzero(won))
+            if winners == 0:
+                # Preserve normal dtype promotion without evaluating a losing surface.
+                normal_shape = jax.eval_shape(
+                    normal_fn, surface_params, jax.ShapeDtypeStruct((0, positions.shape[1]), positions.dtype))
+                normals = normals.astype(jnp.result_type(normals, normal_shape.dtype))
+                continue
+            indices, = jnp.nonzero(won, size=winners)
+            hit_normals = bounded_map(
+                lambda points: normal_fn(surface_params, points), positions[indices],
+                max_active_states=marcher.max_active_states)
+            normals = normals.astype(jnp.result_type(normals, hit_normals))
+            normals = normals.at[indices].set(hit_normals.astype(normals.dtype))
+        return SceneHit(hit_flag, positions, normals, material_ids, nearest, niters, jnp.stack(statuses, axis=-1))

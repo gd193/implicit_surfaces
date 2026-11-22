@@ -40,14 +40,9 @@ class SurfaceHit(NamedTuple):
 
 
 class RayQuery:
-    """Adapt a backend's query and chosen TR policy once, outside JIT.
-
-    `certified=False` identifies approximate fixed-step reference marching.
-    This metadata describes the backend's contract, not a numerical proof.
-    """
+    """Adapt a backend's query and chosen TR policy once, outside JIT."""
     def __init__(self, step: Callable, *, update_tr: Callable | None = None,
-                 step_with_grad: Callable | None = None, needs_grad: bool = False,
-                 certified: bool = True):
+                 step_with_grad: Callable | None = None, needs_grad: bool = False):
         if needs_grad and step_with_grad is None:
             raise ValueError("gradient termination requires step_with_grad")
         self.step = step_with_grad if needs_grad else step
@@ -55,12 +50,10 @@ class RayQuery:
         self.update_tr = update_tr if update_tr is not None else getattr(
             owner, 'update_ray_trust_region', update_trust_region_size)
         self.needs_grad = needs_grad
-        self.certified = certified
 
     @classmethod
     def from_surface(cls, surface, **kwargs):
-        return cls(surface.ray_step, step_with_grad=getattr(surface, 'ray_step_with_grad', None),
-                   certified=getattr(surface, 'certified_ray_steps', True), **kwargs)
+        return cls(surface.ray_step, step_with_grad=getattr(surface, 'ray_step_with_grad', None), **kwargs)
 
     def __call__(self, params: Any, position, direction, trust_region) -> RayStep:
         values = self.step(params, position, direction, trust_region)

@@ -228,7 +228,7 @@ def run_method(label, surface, params):
         empty_sphere_fn=surface.empty_sphere,
         boundary_condition_fn=boundary_fn,
         source_term_fn=source_fn,
-        dim=3, level_set=args.isolevel,
+        dim=3,
         max_steps=args.max_steps, eps=args.eps,
         print_progress=True,
     )

@@ -1,5 +1,250 @@
-"""Public entry point for material rendering through implicit-surface queries."""
+"""Camera ray marching and material path tracing over implicit surfaces."""
+from typing import Any, Callable, NamedTuple, Sequence, TYPE_CHECKING
 
-from rayMarcher.material_integrator import MaterialIntegrator
+import jax
+import jax.numpy as jnp
+import jax.random as jr
 
-__all__ = ["MaterialIntegrator"]
+from rayMarcher.camera import Camera
+from rayMarcher.materials import Material, scatter
+from rayMarcher.sampler import sample_camera_rays
+from rayMarcher.scene import ImplicitScene, SceneHit
+from rayMarcher.traversal import RayMarcher
+from rayMarcher.utils import DEFAULT_SCENE_BOUNDS, SceneBounds, sky_background
+from surfaces.queries import RayQuery
+from utils.batch_driver import (DEFAULT_MAX_ACTIVE_STATES, bounded_map, finished_rays,
+                                mask_finished_padding, run_bounded_batch, validate_max_active_states)
+from utils.helpers import level_set_termination_criterion
+from utils.types import RayMarchOutput
+
+if TYPE_CHECKING:
+    from surfaces.implicit.base import ImplicitSurface
+
+
+class SimpleIntegrator:
+    """Render surface normals. Camera and background can change between renders.
+
+    Construct from a surface with from_surface(), or supply a ray-step callback
+    that returns the shifted residual.
+    """
+    def __init__(self, camera: Camera, background_color: jax.Array,
+                 ray_march_fn: Callable | None, surface_normal_fn: Callable, *,
+                 image_height: int, image_width: int, max_ray_march_steps: int = 128,
+                 max_ray_distance: float = 20., epsilon: float = 1e-4, n_compactions: int = 4,
+                 max_active_states: int = DEFAULT_MAX_ACTIVE_STATES,
+                 termination_crit_fn: Callable = level_set_termination_criterion,
+                 update_tr_fn: Callable | None = None,
+                 ray_march_with_grad_fn: Callable | None = None,
+                 scene_bounds=DEFAULT_SCENE_BOUNDS,
+                 marcher: RayMarcher | None = None):
+        if marcher is None:
+            if ray_march_fn is None:
+                raise ValueError("a ray-step callback or a marcher is required")
+            query = RayQuery(ray_march_fn, update_tr=update_tr_fn,
+                             step_with_grad=ray_march_with_grad_fn,
+                             needs_grad=getattr(termination_crit_fn, 'needs_grad', False))
+            marcher = RayMarcher(query, max_steps=max_ray_march_steps,
+                                 max_distance=max_ray_distance, epsilon=epsilon,
+                                 n_compactions=n_compactions, max_active_states=max_active_states,
+                                 scene_bounds=scene_bounds, termination=termination_crit_fn)
+        self.camera = camera
+        self.background_color = background_color
+        self.surface_normal_fn = surface_normal_fn
+        self.image_height = image_height
+        self.image_width = image_width
+        self.marcher = marcher
+        self.max_active_states = marcher.max_active_states
+        self._post_process_jit = jax.jit(self._post_process_impl)
+
+    @classmethod
+    def from_surface(cls, camera, background_color, surface, *,
+                     max_ray_march_steps=128, max_ray_distance=20., epsilon=1e-4,
+                     n_compactions=4, termination_crit_fn=level_set_termination_criterion,
+                     update_tr_fn=None, **march_options):
+        marcher = RayMarcher.from_surface(
+            surface, max_steps=max_ray_march_steps, max_distance=max_ray_distance,
+            epsilon=epsilon, n_compactions=n_compactions,
+            termination=termination_crit_fn, update_tr=update_tr_fn, **march_options)
+        return cls(camera, background_color, None, surface.normal_at,
+                   image_height=camera.image_height, image_width=camera.image_width,
+                   marcher=marcher)
+
+    def trace_rays(self, params, ray_origins, ray_directions,
+                   init_trust_region_size=0.5, active_mask=None):
+        return self.marcher.first_hit(params, ray_origins, ray_directions,
+                                      init_trust_region_size, active_mask)
+
+    def _post_process_impl(self,
+                           params: Any,
+                           output_states: RayMarchOutput,
+                           ray_directions: jnp.ndarray,
+                           background_color: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        # Misses may terminate at t=0; use the actual sampled directions.
+        background_colors = sky_background(ray_directions, background_color)
+        hit_normals = jax.vmap(self.surface_normal_fn, in_axes=(None, 0))(params, output_states.ray_position)
+        test_colors = jnp.clip(0.5 * hit_normals + 0.5, 0.0, 1.0)
+        test_colors = 0.6 + 0.4 * test_colors  # Mix surface colors with 60% white.
+        colors = jnp.where(output_states.hit_flag[:, None], test_colors, background_colors)
+        return colors, output_states.niter
+
+    def render(self,
+               params: Any,
+               key: jax.Array,
+               init_trust_region_size: float = 0.5):
+        camera = self.camera._replace(image_height=self.image_height, image_width=self.image_width)
+        ray_origins, ray_directions = sample_camera_rays(camera, key)
+        output_states = self.trace_rays(params, ray_origins, ray_directions, init_trust_region_size)
+
+        image, niter = bounded_map(
+            lambda states, directions: self._post_process_jit(
+                params, states, directions, self.background_color),
+            output_states, ray_directions, max_active_states=self.marcher.max_active_states)
+        return (image.reshape(self.image_height, self.image_width, 3),
+                niter.reshape(self.image_height, self.image_width))
+
+
+class PathState(NamedTuple):
+    origins: jax.Array
+    directions: jax.Array
+    throughput: jax.Array
+    colors: jax.Array
+    keys: jax.Array
+    depth: jax.Array
+    done_flag: jax.Array
+
+
+def write_paths(state, output, indices):
+    return output.at[indices].set(state.colors, mode='drop')
+
+
+class MaterialIntegrator:
+    """One material per implicit surface, with explicit per-surface parameters.
+
+    surfaces[i] supplies ray_step(params[i], ...), normal_at(params[i], ...),
+    and, for gradient-based termination, ray_step_with_grad(params[i], ...).
+    Each bounce uses the same adaptive marcher and compaction as the simple renderer.
+    The nearest hit selects row i of Material. Cameras/backgrounds can change
+    between renders; surfaces and marching options are fixed at construction.
+
+    render(params, key) returns linear RGB of shape (height, width, 3).
+    ray_offset is a world-space separation for secondary rays; it should exceed
+    the hit tolerance in spatial units for the chosen field/termination criterion.
+    Like RayMarcher, the host compaction loop must not be wrapped in jit.
+
+    Example:
+        renderer = MaterialIntegrator(camera, materials, background, [surface_a, surface_b])
+        image = renderer.render([params_a, params_b], key)
+    """
+
+    def __init__(self, camera: Camera, materials: Material,
+                 background_color: jax.Array, surfaces: Sequence["ImplicitSurface"], *,
+                 samples_per_pixel: int = 1, max_depth: int = 8,
+                 max_ray_march_steps: int = 128, max_ray_distance: float = 20.,
+                 epsilon: float = 1e-4, n_compactions: int = 4,
+                 ray_offset: float = 1e-3,
+                 max_active_states: int = DEFAULT_MAX_ACTIVE_STATES,
+                 scene_bounds: SceneBounds | None = DEFAULT_SCENE_BOUNDS,
+                 termination_crit_fn: Callable = level_set_termination_criterion,
+                 update_tr_fn: Callable | None = None):
+        self.max_active_states = validate_max_active_states(max_active_states)
+        self.n_compactions = n_compactions
+        self.initialize_paths = jax.jit(self._initialize_paths)
+        self.surfaces = tuple(surfaces)
+        if not self.surfaces:
+            raise ValueError("at least one implicit surface is required")
+        if samples_per_pixel < 1 or max_depth < 1 or max_ray_march_steps < 1:
+            raise ValueError("sample, bounce, and marching counts must be positive")
+        if epsilon <= 0 or ray_offset <= 0 or max_ray_distance <= 0:
+            raise ValueError("epsilon, ray_offset, and max_ray_distance must be positive")
+        count = len(self.surfaces)
+        for name, expected in (("type", (count,)), ("albedo", (count, 3)),
+                               ("fuzz", (count,)), ("ref_idx", (count,))):
+            if getattr(materials, name).shape != expected:
+                raise ValueError(f"materials.{name} must have shape {expected}")
+        self.camera = camera
+        self.materials = materials
+        self.background_color = background_color
+        self.samples_per_pixel = samples_per_pixel
+        self.max_depth = max_depth
+        self.ray_offset = ray_offset
+        self.image_height = camera.image_height
+        self.image_width = camera.image_width
+        self.scene = ImplicitScene(
+            self.surfaces, max_steps=max_ray_march_steps, max_distance=max_ray_distance,
+            epsilon=epsilon, n_compactions=n_compactions, scene_bounds=scene_bounds,
+            max_active_states=self.max_active_states,
+            termination=termination_crit_fn, update_tr=update_tr_fn,
+        )
+        self._scatter = jax.jit(jax.vmap(scatter, in_axes=(None, 0, 0, 0, 0)))
+
+    def intersect(self, params, ray_origins, ray_directions,
+                  init_trust_region_size=0.5, active_mask=None) -> SceneHit:
+        return self.scene.closest_hit(params, ray_origins, ray_directions,
+                                      init_trust_region_size, active_mask)
+
+    def trace_paths(self, params: Sequence[Any], ray_origins: jax.Array,
+                    ray_directions: jax.Array, key: jax.Array,
+                    init_trust_region_size: float = 0.5) -> jax.Array:
+        """Trace a batch of paths, accumulating background radiance at misses."""
+        if ray_origins.ndim != 2 or ray_origins.shape != ray_directions.shape or ray_origins.shape[1] != 3:
+            raise ValueError('path origins/directions must have matching (N, 3) shapes')
+        dtype = jnp.result_type(ray_origins, ray_directions, jnp.float32)
+        ray_origins, ray_directions = jnp.asarray(ray_origins, dtype), jnp.asarray(ray_directions, dtype)
+        _, colors, _ = run_bounded_batch(
+            (params, init_trust_region_size), (ray_origins, ray_directions, key),
+            jnp.zeros_like(ray_origins), initialize=self.initialize_paths, step_batch=self._step_paths,
+            finished_mask=finished_rays, write_finished=write_paths, mask_padding=mask_finished_padding,
+            batch_size=ray_origins.shape[0], max_active_states=self.max_active_states,
+            n_compactions=self.n_compactions)
+        return colors
+
+    def _initialize_paths(self, inputs, indices, valid_slots):
+        ray_origins, ray_directions, key = inputs
+        origins, directions = ray_origins[indices], ray_directions[indices]
+        lengths = jnp.linalg.norm(directions, axis=-1)
+        valid = valid_slots & jnp.isfinite(lengths) & (lengths > 0) & jnp.all(jnp.isfinite(origins), axis=-1)
+        directions = jnp.where(valid[:, None], directions / jnp.where(valid, lengths, 1)[:, None], 0)
+        # Task identity, not slot/refill order, determines the random stream.
+        keys = jax.vmap(lambda i: jr.fold_in(key, i))(indices)
+        return PathState(origins, directions, jnp.ones_like(origins), jnp.zeros_like(origins),
+                         keys, jnp.zeros(indices.size, jnp.int32), ~valid)
+
+    def _step_paths(self, payload, state):
+        params, init_trust_region_size = payload
+        origins, directions, throughput, colors, keys, depth, done = state
+        active = ~done
+        hit = self.intersect(params, origins, directions, init_trust_region_size, active)
+        background = sky_background(directions, self.background_color)
+        escaped = active & ~hit.hit_flag
+        colors = colors + jnp.where(escaped[:, None], throughput * background, 0.)
+        # Diffuse/metal use the incident-facing normal. Glass needs the
+        # geometric orientation to distinguish entering from leaving.
+        back_face = jnp.sum(directions * hit.normal, axis=-1) > 0
+        flip = back_face & (self.materials.type[hit.material_index] != 2)
+        shading_normal = jnp.where(flip[:, None], -hit.normal, hit.normal)
+        scattered, facing_normal, albedo, absorbed, reflected, keys = self._scatter(
+            self.materials, hit.material_index, directions, shading_normal, keys)
+        active = active & hit.hit_flag & ~absorbed
+        # Transmission starts on the other side; reflection stays on this side.
+        transmitted = (self.materials.type[hit.material_index] == 2) & ~reflected
+        offset_normal = jnp.where(transmitted[:, None], -facing_normal, facing_normal)
+        new_origins = hit.ray_position + self.ray_offset * offset_normal
+        lengths = jnp.linalg.norm(scattered, axis=-1)
+        valid = jnp.isfinite(lengths) & (lengths > 0)
+        active = active & valid
+        unit_scattered = scattered / jnp.where(valid, lengths, 1)[:, None]
+        origins = jnp.where(active[:, None], new_origins, origins)
+        directions = jnp.where(active[:, None], unit_scattered, directions)
+        throughput = jnp.where(active[:, None], throughput * albedo, 0.)
+        depth = depth + 1
+        return PathState(origins, directions, throughput, colors, keys, depth,
+                         ~active | (depth >= self.max_depth))
+
+    def render(self, params: Sequence[Any], key: jax.Array,
+               init_trust_region_size: float = 0.5) -> jax.Array:
+        if (self.camera.image_height, self.camera.image_width) != (self.image_height, self.image_width):
+            raise ValueError("camera resolution cannot change after construction")
+        camera_key, path_key = jr.split(key)
+        origins, directions = sample_camera_rays(self.camera, camera_key, self.samples_per_pixel)
+        colors = self.trace_paths(params, origins, directions, path_key, init_trust_region_size)
+        return colors.reshape(self.image_height, self.image_width, self.samples_per_pixel, 3).mean(axis=2)

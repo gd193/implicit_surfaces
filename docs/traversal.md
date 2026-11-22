@@ -56,17 +56,13 @@ backend's update policy.
   trust region instead of interpreting that flag themselves. Without an explicit
   update function, the adapter uses the backend's `update_ray_trust_region`
   method when present, otherwise the existing shared update. SDF/Lipschitz and
-  dense backends preserve their unused ray trust region.
-- `query.certified` describes whether the backend claims safe distances. The
-  dense fixed-step reference backend sets it to False. This metadata is not a
-  floating-point certification or a claim of complete root enumeration.
+  other backends with a fixed trust region return it unchanged.
 
 ## First hit and rendering
 
 ```python
-from rayMarcher.traversal import RayMarcher
-from rayMarcher.scene import ImplicitScene
-from rayMarcher.marcher import SimpleIntegrator
+from rayMarcher import ImplicitScene, RayMarcher
+from rayMarcher.integrator import SimpleIntegrator
 
 marcher = RayMarcher.from_surface(surface, max_steps=256, epsilon=1e-4, max_active_states=4096)
 hit = marcher.first_hit(params, origins, directions)
@@ -81,11 +77,12 @@ image, query_counts = renderer.render(params, key)
 `MaterialIntegrator(camera, materials, background, surfaces, ...)` constructs an
 ImplicitScene and uses the same RayMarcher. Each row of materials corresponds
 to one surface. `renderer.intersect(...)` delegates to `scene.closest_hit(...)`.
-No renderer is constructed just to perform geometry queries.
+The scene evaluates normals at the nearest hit positions after comparing all
+surfaces.
 
-The existing callback constructor of SimpleIntegrator and `trace_rays` alias
-remain available. Its old `level_set` argument is ignored: the supplied callback
-must already return the shifted residual. Prefer `from_surface` for new code.
+Use `SimpleIntegrator.from_surface` to inherit the surface's ray-query policy
+and dimensional scene bounds. The callback constructor expects the supplied
+ray step to return the shifted residual.
 
 ## Sampling through the interior
 
@@ -219,18 +216,11 @@ guarantee of low finite-difference bias for offsets close to `eps`.
 
 ## Validation
 
-Six tests in two files cover the public contracts and integration paths:
-
-- `scripts/test_traversal.py`: first hits and clipping; adaptive queries and
-  limits and bounded refill; multi-hit sampling through interiors with explicit completion status.
-- `scripts/test_renderer.py`: material paths and nearest-surface selection;
-  both renderers and camera updates; sphere walking with a constant boundary.
-
-From the repository root:
+Run the implicit geometry, camera, scattering, and walk-on-spheres tests from
+the repository root.
 
 ```
-JAX_PLATFORMS=cpu python -m unittest discover -s scripts -p 'test_renderer.py'
-JAX_PLATFORMS=cpu python -m unittest discover -s scripts -p 'test_traversal.py'
+JAX_PLATFORMS=cpu python -m pytest tests/test_implicit_bugfixes.py tests/test_sphere_walker.py
 ```
 
 Repeat with `JAX_ENABLE_X64=true` to check the same contracts in x64 mode.

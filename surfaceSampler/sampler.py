@@ -54,13 +54,13 @@ class SurfaceSampler:
     excursions smaller than that threshold are then omitted.
     Finite hit-band continuation can still miss features thinner than its step.
     Incomplete sampling raises unless return_details or allow_incomplete is set.
-    Prefer from_surface() for the surface-semantic interface. The old level_set
-    constructor argument is ignored; callbacks already return shifted residuals.
+    Construct from a surface with from_surface(), or supply a callback that
+    returns the shifted residual.
     """
     def __init__(self, 
                  # ray_march_fn: (params, positions, directions, trust_region_size) -> (fn_val, t_step, inside_tr)
                  ray_march_fn: Callable[[Any, jnp.ndarray, jnp.ndarray, jnp.ndarray], tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]],
-                 level_set: float, dim: int, max_step: int, epsilon: float, max_hits: int, init_trust_region_size: float, 
+                 dim: int, max_step: int, epsilon: float, max_hits: int, init_trust_region_size: float,
                  n_compactions: int = 10,
                  ray_sample_batch_size: int=1000000, ray_sample_max_iter: int=1000, 
                  print_progress: bool = False, debug: bool = False,
@@ -117,7 +117,7 @@ class SurfaceSampler:
                 _, distance, flag = surface.ray_step(params, x, direction, trust_region)
                 return surface.signed_value(params, x), distance, flag
             query = RayQuery(crossing_step, update_tr=query.update_tr)
-        return cls(surface.ray_step, level_set=0., dim=surface.dim,
+        return cls(surface.ray_step, dim=surface.dim,
                    max_step=max_step, epsilon=epsilon, max_hits=max_hits,
                    init_trust_region_size=init_trust_region_size,
                    query=query, **kwargs)

@@ -96,8 +96,7 @@ def render_orbit(surface: Any, params: Any, output: str | Path,
     import jax.numpy as jnp
     import numpy as np
     from rayMarcher.camera import Camera
-    from rayMarcher.marcher import SimpleIntegrator
-    from rayMarcher.integrator import MaterialIntegrator
+    from rayMarcher.integrator import MaterialIntegrator, SimpleIntegrator
     from rayMarcher.materials import Material
     from utils.helpers import level_set_termination_criterion, geometric_termination_criterion
 

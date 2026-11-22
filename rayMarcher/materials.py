@@ -14,15 +14,14 @@ class Material(NamedTuple):
 
 
 def scatter(materials: Material, material_idx: int, current_direction: jnp.ndarray,
-            hit_normal: jnp.ndarray, hit_point: jnp.ndarray, key: jax.Array
+            hit_normal: jnp.ndarray, key: jax.Array
             ) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
-    """Shared diffuse, metal, and dielectric scattering for both renderers."""
+    """Sample diffuse, metal, or dielectric scattering."""
     albedo = materials.albedo[material_idx]
     fuzz = materials.fuzz[material_idx]
     ref_idx = materials.ref_idx[material_idx]
 
-    # Split into more keys to avoid reuse
-    key_diffuse, key_metal, _key_glass_reflect, key_glass_random, key_recursive = jr.split(key, 5)
+    key_diffuse, key_metal, key_glass_random, key_recursive = jr.split(key, 4)
 
     # Diffuse scattering
     diffuse_scatter = hit_normal + generate_random_unit_ray(key_diffuse)

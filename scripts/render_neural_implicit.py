@@ -61,7 +61,7 @@ def main():
 
     from surfaces.implicit.jnp_bounded import jnpboundedImplicit
     from rayMarcher.camera import Camera
-    from rayMarcher.marcher import SimpleIntegrator
+    from rayMarcher.integrator import SimpleIntegrator
 
     print(f"JAX running on: {[d.platform for d in jax.devices()]}")
 
@@ -183,7 +183,6 @@ def main():
         image_width=args.width,
         max_ray_march_steps=1000,
         max_ray_distance=20.0,
-        level_set=0.0,
         epsilon=1e-3,
         n_compactions=10,
     )

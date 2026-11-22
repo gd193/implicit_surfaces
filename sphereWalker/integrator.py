@@ -4,7 +4,6 @@ import numpy as np
 import jax.random as jr
 
 import time
-import timeit
 import math
 from numbers import Integral
 from typing import Callable, Tuple, Generic, Optional, Any, cast
@@ -116,7 +115,6 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
                  boundary_condition_fn: Callable[[jnp.ndarray], jnp.ndarray],
                  source_term_fn: Callable[[jnp.ndarray], jnp.ndarray],
                  dim: int,
-                 level_set: float = 0.0,
                  max_steps: int = 1000,
                  eps: float = 1e-3,
                  print_progress: bool = False,
@@ -127,7 +125,6 @@ class BaseIntegrator(Generic[StateT], abc.ABC):
         self.empty_sphere = EmptySphereQuery(empty_sphere_fn)
         self.boundary_condition_fn = boundary_condition_fn
         self.source_term = source_term_fn
-        self.level_set = level_set
         self.dim = dim
         self.max_steps = max_steps
         self.eps = eps

@@ -18,17 +18,6 @@ def sample_uniform_1disk(key: jr.PRNGKey) -> jnp.array:
     r = jnp.sqrt(jr.uniform(key2, minval=0.0, maxval=1.0))
     return jnp.array([r * jnp.cos(phi), r * jnp.sin(phi)])
 
-def sample_uniform_1disk_3d(key: jr.PRNGKey) -> jnp.array:
-    """
-    Sample a point uniformly in the unit disk in 3D (z=0).
-    Args:
-        key: jax.random.PRNGKey
-    Returns:
-        jnp.array of shape (3,) sampled point in the unit disk in 3D
-    """
-    disk_2d = sample_uniform_1disk(key)
-    return jnp.array([disk_2d[0], disk_2d[1], 0.0])
-
 def defocus_disk_sample(camera: Camera, key: jr.PRNGKey) -> jnp.array:
     """
     Sample a point on the defocus disk of the camera.
@@ -38,7 +27,7 @@ def defocus_disk_sample(camera: Camera, key: jr.PRNGKey) -> jnp.array:
     Returns:
         jnp.array of shape (3,) sampled point on the defocus disk in 3D
     """
-    disk_sample_2d = sample_uniform_1disk_3d(key)
+    disk_sample_2d = sample_uniform_1disk(key)
     return camera.camera_center + disk_sample_2d[0] * camera.defocus_disk_u + disk_sample_2d[1] * camera.defocus_disk_v
 
 def generate_antialiased_ray(camera: Camera, pixel_i: jnp.ndarray, pixel_j: jnp.ndarray, key: jax.Array) -> Tuple[jnp.ndarray, jnp.ndarray]:
@@ -66,6 +55,17 @@ def generate_antialiased_ray(camera: Camera, pixel_i: jnp.ndarray, pixel_j: jnp.
     ray_direction = normalize(pixel_center - ray_origin)
 
     return ray_origin, ray_direction
+
+
+def sample_camera_rays(camera: Camera, key: jax.Array,
+                       samples_per_pixel: int = 1) -> tuple[jax.Array, jax.Array]:
+    """Sample rays in row-major pixel order, with each pixel's samples adjacent."""
+    width, height = camera.image_width, camera.image_height
+    pixels = jnp.repeat(jnp.arange(height * width), samples_per_pixel)
+    keys = jr.split(key, pixels.size)
+    return jax.vmap(generate_antialiased_ray, in_axes=(None, 0, 0, 0))(
+        camera, pixels % width, pixels // width, keys)
+
 
 def generate_random_unit_ray(key: jr.PRNGKey) -> jnp.array:
     """

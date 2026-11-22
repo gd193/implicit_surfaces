@@ -207,7 +207,6 @@ def test_camera_jit_and_material_zero_ref_idx():
             idx,
             jnp.array([0.0, 0.0, -1.0], jnp.float32),
             jnp.array([0.0, 0.0, 1.0], jnp.float32),
-            jnp.zeros(3, jnp.float32),
             jr.PRNGKey(idx),
         )
         assert bool(jnp.all(jnp.isfinite(out[0])))

@@ -5,6 +5,13 @@ SceneBounds = tuple[tuple[float, ...], tuple[float, ...]]
 DEFAULT_SCENE_BOUNDS: SceneBounds = ((-2.0, -2.0, -2.0), (2.0, 2.0, 2.0))
 
 
+def sky_background(ray_directions: jnp.ndarray, background_color: jnp.ndarray) -> jnp.ndarray:
+    """Blend white at the bottom of the sky into the background color at the top."""
+    t = 0.5 * (ray_directions[:, 1] + 1.0)
+    white = jnp.ones(3, dtype=ray_directions.dtype)
+    return (1.0 - t[:, None]) * white + t[:, None] * background_color
+
+
 def validate_scene_bounds(bounds: SceneBounds | None) -> SceneBounds | None:
     """Validate static world-space bounds at integrator construction."""
     if bounds is None:

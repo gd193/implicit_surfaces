@@ -61,27 +61,6 @@ def make_gradient_velocity_solve(gradient_factory, *args, **kwargs):
 
     return VelocitySolver(lambda points: points, solve)
 
-def _reduce_parent_runs(accumulator: jax.Array, parents: jax.Array,
-                        updates: jax.Array) -> jax.Array:
-    """Reduce adjacent equal parents with a segmented scan, then add run totals.
-
-    Refilling can split or reorder parents; separate runs still scatter-add.
-    Drop indices for unfinished slots simply split runs. Storage is bounded by
-    the active buffer; no per-query expansion or sorted-parent assumption.
-    """
-    starts = jnp.concatenate((jnp.ones_like(parents[:1], bool), parents[1:] != parents[:-1]))
-
-    def combine(left, right):
-        start_a, a = left
-        start_b, b = right
-        return start_a | start_b, jnp.where(start_b[..., None, None], b, a+b)
-
-    _, totals = jax.lax.associative_scan(combine, (starts, updates))
-    ends = jnp.concatenate((starts[1:], jnp.ones_like(starts[:1])))
-    destinations = jnp.where(ends, parents, len(accumulator))
-    return accumulator.at[destinations].add(totals, mode='drop')
-
-
 class _PairState(NamedTuple):
     walkers: WalkerState
     weight: jax.Array
@@ -155,10 +134,6 @@ class _FluidPairs(WoSIntegrator):
 
     def _contributing_status(self, status):
         return status == WT.MAX_STEPS
-
-    def _accumulate(self, sums, parents, updates):
-        gradient = _reduce_parent_runs(sums[0], parents, updates[0])
-        return (gradient, *super()._accumulate(sums[1:], parents, updates[1:]))
 
     def _compute_accumulator_update(self, params, state):
         walkers = state.walkers
