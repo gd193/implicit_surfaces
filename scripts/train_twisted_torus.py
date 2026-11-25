@@ -3,7 +3,7 @@
 The target is the original notebooks' twisted field (not an exact SDF after
 warping). The loader is also a factory for render_orbit.py:
   --surface scripts/train_twisted_torus.py:load_surface
-  --surface-kwargs '{"checkpoint":"assets/models/twisted_torus_softplus.npz"}'
+  --surface-kwargs '{"checkpoint":"assets/models/twisted_torus_twist10_softplus_64k.npz"}'
 """
 from __future__ import annotations
 
@@ -102,9 +102,9 @@ def main() -> None:
     parser.add_argument('--domain', type=float, default=1.)
     parser.add_argument('--major', type=float, default=0.5)
     parser.add_argument('--minor', type=float, default=0.2)
-    parser.add_argument('--twist', type=float, default=5.)
+    parser.add_argument('--twist', type=float, default=10.)
     parser.add_argument('--seed', type=int, default=7)
-    parser.add_argument('--out', type=Path, default=Path('assets/models/twisted_torus_softplus.npz'))
+    parser.add_argument('--out', type=Path, default=Path('assets/models/twisted_torus_twist10_softplus_64k.npz'))
     args = parser.parse_args()
     import math
     for name in ('hidden', 'depth', 'steps', 'batch_size', 'beta', 'lr', 'domain', 'major', 'minor'):

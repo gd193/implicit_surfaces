@@ -1,11 +1,11 @@
 """Convert MLP weights between two on-disk formats.
 
-* **NIQ npz** (`assets/niq_models/`, `~/neural-implicit-queries/sample_inputs/`):
+* **NIQ npz** (`assets/models/*.npz`, `~/neural-implicit-queries/sample_inputs/`):
   flat numpy archive with keys `NNNN.dense.A`, `NNNN.dense.b`, `NNNN.<act>._`,
   `NNNN.squeeze_last._`. Weight matrix `A` has shape `(in, out)` (forward pass:
   `x @ A + b`). Used by `niImplicitSurface` via NIQ's `implicit_mlp_utils`.
 
-* **eqx stream** (`assets/equinox_models/*.eqx`, e.g. `bunny_softplus.eqx`):
+* **eqx stream** (`assets/models/*.eqx`, e.g. `bunny_softplus.eqx`):
   sequential `.npy` arrays — `(W1, b1, W2, b2, …, W_out, b_out)`. Weight matrix
   `W` has shape `(out, in)` (forward pass: `W @ x + b`). Companion `.json`
   sidecar holds metadata: `{activation, input_dim, output_dim, hidden_dims}`.

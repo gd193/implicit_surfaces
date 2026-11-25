@@ -28,7 +28,7 @@ assets/meshes/*.zip
 
 algo_paper/
 scripts/*
-assets/
+outputs/
 
 # Keep maintained benchmarks; local experiments stay ignored.
 !scripts/bench/

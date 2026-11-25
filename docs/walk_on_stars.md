@@ -184,7 +184,7 @@ u(r) = (a² - r²)/4 + (b²/2) log(r/a),   a=0.3, b=1
 ```
 
 ```sh
-python examples/wos/wost_annulus.py --output assets/renders/wost/annulus
+python examples/wos/wost_annulus.py --output outputs/renders/wost/annulus
 ```
 
 The example saves a PNG/PDF comparison, raw arrays in `annulus_data.npz`, and

@@ -9,7 +9,7 @@ the GPU for 97^3 at 128 walks).
 
   python twisted_torus.py [--solve | --render]
 
-Outputs in assets/renders/wos/twisted_torus/: volume.npz, slices.png (z = 0,
+Outputs in outputs/renders/wos/twisted_torus/: volume.npz, slices.png (z = 0,
 y = 0 with exact error), bc.png, and a still plus 20 s orbit for: bc, cut,
 streamlines, arrows, cut_arrows,
 all with a cut sweeping along the cut normal.

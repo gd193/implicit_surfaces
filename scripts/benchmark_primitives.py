@@ -15,7 +15,7 @@ Three primitives covered today:
   * ray_step      — `surface.ray_step(params, x, dir, tr)`
 
 Network selection mirrors the other benches: `--network <basename>` resolves
-both `assets/equinox_models/<name>.eqx` and `assets/niq_models/<name>.npz`.
+both `assets/models/<name>.eqx` and `assets/models/<name>.npz`.
 
 Usage:
   scripts/benchmark_primitives.py                    # all defaults
@@ -85,8 +85,8 @@ p.add_argument("--affine_truncate_policy", default="absolute")
 args = p.parse_args()
 
 ASSETS = "/system/user/volkmann/implicit_surfaces_project/assets"
-EQX_PATH = args.eqx_path or f"{ASSETS}/equinox_models/{args.network}.eqx"
-NPZ_PATH = args.npz_path or f"{ASSETS}/niq_models/{args.network}.npz"
+EQX_PATH = args.eqx_path or f"{ASSETS}/models/{args.network}.eqx"
+NPZ_PATH = args.npz_path or f"{ASSETS}/models/{args.network}.npz"
 
 print(f"JAX: {[d.platform for d in jax.devices()]}", flush=True)
 print(f"network={args.network}  primitives={args.primitives}  "

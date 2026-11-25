@@ -19,7 +19,7 @@ formula of Rioux-Lavoie et al. (2022), Eqs.21/22. Both segment velocities come
 from the previous cache at the departure point. omega enters the walks through
 params (no retrace per step).
 
-Outputs in assets/renders/wos/<name>/: volume.npz (norm(omega) per step, sdf)
+Outputs in outputs/renders/wos/<name>/: volume.npz (norm(omega) per step, sdf)
 and a 20 s orbit of norm(omega) isosurfaces inside the translucent wall.
 """
 import time

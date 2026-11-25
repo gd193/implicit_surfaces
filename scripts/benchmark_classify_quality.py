@@ -14,8 +14,8 @@ Methods compared (subset selectable via --modes):
   * autobound:d3  — same with max_degree=3 (opt-in via --d3)
 
 Network selection: pass `--network <basename>` and the script looks up
-  assets/equinox_models/<basename>.eqx        (for autobound surfaces)
-  assets/niq_models/<basename>.npz            (for niq:* surfaces)
+  assets/models/<basename>.eqx                (for autobound surfaces)
+  assets/models/<basename>.npz                (for niq:* surfaces)
 
 Both files must exist (use scripts/convert_models.py if only one form is
 available). Activation must match what the .eqx was trained with —
@@ -62,8 +62,8 @@ DEFAULT_MODES = [
 
 p = argparse.ArgumentParser()
 p.add_argument("--network", default="bunny_softplus",
-               help="basename; resolves to assets/equinox_models/<n>.eqx and "
-                    "assets/niq_models/<n>.npz")
+               help="basename; resolves to assets/models/<n>.eqx and "
+                    "assets/models/<n>.npz")
 p.add_argument("--eqx_path", default=None,
                help="explicit eqx path; overrides --network resolution")
 p.add_argument("--npz_path", default=None,
@@ -110,8 +110,8 @@ p.add_argument("--no_record", action="store_true",
 args = p.parse_args()
 
 ASSETS = "/system/user/volkmann/implicit_surfaces_project/assets"
-EQX_PATH = args.eqx_path or f"{ASSETS}/equinox_models/{args.network}.eqx"
-NPZ_PATH = args.npz_path or f"{ASSETS}/niq_models/{args.network}.npz"
+EQX_PATH = args.eqx_path or f"{ASSETS}/models/{args.network}.eqx"
+NPZ_PATH = args.npz_path or f"{ASSETS}/models/{args.network}.npz"
 required = [EQX_PATH] + ([NPZ_PATH] if args.modes else [])
 for path in required:
     if not os.path.exists(path):

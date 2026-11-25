@@ -2,7 +2,7 @@
 
   python saturn.py [--solve | --render]
 
-Outputs in assets/renders/wos/saturn/: volume.npz, slices.png (x = 0, y = 0
+Outputs in outputs/renders/wos/saturn/: volume.npz, slices.png (x = 0, y = 0
 with exact error), bc.png, and a still plus 20 s orbit for: bc, cut, streamlines, arrows,
 cut_arrows,
 all with a cut sweeping along the cut normal.

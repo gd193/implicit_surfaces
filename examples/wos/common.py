@@ -20,11 +20,11 @@ import numpy as np
 
 from sphereWalker import WoSIntegrator
 
-OUT = ROOT / "assets" / "renders" / "wos"
+OUT = ROOT / "outputs" / "renders" / "wos"
 
 
 def out_dir(example):
-    """assets/renders/wos/<example>/: every output of one example lives here."""
+    """outputs/renders/wos/<example>/: every output of one example lives here."""
     path = OUT / example
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -80,7 +80,7 @@ def report(name, est, exact):
 
 
 def plot(name, panels, extent, title, outline=None, name_suffix=None):
-    """Save a row of panels to assets/renders/wos/<name>/<name_suffix or name>.png.
+    """Save a row of panels to outputs/renders/wos/<name>/<name_suffix or name>.png.
 
     panels: dicts with 'title', 'image' (n x n, NaN outside) and optional
     'cmap', 'clim' (vmin, vmax), 'quiver' (U, V), 'streams' (X, Y, U, V).
@@ -120,7 +120,7 @@ def plot(name, panels, extent, title, outline=None, name_suffix=None):
 
 def solve_volume(name, surface, g, lower, upper, n, *, params=None, **solve_kwargs):
     """Solve on an n^3 grid over the box [lower, upper] and save
-    assets/renders/wos/<name>/volume.npz with arrays indexed [ix, iy, iz]:
+    outputs/renders/wos/<name>/volume.npz with arrays indexed [ix, iy, iz]:
 
       values  (n, n, n) or (n, n, n, m), NaN outside the domain
       sdf     (n, n, n) surface field (negative inside)
@@ -159,7 +159,7 @@ def load_volume(name):
 
 def plot_bc(name, field, g, extent, *, params=None, source=None, info=(), labels=(), n=600,
             cmap="viridis"):
-    """Boundary-condition overview of a 2D example: assets/renders/wos/<name>/bc.png.
+    """Boundary-condition overview of a 2D example: outputs/renders/wos/<name>/bc.png.
 
     Shows the domain {field < 0}, its boundary colored by scalar g (or arrows
     colored by norm(g) for vector g), the source f as background when given,

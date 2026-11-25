@@ -96,17 +96,17 @@ errors and the actual GPU used. The default network is 3 hidden layers of width
 of a twisted implicit field, not a globally exact signed-distance function.
 
 ```sh
-python scripts/train_twisted_torus.py --device gpu --steps 16000 \
-  --out assets/models/twisted_torus_softplus.npz
+python scripts/train_twisted_torus.py --device gpu --twist 10 --steps 64000 \
+  --out assets/models/twisted_torus_twist10_softplus_64k.npz
 
 WARP_CACHE_PATH=/tmp/warp-cache XLA_PYTHON_CLIENT_PREALLOCATE=false \
 python scripts/render_orbit.py --device gpu \
   --surface scripts/train_twisted_torus.py:load_surface \
-  --surface-kwargs '{"checkpoint":"assets/models/twisted_torus_softplus.npz"}' \
+  --surface-kwargs '{"checkpoint":"assets/models/twisted_torus_twist10_softplus_64k.npz"}' \
   --width 128 --height 128 --frames 36 --fps 12 --samples 2 \
   --radius 2.5 --height-offset 0.6 --bounds -1 -1 -1 1 1 1 \
   --epsilon 0.0003 --termination geometric --max-steps 256 --trust-region 0.25 \
-  --out assets/renders/twisted_torus_softplus_orbit.gif
+  --out outputs/renders/twisted_torus_twist10_orbit.gif
 ```
 
 The loader uses degree-2 Warp-fused Taylor bounds. It absorbs the activation

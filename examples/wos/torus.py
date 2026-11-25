@@ -2,7 +2,7 @@
 
   python torus.py [--solve | --render]
 
-Outputs in assets/renders/wos/torus/: volume.npz, slices.png (z = 0, y = 0),
+Outputs in outputs/renders/wos/torus/: volume.npz, slices.png (z = 0, y = 0),
 bc.png, and a still plus 20 s orbit (shared sweeping cut along z) for: bc,
 cut, iso.
 """

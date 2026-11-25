@@ -42,7 +42,7 @@ def truth(r, a=0.3, b=1.0):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--output", type=Path, default=ROOT / "assets/renders/wost/annulus"
+        "--output", type=Path, default=ROOT / "outputs/renders/wost/annulus"
     )
     parser.add_argument("--grid", type=int, default=64)
     parser.add_argument("--map-walks", type=int, default=512)

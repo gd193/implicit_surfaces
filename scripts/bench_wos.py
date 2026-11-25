@@ -9,7 +9,7 @@ WoSIntegrator with its `empty_sphere`. Per method we report:
   * per-test-point u(p) estimates
   * RMS / max disagreement vs a high-walker-count reference (n_walkers_high)
 
-Per-method output saved to assets/wos_solutions/<method>/u.npz so a separate
+Per-method output saved to outputs/wos_solutions/<method>/u.npz so a separate
 checker can compare any two runs after the fact.
 
 Usage:
@@ -85,10 +85,11 @@ args = p.parse_args()
 
 
 ASSETS = "/system/user/volkmann/implicit_surfaces_project/assets"
-EQX_PATH = f"{ASSETS}/equinox_models/{args.network}.eqx"
-NPZ_PATH = f"{ASSETS}/niq_models/{args.network}.npz"
-TEST_POINTS_DIR = f"{ASSETS}/wos_test_points"
-SOLUTION_DIR = f"{ASSETS}/wos_solutions"
+OUTPUTS = "/system/user/volkmann/implicit_surfaces_project/outputs"
+EQX_PATH = f"{ASSETS}/models/{args.network}.eqx"
+NPZ_PATH = f"{ASSETS}/models/{args.network}.npz"
+TEST_POINTS_DIR = f"{OUTPUTS}/wos_test_points"
+SOLUTION_DIR = f"{OUTPUTS}/wos_solutions"
 
 
 def _slug(label: str) -> str:

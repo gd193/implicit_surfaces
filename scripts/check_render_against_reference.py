@@ -14,7 +14,7 @@ on silhouettes — these get reported separately.
 import sys
 import numpy as np
 
-REF = '/system/user/volkmann/implicit_surfaces_project/assets/reference_renders/dense_gt/image.npz'
+REF = '/system/user/volkmann/implicit_surfaces_project/outputs/reference_renders/dense_gt/image.npz'
 
 def main():
     if len(sys.argv) != 2:

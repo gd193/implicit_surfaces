@@ -15,7 +15,7 @@ step, with u_t the smoothed tangential slip. wall_fn(params, x) picks the
 no-slip walls (default: the whole domain boundary; leave out inlet/outlet). It cancels slip, so walls shed
 vorticity, which the inviscid model alone never does.
 
-Outputs in assets/renders/wos/<name>/: volume.npz (omega and norm(u) per step),
+Outputs in outputs/renders/wos/<name>/: volume.npz (omega and norm(u) per step),
 bc.png, frame.png and a 20 s fluid.mp4 (600 steps at 30 fps).
 """
 import time

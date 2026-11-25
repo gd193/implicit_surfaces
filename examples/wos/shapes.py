@@ -30,7 +30,7 @@ def saturn():
     return lipschitzImplicit(lipschitz_bound=1., fn=fn, level_set=0., dim=3), params, jax.grad(h)
 
 
-def twisted_torus(checkpoint="assets/models/twisted_torus_softplus.npz"):
+def twisted_torus(checkpoint="assets/models/twisted_torus_twist10_softplus_64k.npz"):
     """Neural twisted torus: a Softplus MLP fit by scripts/train_twisted_torus.py.
 
     Empty spheres come from degree-2 Taylor autobounds of the network

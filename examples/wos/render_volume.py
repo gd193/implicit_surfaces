@@ -1,7 +1,7 @@
 """Render solved WoS volumes (from common.solve_volume) with PyVista.
 
 Solving and rendering are separate: this module only reads
-assets/renders/wos/<name>/volume.npz and writes next to it. Values are NaN outside the domain; for
+outputs/renders/wos/<name>/volume.npz and writes next to it. Values are NaN outside the domain; for
 interpolation near the boundary they are filled with the nearest inside value,
 and the sdf channel clips every view back to the domain.
 
