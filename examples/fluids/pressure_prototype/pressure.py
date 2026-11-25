@@ -70,7 +70,7 @@ class ClosedPressureProjector:
 
     def _gather_cuda(self, params, points, samples):
         from examples.fluids.pressure_prototype.warp_gather import boundary_gather
-        velocities = jax.vmap(self.velocity, (None, 0))(params, points)
+        velocities = jnp.asarray(jax.vmap(self.velocity, (None, 0))(params, points), points.dtype)
         return boundary_gather(points, velocities, samples,
                                self.gradient_solver.regularization)
 
@@ -92,7 +92,7 @@ class ClosedPressureProjector:
             walks = samples[:walk_count].reshape(n_walks, records_per_walk, 7)
             affine = jnp.concatenate((walks[:, 0], samples[walk_count:]), axis=0)
             scalar = walks[:, 1:, :4].reshape(-1, 4)
-            velocities = jax.vmap(self.velocity, (None, 0))(params, points)
+            velocities = jnp.asarray(jax.vmap(self.velocity, (None, 0))(params, points), points.dtype)
             return boundary_gather_split(points, velocities, affine, scalar,
                                          self.gradient_solver.regularization,
                                          continuations_per_root=records_per_walk-1)
@@ -102,6 +102,7 @@ class ClosedPressureProjector:
 
     def _gather_point(self, params, x, samples):
         u = self.velocity(params, x)
+        acc_dtype = jnp.result_type(x.dtype, samples.dtype, u)
         # Bound the query-by-sample workspace; scan carries only one vector.
         block_size = 4096
         blocks = jnp.pad(samples, ((0, -len(samples) % block_size), (0, 0)))
@@ -109,8 +110,8 @@ class ClosedPressureProjector:
             green = jax.vmap(lambda y: self.gradient_solver._green(x, y))(block[:, :3])
             weights = block[:, 3]+jnp.sum(block[:, 4:]*u, axis=-1)
             return total+jnp.sum(green*weights[:, None], axis=0), None
-        return jax.lax.scan(accumulate, jnp.zeros(3, x.dtype),
-                            blocks.reshape(-1, block_size, 7))[0]
+        return jax.lax.scan(accumulate, jnp.zeros(3, acc_dtype),
+                            blocks.reshape(-1, block_size, 7))[0].astype(x.dtype)
 
     def project(self, params, points, key, *, n_samples, **options):
         if not bool(jnp.all(jax.vmap(self.geometry.contains)(points))):

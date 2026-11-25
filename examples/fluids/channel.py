@@ -27,7 +27,7 @@ import numpy as np
 from jax.scipy.ndimage import map_coordinates
 
 from examples.wos.common import load_volume, out_dir, plot_bc, volume_path, volume_stages
-from sphereWalker.integrator import WoSGradientIntegrator
+from sphereWalker import WoSGradientIntegrator
 from surfaces.implicit.lipschitz import lipschitzImplicit
 
 

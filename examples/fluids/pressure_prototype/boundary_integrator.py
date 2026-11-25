@@ -10,7 +10,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from sphereWalker.integrator import BaseIntegrator, finish_step, get_scatter_fn
+from sphereWalker import MCIntegrator, finish_step
 from sphereWalker.types import WalkerTermination as WT
 from examples.fluids.pressure_prototype.boundary_sampling import (
     BoxBoundary, SphereBoundary, ExteriorSphereBoundary, ExteriorTorusBoundary,
@@ -45,7 +45,7 @@ class BoundaryWalkerState(NamedTuple):
     weight: jax.Array
 
 
-class WoBPressureIntegrator(BaseIntegrator):
+class WoBPressureIntegrator(MCIntegrator):
     """All-Neumann boundary samples; geometry supplies scalar JAX queries.
 
     Geometry: contains(x), volume_radius(x), sample_uniform_boundary(key,dtype), and
@@ -53,7 +53,7 @@ class WoBPressureIntegrator(BaseIntegrator):
     selects ONE intersection and includes its signed inverse probability.
     A valid zero-weight transition ends the path successfully; its point and
     normal must remain finite (the previous contact is a valid placeholder).
-    Integration/refill/compaction/diagnostics are inherited from BaseIntegrator.
+    Integration/refill/compaction/diagnostics are inherited from MCIntegrator.
     """
     _supported_boundaries = (BoxBoundary, SphereBoundary)
 
@@ -68,8 +68,7 @@ class WoBPressureIntegrator(BaseIntegrator):
             raise ValueError('length >= 3 and volume budgets >= 2 required')
         if volume_samples % 2 or boundary_volume_samples % 2 or regularization < 0:
             raise ValueError('even volume budgets and nonnegative regularization required')
-        super().__init__(lambda p, x, tr: (0., 0., tr), lambda x: jnp.zeros(3, x.dtype),
-                         lambda x: jnp.zeros(3, x.dtype), dim=3, max_steps=path_length+1)
+        super().__init__(3, max_steps=path_length+1)
         self.geometry, self.velocity = geometry, velocity
         self.path_length = path_length
         self.volume_samples, self.boundary_volume_samples = volume_samples, boundary_volume_samples
@@ -78,6 +77,7 @@ class WoBPressureIntegrator(BaseIntegrator):
     def _volume(self, params, x, key, samples):
         d, r, radius = volume_sample_pairs(self.geometry, x, key, samples)
         d, r = jnp.concatenate([d, -d]), jnp.concatenate([r, r])
+        # Keep callback precision through velocity differences before narrowing.
         u = self.velocity(params, x)
         def integrand(pair):
             direction, distance = pair
@@ -99,20 +99,26 @@ class WoBPressureIntegrator(BaseIntegrator):
 
     def _start(self, params, s):
         key, kb, kv = jax.random.split(s.rng_key, 3)
-        y, normal, area, valid = self.geometry.sample_uniform_boundary(kb, s.position.dtype)
+        dtype = s.position.dtype
+        y, normal, area, valid = self.geometry.sample_uniform_boundary(kb, dtype)
+        y, normal, area = (jnp.asarray(a, dtype) for a in (y, normal, area))
         u0 = self.velocity(params, y)
         v0 = self._source(params, y, kv, direct=False)
-        w = s.w.at[0, :3].set(y).at[0, 3].set(area*jnp.dot(normal, u0+2*v0))
+        w_val = jnp.asarray(area*jnp.dot(normal, u0+2*v0), dtype)
+        b_val = jnp.asarray(2*area*jnp.dot(normal, v0+u0), dtype)
+        w = s.w.at[0, :3].set(y).at[0, 3].set(w_val)
         w = w.at[0, 4:].set(area*normal)
         return s._replace(nSteps=s.nSteps+1, w=w, rng_key=key, boundary_position=y,
-                          normal=normal, root_normal=normal, root_velocity=u0,
-                          weight=area, b=2*area*jnp.dot(normal, v0+u0),
+                          normal=normal, root_normal=normal,
+                          root_velocity=jnp.asarray(u0, dtype),
+                          weight=area, b=b_val,
                           done_flag=~valid | (area == 0),
                           status=jnp.where(~valid, WT.INVALID,
                                            jnp.where(area == 0, WT.BOUNDARY_HIT, WT.ACTIVE)).astype(s.status.dtype))
 
     def _hop(self, params, s):
         key, kh = jax.random.split(s.rng_key)
+        dtype = s.position.dtype
         y, normal, factor, valid = self.geometry.next_boundary(s.boundary_position, s.normal, kh)
         a = jnp.where(s.nSteps == 1,
                       -s.weight*jnp.dot(s.root_normal, s.root_velocity-self.velocity(params, y)), s.a)*factor
@@ -120,9 +126,13 @@ class WoBPressureIntegrator(BaseIntegrator):
         b = jnp.where(s.nSteps == self.path_length-1, .5*b, b)
         a = jnp.where(s.nSteps == self.path_length, .5*a, a)
         b = jnp.where(s.nSteps == self.path_length, 0., b)
+        a = jnp.asarray(a, s.a.dtype)
+        b = jnp.asarray(b, s.b.dtype)
         done = (s.nSteps == self.path_length) | ~valid | (factor == 0)
         return s._replace(nSteps=s.nSteps+1, rng_key=key, boundary_position=y, normal=normal,
-                          a=a, b=b, w=s.w.at[s.nSteps, :3].set(y).at[s.nSteps, 3].set(a+b), done_flag=done,
+                          a=a, b=b,
+                          w=s.w.at[s.nSteps, :3].set(y).at[s.nSteps, 3].set(jnp.asarray(a+b, dtype)),
+                          done_flag=done,
                           status=jnp.where(~valid, WT.INVALID, jnp.where(done, WT.BOUNDARY_HIT, WT.ACTIVE)).astype(s.status.dtype))
 
     def step(self, params, state):
@@ -151,19 +161,8 @@ class WoBPressureIntegrator(BaseIntegrator):
                                    z+init_tr, keys, jnp.zeros(buffer_size, bool),
                                    jnp.zeros(buffer_size, jnp.int32), v, v, v, v, z, z, z)
 
-    def _transition_state_phases(self, params, states, init_trust_region_size):
-        return states
-
-    def _check_if_done(self, state, parents):
-        return state.done_flag & (parents != -1)
-
     def _compute_accumulator_update(self, params, state):
         return state.w
-
-    def _refill_state(self, states, valid, indices, positions, keys, init_tr, total):
-        scatter = get_scatter_fn(indices, valid, total)
-        fresh = self._get_initial_state(positions, keys, init_tr, len(positions))
-        return jax.tree.map(lambda old, new: scatter(old, new, jnp.zeros(old.shape[1:], old.dtype)), states, fresh)
 
 
 class ExteriorWoBPressureIntegrator(WoBPressureIntegrator):
@@ -200,7 +199,7 @@ class ExteriorWoBPressureIntegrator(WoBPressureIntegrator):
         y, normal, area = jax.vmap(self.geometry.sample_pseudo_boundary,
                                   (0, None))(keys, dtype)
         velocity = jax.vmap(self.velocity, (None, 0))(params, y)
-        a = area*jnp.sum(normal*velocity, axis=-1)
+        a = jnp.asarray(area*jnp.sum(normal*velocity, axis=-1), dtype)
         return jnp.concatenate((y, a[:, None], -area[:, None]*normal), axis=-1)
 
     def _source(self, params, x, key, *, direct):

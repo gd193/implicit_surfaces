@@ -1,4 +1,4 @@
-from typing import NamedTuple, Any, TypeVar, Union
+from typing import NamedTuple, Any, TypeVar
 from enum import IntEnum
 import jax.numpy as jnp
 
@@ -74,11 +74,8 @@ class DifferentialWalkerState(NamedTuple):
     offset_length: jnp.ndarray # accepted inward offset; zero before transition
     phase: jnp.ndarray # shape ()
 
-StateT = TypeVar(
-    'StateT',
-    bound=Union[WalkerState, GradientWalkerState, DifferentialWalkerState,
-                StarWalkerState, GradientStarWalkerState],
-)
+# Any per-sample NamedTuple state; MCIntegrator documents the fields it reads.
+StateT = TypeVar('StateT')
 
 
 class WalkerOutput(NamedTuple):

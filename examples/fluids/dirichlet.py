@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as jr
 from jax.extend.random import threefry2x32_p
-from sphereWalker.integrator import WoSIntegrator, get_scatter_fn
+from sphereWalker import WoSIntegrator
 from sphereWalker.types import WalkerDiagnostics, WalkerState
 from sphereWalker.types import WalkerTermination as WT
 from utils.sampling_primitives import sample_uniform_2sphere, unit_interval, sample_green_2ball as _green_ball
@@ -78,6 +78,8 @@ class _FluidPairs(WoSIntegrator):
 
     The batch driver's parent is the original query, so contributions reduce
     directly to that query. Only active pairs have expanded positions/state.
+    A seed radius <= 0 marks an invalid start (see `prepare`): both legs are
+    INVALID from the outset, so the pair reports no accepted samples.
     """
 
     def __init__(self, *args, **kwargs):
@@ -90,7 +92,7 @@ class _FluidPairs(WoSIntegrator):
         return jnp.concatenate((positions, seeds[:, 3:4]), axis=1)
 
     @partial(jax.jit, static_argnums=(0,))
-    def _get_accumulator_initial(self, params, seeds):
+    def _get_accumulator_initial(self, params, seeds, rng_key):
         n = len(seeds)
         return (jnp.zeros((n, 3, 3), seeds.dtype),
                 jnp.zeros((n, len(WT)), jnp.int32), jnp.zeros(n, jnp.int32))
@@ -100,25 +102,35 @@ class _FluidPairs(WoSIntegrator):
         split = jax.vmap(lambda k: jr.split(k, 4))(keys)
         directions = jax.vmap(lambda k: sample_uniform_2sphere(k, seeds.dtype))(split[:, 0])
         radius = seeds[:, 3]
-        delta = radius[:, None]*directions
+        valid = radius > 0
+        delta = jnp.where(valid, radius, 0.)[:, None]*directions
         positions = seeds[:, None, :3]+jnp.stack((delta, -delta), axis=1)
         # Both legs use common continuation randomness, independent of the
         # direction and the two keys used by the local source estimator.
-        walk_keys = jnp.broadcast_to(split[:, None, 3], (size, 2, 2))
+        # Raw and typed keys differ in trailing shape.
+        walk_key = split[:, 3]
+        key_shape = walk_key.shape[1:]
+        walk_keys = jnp.broadcast_to(walk_key[:, None], (size, 2)+key_shape)
         walkers = super()._get_initial_state(
-            positions.reshape(-1, 3), walk_keys.reshape(-1, 2), trust_radius, 2*size)
+            positions.reshape(-1, 3), walk_keys.reshape((2*size,)+key_shape), trust_radius, 2*size)
         walkers = walkers._replace(w=jnp.zeros((2*size, 3), seeds.dtype))
         walkers = jax.tree.map(lambda a: a.reshape((size, 2)+a.shape[1:]), walkers)
-        weight = (3/jnp.where(radius > 0, radius, 1.))[:, None]*directions
-        return _PairState(walkers, weight, jnp.zeros(size, jnp.int32),
-                          jnp.zeros(size, bool), jnp.zeros(size, jnp.int32))
+        # Invalid starts never launch their legs; the finished pair is reduced
+        # with two INVALID legs and zero accepted samples.
+        legs_invalid = jnp.broadcast_to(~valid[:, None], (size, 2))
+        walkers = walkers._replace(
+            done_flag=legs_invalid,
+            status=jnp.where(legs_invalid, WT.INVALID, WT.ACTIVE).astype(walkers.status.dtype))
+        weight = (3/jnp.where(valid, radius, 1.))[:, None]*directions
+        return _PairState(walkers, weight, jnp.zeros(size, jnp.int32), ~valid,
+                          jnp.where(valid, WT.ACTIVE, WT.MAX_STEPS).astype(jnp.int32))
 
     def step(self, params, state):
         walkers = jax.vmap(super().step, in_axes=(None, 0))(params, state.walkers)
         done = jnp.all(walkers.done_flag)
         # The driver schedules pairs. Actual per-leg termination reasons and
         # accepted sample counts are carried by the contribution below.
-        return _PairState(walkers, state.weight, walkers.nSteps.sum(), done,
+        return _PairState(walkers, state.weight, walkers.nSteps.sum(dtype=jnp.int32), done,
                           jnp.where(done, WT.MAX_STEPS, WT.ACTIVE).astype(jnp.int32))
 
     def _step_block(self, params, states, steps, unroll):
@@ -129,7 +141,7 @@ class _FluidPairs(WoSIntegrator):
         flat = self.continuation._step_block(params, flat, steps, unroll)
         walkers = jax.tree.map(lambda a: a.reshape((size, 2)+a.shape[1:]), flat)
         done = jnp.all(walkers.done_flag, axis=1)
-        return _PairState(walkers, states.weight, walkers.nSteps.sum(1), done,
+        return _PairState(walkers, states.weight, walkers.nSteps.sum(1, dtype=jnp.int32), done,
                           jnp.where(done, WT.MAX_STEPS, WT.ACTIVE).astype(jnp.int32))
 
     def _contributing_status(self, status):
@@ -146,14 +158,8 @@ class _FluidPairs(WoSIntegrator):
         accepted &= finite
         values = jnp.where(accepted[:, None], values, 0.)
         gradient = (values[0]-values[1])[:, None]*state.weight
-        counts = (status[:, None] == jnp.arange(len(WT))).sum(0)
-        return gradient, counts, accepted.sum()
-
-    def _refill_state(self, states, valid, indices, seeds, keys, trust_radius, total):
-        fresh = self._get_initial_state(seeds, keys, trust_radius, len(seeds))
-        scatter = get_scatter_fn(indices, valid, total)
-        return jax.tree.map(lambda old, new: scatter(old, new, jnp.zeros_like(old[0])),
-                            states, fresh)
+        counts = (status[:, None] == jnp.arange(len(WT))).sum(0, dtype=jnp.int32)
+        return gradient, counts, accepted.sum(dtype=jnp.int32)
 
 
 def _identity_source_params(params):
@@ -295,16 +301,26 @@ def make_dirichlet_gradient_solve(empty_sphere, boundary, source, *, dim,
 
     @jax.jit
     def prepare(params, points, trust_radius):
+        """Seeds (point, first-ball radius); radius 0 marks an invalid start.
+
+        As in WoSGradientIntegrator, a start needs a finite residual off the
+        boundary and a finite first ball. There is no zero-clearance retry,
+        so an undecided (zero) radius is invalid too.
+        """
         residual, radii, _ = jax.vmap(
             lambda x: paired.empty_sphere(params, x, trust_radius))(points)
-        valid = (jnp.abs(residual) > paired.eps) & jnp.isfinite(radii) & (radii > 0)
-        return jnp.concatenate((points, radii[:, None]), axis=1), jnp.where(valid, radii, 0.)
+        valid = (jnp.all(jnp.isfinite(points), axis=-1) & jnp.isfinite(residual)
+                 & (jnp.abs(residual) > paired.eps) & jnp.isfinite(radii) & (radii > 0))
+        radii = jnp.where(valid, radii, 0.).astype(points.dtype)
+        return jnp.concatenate((points, radii[:, None]), axis=1), radii
 
     @jax.jit
-    def finish(points, details, local):
+    def finish(points, details, local, radii):
         gradient, counts, successful = details.contribution_sum
-        return WalkerDiagnostics(points, gradient+successful[:, None, None]*local,
-                                 successful, counts, 1+details.nSteps/2)
+        # A start without accepted pairs has no local term (it may be NaN).
+        local = jnp.where(successful[:, None, None] > 0, successful[:, None, None]*local, 0.)
+        n_steps = jnp.where(radii > 0, 1 + details.nSteps/2, 0.)
+        return WalkerDiagnostics(points, gradient+local, successful, counts, n_steps)
 
     def integrate(params, points, key, init_trust_region_size, n_samples, **options):
         antithetic_source_samples((n_samples//2)*draws, n_samples)
@@ -321,6 +337,6 @@ def make_dirichlet_gradient_solve(empty_sphere, boundary, source, *, dim,
         details = paired.integrate_batch(params, seeds, key, init_trust_region_size,
                                          n_samples=pairs, return_details=True, **options)
         local = local_gradient(prepare_local_source(params), points, radii, key, pairs=pairs)
-        return finish(points, details, local)
+        return finish(points, details, local, radii)
 
     return integrate

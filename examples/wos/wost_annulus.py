@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import t as student_t
 
-from sphereWalker.star_integrator import WoStIntegrator
+from sphereWalker import WoStIntegrator
 from surfaces.implicit.lipschitz import sdfImplicit
 from surfaces.implicit.primitives import sphere_sdf
 

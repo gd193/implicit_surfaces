@@ -1,14 +1,15 @@
 # Walk on Stars
 
 `WoStIntegrator` solves `-Δu = f` with an implicit Dirichlet boundary and a
-homogeneous Neumann enclosure (`du/dn_out = 0`). It is a separate integrator
-using the existing WoS batch/refill/compaction machinery. There is no new
-boundary hierarchy or domain object.
+homogeneous Neumann enclosure (`du/dn_out = 0`). It is a `WalkIntegrator`
+(`sphereWalker/walk.py`) sharing the Dirichlet/source callbacks of WoS and the
+`MCIntegrator` batch/refill/compaction driver (`sphereWalker/driver.py`). There
+is no new boundary hierarchy or domain object.
 
 ## Construction
 
 ```python
-from sphereWalker.star_integrator import WoStIntegrator
+from sphereWalker import WoStIntegrator
 from surfaces.implicit.lipschitz import sdfImplicit
 from surfaces.implicit.primitives import bbox_sdf, sphere_sdf
 
@@ -162,8 +163,8 @@ raise if any walks are incomplete. Internal direct `step` calls take
   lanes. There is no device-side skip for a block of only dead lanes. On GPU
   a `lax.cond` copies its predicate to the host each round, and skipping one
   flush block per solve did not measurably help.
-- **Gradient WoSt blocks:** a block runs one masked step. After it, if no live
-  walker still lacks its first ball, the rest of the block runs
+- **Gradient blocks (WoS and WoSt):** a block runs one masked step. After it,
+  if no live walker still lacks its first ball, the rest of the block runs
   continuation-only steps. This skips the first-ball work, and the results
   equal the masked steps exactly.
 - **Host syncs:** the host reads the refill count and the live count once per
@@ -196,15 +197,22 @@ plot is produced.
 
 ## Gradients
 
-`WoStGradientIntegrator` lives beside `WoStIntegrator` in `star_integrator.py`
+`WoStGradientIntegrator` lives beside `WoStIntegrator` in `sphereWalker/wost.py`
 and accepts the same arguments plus optional `control_fn(x)`. It returns
-`(N, value_components, dim)` spatial gradients. It shares the first-ball
-mean-value gradient weights with `WoSGradientIntegrator`, then uses the
-ordinary WoSt step for the value continuation. The first ball is capped by
-both Dirichlet and Neumann empty-sphere distances, not silhouette distance.
-Initial points on either boundary are invalid for this estimator. An undecided
-zero-radius query updates the trust region and counts toward `max_steps`, but
-does not consume the first-ball estimate or subtract its control value.
+`(N, value_components, dim)` spatial gradients. Both it and
+`WoSGradientIntegrator` are `FirstBallGradientMixin` (`sphereWalker/gradient.py`)
+over their value integrator: one first-ball estimator (Sawhney & Crane 2020,
+Eq. 14) followed by the integrator's ordinary continuation step. The mixin asks
+the host integrator for the first-ball radius, its validity and the retry trust
+region through `_first_ball_clearance`; WoSt validates both Dirichlet and
+Neumann empty-sphere distances before capping the radius by them (and
+`max_radius`), not by silhouette distance.
+Initial points on either boundary, and nonfinite clearances, are invalid for
+this estimator. An undecided zero-radius query updates the trust region (the
+Neumann proposal when the Neumann enclosure limits the ball) and counts toward
+`max_steps`, but does not consume the first-ball estimate or subtract its
+control value. For WoS with single source draws, a masked first-ball step
+evaluates the source once per lane, for whichever branch the lane takes.
 `control_fn(x)` optionally subtracts a local value from the continued value
 estimate. With `control_takes_params=True`, the callback receives `(params, x)`
 and its output must broadcast to the boundary value shape. This allows a

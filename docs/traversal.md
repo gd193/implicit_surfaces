@@ -6,14 +6,15 @@ Geometry, traversal, and shading have separate responsibilities:
 RayQuery ── RayMarcher ── SimpleIntegrator (camera + normal shading)
                 └─────── ImplicitScene ── MaterialIntegrator (scattering)
          └─ SurfaceSampler (multi-hit sampling)
-EmptySphereQuery ── WoSIntegrator / DifferentialWoSIntegrator
+EmptySphereQuery ── WalkIntegrator ── WoS / WoSt (+ gradient, differential)
 ```
 
 RayMarcher, SurfaceSampler, and MaterialIntegrator use
 `utils.batch_driver.run_bounded_batch` to track original indices, refill finished
 slots from pending work, and flush results. Their state types and step functions
 remain independent. The driver knows nothing about hits, signs, epsilon,
-advancement, or scattering. WoS retains its reduction and phase-transition driver.
+advancement, or scattering. The walk solvers keep their own reduction and
+phase-transition driver, `sphereWalker.MCIntegrator`.
 
 All three, plus SimpleIntegrator and ImplicitScene, accept `max_active_states`
 (default 4096, positive integer). Only that many live states are initialized.
@@ -204,6 +205,30 @@ packed and processed in chunks of `transition_bucket_size` (default 256)
 inside the jitted step, so the cost scales with the number of switches, not
 the buffer size. Within a chunk the four attempts run in a `while_loop` that
 ends once every walker has accepted or exhausted them; most accept the first.
+Completed walkers' `Df`/`V_n` evaluations use the same chunking
+(`sphereWalker.ops.run_chunked`): a chunk's padding repeats a real selected
+walker, so these callbacks never see a zero-filled state, and no chunk runs
+when nothing is selected.
+
+### Integrator layout
+
+`sphereWalker` has three tiers:
+
+- `MCIntegrator` (`driver.py`): the refill/compaction/reduction batch driver.
+  It knows nothing about PDEs; subclasses implement `step`,
+  `_get_initial_state` and `_compute_accumulator_update`. Refill, phase
+  transition, completion and block stepping have generic defaults. The fluid
+  pressure prototype (`WoBPressureIntegrator`) builds on it directly.
+- `WalkIntegrator` (`walk.py`): Dirichlet/source callbacks for interior walks
+  of `-Δu = f`, `source_samples`, `truncate`, and one Dirichlet WoS ball step
+  shared by WoS, its gradient and differential WoS.
+- Concrete solvers: `WoSIntegrator`, `WoSGradientIntegrator`,
+  `DifferentialWoSIntegrator` (`wos.py`) and `WoStIntegrator`,
+  `WoStGradientIntegrator` (`wost.py`). Both gradient solvers are
+  `FirstBallGradientMixin` (`gradient.py`) over the value solver.
+
+Stateless JAX primitives (`walker_status`, `finish_step`, `average_draws`,
+`run_chunked`, scatter/compaction helpers) live in `ops.py`.
 
 This default checks endpoint interior and geometric clearance, not the entire
 offset segment. To exclude crossing a gap into another component, supply

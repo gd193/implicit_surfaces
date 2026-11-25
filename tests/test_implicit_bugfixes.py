@@ -9,7 +9,7 @@ import pytest
 from rayMarcher.camera import Camera
 from rayMarcher.materials import Material, scatter
 from rayMarcher.sampler import generate_antialiased_ray
-from sphereWalker.integrator import WoSIntegrator
+from sphereWalker import WoSIntegrator
 from sphereWalker.types import WalkerTermination as WT
 from surfaces.implicit.harmonic import poissonSurface
 from surfaces.implicit.lipschitz import lipschitzImplicit

@@ -18,7 +18,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from sphereWalker.integrator import WoSIntegrator
+from sphereWalker import WoSIntegrator
 
 OUT = ROOT / "assets" / "renders" / "wos"
 

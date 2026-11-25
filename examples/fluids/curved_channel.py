@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 
-from sphereWalker.star_integrator import WoStGradientIntegrator, WoStIntegrator
+from sphereWalker import WoStGradientIntegrator, WoStIntegrator
 from surfaces.implicit.lipschitz import lipschitzImplicit, sdfImplicit
 from surfaces.implicit.primitives import bbox_sdf, circle_wave2d_sdf
 
