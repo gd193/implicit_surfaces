@@ -3,28 +3,9 @@
 Requires `environment-warp.yml` (Warp 1.18.0) and CUDA JAX; tested with
 JAX/JAXLIB 0.10.2. SciPy and scikit-image are test dependencies.
 
-```python
-import jax.numpy as jnp
-from meshExtractor.warp import make_marching_cubes
-
-extract = make_marching_cubes(
-    lambda radius, p: jnp.linalg.norm(p) - radius,
-    bounds=((-1., -1., -1.), (1., 1., 1.)),
-    resolution=128, lipschitz_bound=1.,
-)
-vertices, faces = extract(jnp.float32(.6))
-```
-
-The field accepts a parameter pytree and one 3D point, returning a scalar
-float32. Parameters remain dynamic; reuse the factory between calls. Resolution
-counts cells and accepts a scalar or three dimensions. Outputs are resident JAX
-arrays: float32 vertices `(V, 3)` and int32 faces `(F, 3)`.
-
-Omit `lipschitz_bound` for dense sampling; supply a **conservative** positive bound
-for sparse sampling. An underestimated bound can miss surfaces. Sparse padded
-grids project sample points into the requested box. Call extraction outside JAX
-transformations because output sizes depend on field values. Whole-extractor
-autodiff is not provided.
+The marching-cubes backends in this benchmark measure fixed-grid Warp
+reference implementations. The public adaptive extractor and its accuracy
+criterion are documented in [mesh extraction](../mesh_extraction.md).
 
 Dense extraction imports Warp's kernels and tables. It scans in place and reuses
 dead vertex-prefix storage as the edge map; geometry and output order match
@@ -49,14 +30,14 @@ them. Failed cases or source changes fail the run. Output directories must be ne
 
 | Backend | Pipeline | Extraction only |
 |---|---|---|
-| `legacy` | JAX octree + existing extractor | Resident leaves + corner evaluation + extractor |
 | `warp-dense` | Bounded JAX sampling + stock Warp MC | Resident scalar grid + stock Warp MC |
 | `compact-dense` | Same sampler + compact MC | Resident scalar grid + compact MC |
 | `warp-sparse` | Warp Lipschitz octree + JAX sampling + sparse MC | Resident cells/corner values + sparse MC |
+| `dual-dense` | Dense sampling + dual contouring | Resident grid values + Hermite evaluation and triangulation |
+| `dual-sparse` | Lipschitz pruning + dual contouring | Retained cells and corner values + Hermite evaluation and triangulation |
 
-Legacy extraction includes sampling. All backends use the same fields and
-isovalue; the neural fixture is a seeded residual MLP, not a trained model.
-Warp outputs stay on device. Normals, export and validation are outside timing.
+All backends use the same fields and isovalue. The neural fixture is a seeded
+residual MLP. Export and validation run outside the timed region.
 
 - **Device activity:** summed CUPTI kernel, copy and memset durations after
   warmup. Components are also recorded separately. Host gaps are excluded;
@@ -78,8 +59,7 @@ Warp outputs stay on device. Normals, export and validation are outside timing.
 The benchmark-only adapter calls pinned upstream VTK-m MarchingCells and Flying
 Edges. CUDA 13 compatibility fixes come from pinned Viskores, its maintained
 successor; extraction kernels are unchanged. Both are BSD-style licensed; source
-and licenses remain in the external build directory. Production calls Warp's
-Apache-2.0 kernels and copies no lookup tables or kernels.
+and licenses remain in the external build directory. The fixed-grid comparisons use Warp's Apache-2.0 kernels.
 
 ```sh
 python -m scripts.bench.mesh_extraction.references.build_reference \

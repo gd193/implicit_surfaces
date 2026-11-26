@@ -1,21 +1,20 @@
 """JAX/Warp implicit-field mesh extraction and mesh I/O."""
 from meshExtractor.dual import (
-    CapacityOverflow,
     DC_COMPILER_OPTIONS,
-    ResidentMesh,
     make_dual_contouring,
-    make_dual_contouring_resident,
 )
-from meshExtractor.mesh_io import write_obj, write_ply
-from meshExtractor.warp import make_marching_cubes
+from meshExtractor._dual_resident import make_dual_contouring_resident
+from meshExtractor.mesh_io import write_obj
+from meshExtractor.marching_cubes import make_marching_cubes
+from meshExtractor.results import AdaptiveMeshResult, CapacityOverflow, DualContouringBuffers
 
 __all__ = [
     "CapacityOverflow",
     "DC_COMPILER_OPTIONS",
-    "ResidentMesh",
+    "DualContouringBuffers",
+    "AdaptiveMeshResult",
     "make_dual_contouring",
     "make_dual_contouring_resident",
     "make_marching_cubes",
     "write_obj",
-    "write_ply",
 ]

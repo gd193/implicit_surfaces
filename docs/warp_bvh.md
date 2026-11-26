@@ -29,14 +29,15 @@ import jax.numpy as jnp
 
 from sengi import bvh
 from sengi.primitives.triangles import Triangles
-from surfaces.explicit.trimesh import TriMesh, TriMeshSurface
+from surfaces.meshes import TriMesh
+from surfaces.explicit.trimesh import TriMeshSurface
 
 mesh = TriMesh(
     vertices=jnp.asarray(vertices, dtype=jnp.float32),
-    faces=jnp.asarray(faces, dtype=jnp.int32),
+    elements=jnp.asarray(faces, dtype=jnp.int32),
 )
 triangles = Triangles()
-source = triangles.indexed(mesh.vertices, mesh.faces)
+source = triangles.indexed(mesh.vertices, mesh.elements)
 index = bvh.build(triangles, source)
 boundary = bvh.prepare_boundary(index, source, silhouettes=False)
 surface = TriMeshSurface(mesh, boundary)

@@ -7,6 +7,8 @@ import numpy as np
 import pytest
 
 wp = pytest.importorskip("warp")
+from surfaces.meshes import TriMesh
+from meshExtractor import CapacityOverflow, DC_COMPILER_OPTIONS, make_dual_contouring, make_dual_contouring_resident
 from meshExtractor._dual_qef import solve_qef
 
 
@@ -81,7 +83,6 @@ def _mesh_checks(vertices, faces, closed=False):
 @pytest.mark.parametrize("sparse", [False, True])
 @pytest.mark.parametrize("shape", ["sphere", "box"])
 def test_public_closed_geometry_dynamic_parameters(shape, sparse):
-    from meshExtractor.warp import make_dual_contouring
     def field(params, point):
         q = point - params["center"]
         return jnp.linalg.norm(q) - params["radius"] if shape == "sphere" else jnp.max(jnp.abs(q) - params["radius"])
@@ -90,7 +91,9 @@ def test_public_closed_geometry_dynamic_parameters(shape, sparse):
     retained = []
     for radius in (.41, .57):
         params = {"center": jnp.array([.023, -.031, .017]), "radius": jnp.float32(radius)}
-        vertices, faces = extract(params)
+        mesh = extract(params)
+        assert isinstance(mesh, TriMesh)
+        vertices, faces = mesh.vertices, mesh.elements
         assert isinstance(vertices, jax.Array)
         retained.extend((array, np.asarray(array).copy()) for array in (vertices, faces))
         vertices, faces = _mesh_checks(vertices, faces, closed=True)
@@ -102,8 +105,8 @@ def test_public_closed_geometry_dynamic_parameters(shape, sparse):
         if shape == "box":
             corners = np.array(list(itertools.product((-radius, radius), repeat=3))) + np.asarray(params["center"])
             assert np.max(np.min(np.linalg.norm(corners[:, None]-vertices[None], axis=2), axis=1)) < 3e-5
-    vertices, faces = extract({"center": jnp.zeros(3), "radius": jnp.float32(5.)})
-    assert vertices.shape == faces.shape == (0, 3)
+    mesh = extract({"center": jnp.zeros(3), "radius": jnp.float32(5.)})
+    assert mesh.vertices.shape == mesh.elements.shape == (0, 3)
     for array, expected in retained:
         np.testing.assert_array_equal(array, expected)
 
@@ -113,7 +116,6 @@ def test_public_closed_geometry_dynamic_parameters(shape, sparse):
     (1, "zero"), (1, "nonfinite"),
 ])
 def test_plane_winding_explicit_gradient_and_fallback(axis, normal_kind):
-    from meshExtractor.warp import make_dual_contouring
     def field(params, point):
         return params[0] * (point[axis] - params[1])
     def gradient(params, point):
@@ -125,7 +127,8 @@ def test_plane_winding_explicit_gradient_and_fallback(axis, normal_kind):
     extract = make_dual_contouring(field, ((-1., -2., -3.), (1., 2., 3.)), (7, 9, 11),
                                   gradient=gradient, capacity=(693, 2880, 4158) if normal_kind == "zero" else None)
     for sign in (-1., 1.):
-        vertices, faces = _mesh_checks(*extract(jnp.array([sign, .071])))
+        mesh = extract(jnp.array([sign, .071]))
+        vertices, faces = _mesh_checks(mesh.vertices, mesh.elements)
         assert len(faces)
         np.testing.assert_allclose(vertices[:, axis], .071, atol=2e-6)
         normals = np.cross(vertices[faces[:, 1]]-vertices[faces[:, 0]], vertices[faces[:, 2]]-vertices[faces[:, 0]])
@@ -134,7 +137,6 @@ def test_plane_winding_explicit_gradient_and_fallback(axis, normal_kind):
 
 @pytest.mark.parametrize("explicit_gradient", [False, True])
 def test_root_refinement_reduces_smooth_surface_residual(explicit_gradient):
-    from meshExtractor.warp import make_dual_contouring
     def field(radius, point):
         return jnp.exp(point[0]) - radius
     gradient = (lambda radius, point: jnp.array([jnp.exp(point[0]), 0., 0.])) if explicit_gradient else None
@@ -142,7 +144,8 @@ def test_root_refinement_reduces_smooth_surface_residual(explicit_gradient):
     for steps in (0, 5):
         extract = make_dual_contouring(field, ((-1.,)*3, (1.,)*3), (9, 11, 13),
                                       root_steps=steps, gradient=gradient, level=.125)
-        vertices, faces = _mesh_checks(*extract(jnp.float32(1.13)))
+        mesh = extract(jnp.float32(1.13))
+        vertices, faces = _mesh_checks(mesh.vertices, mesh.elements)
         errors.append(np.mean(np.abs(np.exp(vertices[:, 0])-1.255)))
     assert errors[1] < errors[0]
 
@@ -153,8 +156,6 @@ def test_root_refinement_reduces_smooth_surface_residual(explicit_gradient):
     (True, 0, True, 127), (True, 5, False, 64),
 ])
 def test_resident_composition_geometry_and_retention(sparse, steps, analytic, batch):
-    from meshExtractor.warp import make_dual_contouring, make_dual_contouring_resident
-    from meshExtractor.dual import DC_COMPILER_OPTIONS
     def field(params, p):
         return jnp.linalg.norm(p-params["center"])-params["radius"]
     def gradient(params, p):
@@ -179,9 +180,9 @@ def test_resident_composition_geometry_and_retention(sparse, steps, analytic, ba
         assert mesh.vertices.shape == (capacity[0], 3) and mesh.faces.shape == (capacity[2], 3)
         vertices, faces = _mesh_checks(np.asarray(mesh.vertices)[:counts[0]],
                                       np.asarray(mesh.faces)[:counts[2]], closed=True)
-        expected = tuple(np.asarray(array) for array in exact(params))
-        np.testing.assert_array_equal(faces, expected[1])
-        np.testing.assert_allclose(vertices, expected[0], atol=1e-6, rtol=0)
+        expected = exact(params)
+        np.testing.assert_array_equal(faces, expected.elements)
+        np.testing.assert_allclose(vertices, expected.vertices, atol=1e-6, rtol=0)
         if radius == 5.:
             assert tuple(counts[:3]) == (0, 0, 0)
         else:
@@ -198,8 +199,6 @@ def test_resident_composition_geometry_and_retention(sparse, steps, analytic, ba
 
 @pytest.mark.parametrize("limited", ["C", "E", "T", "F", "K"])
 def test_resident_overflow_rejects_exact_output(limited):
-    from meshExtractor.warp import make_dual_contouring, make_dual_contouring_resident
-    from meshExtractor.dual import CapacityOverflow, DC_COMPILER_OPTIONS
     def field(radius, p):
         return jnp.linalg.norm(p-jnp.array([.023, -.031, .017]))-radius
     sparse = limited in ("F", "K")

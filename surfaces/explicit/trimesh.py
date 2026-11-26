@@ -1,27 +1,18 @@
 """Triangle surfaces with optional vertex-velocity differentiation."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, NamedTuple, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
+from surfaces.meshes import TriMesh
 from surfaces.explicit.base import ExplicitSurface
 
 if TYPE_CHECKING:
     from sengi.boundary.data import BoundaryCoreData, BoundaryData, SilhouetteData
     from sengi.primitives.data import TrianglesArrays3
-
-
-class TriMesh(NamedTuple):
-    """Plain triangle mesh container.
-
-    `vertices`: (V, 3) float32 — vertex positions.
-    `faces`:    (F, 3) int32   — vertex indices per triangle (CCW).
-    """
-    vertices: jnp.ndarray
-    faces: jnp.ndarray
 
 
 class TriMeshSurface(ExplicitSurface):
@@ -41,18 +32,21 @@ class TriMeshSurface(ExplicitSurface):
         from sengi.metrics.nearest import Euclidean
         from sengi.primitives.triangles import Triangles
 
+        if not isinstance(mesh, TriMesh) or mesh.dim != 3:
+            raise ValueError("TriMeshSurface requires a 3D TriMesh")
+
         spec = boundary.data.spec
         if spec.primitive is not Triangles():
             raise TypeError("TriMeshSurface requires an index over Triangles().")
 
         tree, geometry = boundary.data
-        faces = np.asarray(mesh.faces)
+        faces = np.asarray(mesh.elements)
         if (faces.shape != geometry.indices.shape
                 or not np.array_equal(mesh.vertices, geometry.vertices)
                 or not np.array_equal(faces[np.asarray(tree.prim_ids)], geometry.indices)):
             raise ValueError("surface mesh does not match the packed triangle index")
 
-        self.mesh = mesh
+        self.mesh = jax.tree.map(jnp.asarray, mesh)
         self._vertex_velocity_fn = vertex_velocity_fn
         self._boundary = boundary
         self._nearest = queries.nearest.bind(spec, Euclidean())
@@ -106,7 +100,7 @@ class TriMeshSurface(ExplicitSurface):
                 "surface_velocity_normal requires vertex_velocity_fn"
             )
         cp, _dist, face_idx = self.closest_point(params, x)
-        v_idx = self.mesh.faces[face_idx]
+        v_idx = self.mesh.elements[face_idx]
         bary = _barycentric(cp, self.mesh.vertices[v_idx], self._face_normals[face_idx],
                             self._barycentric_scale[face_idx])
         dV = self._vertex_velocity_fn(params, v_idx)

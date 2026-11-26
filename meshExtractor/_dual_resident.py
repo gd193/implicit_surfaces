@@ -3,7 +3,6 @@
 from functools import partial
 from math import prod
 from operator import index
-from typing import NamedTuple
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -12,16 +11,18 @@ from meshExtractor._dual_common import _make_dense_sampler, _grid_points, _refin
 from meshExtractor._field import _FieldEvaluator, _validate_grid
 from meshExtractor import _dual_resident_warp as kernels
 from meshExtractor._dual_scan import scan
+from meshExtractor.results import DualContouringBuffers
 
 
-class ResidentMesh(NamedTuple):
-    vertices: jax.Array
-    faces: jax.Array
-    counts: jax.Array  # C, E, T, overflow bits, frontier, raw corners, unique corners
+def make_dual_contouring_resident(field, bounds, resolution=128, *, capacity,
+                                  sparse_capacity=None, gradient=None, level=0.,
+                                  lipschitz_bound=None, batch_size=65536, root_steps=0):
+    """Return a traceable fixed-capacity extractor; apply JIT at the outer boundary.
 
-
-def make_resident(field, bounds, resolution, *, capacity, batch_size, gradient=None, level=0.0, root_steps=0,
-                  lipschitz_bound=None, sparse_capacity=None):
+    ``capacity=(cells, edges, triangles)``; sparse sampling also requires
+    ``sparse_capacity=(frontier, raw_corners)``. See docs/mesh_extraction.md
+    for valid prefixes, overflow status and graph compilation options.
+    """
     if wp.__version__.split("+")[0] != "1.18.0":
         raise RuntimeError("dual contouring requires Warp 1.18.0")
     if lipschitz_bound is None and sparse_capacity is not None:
@@ -166,6 +167,6 @@ def make_resident(field, bounds, resolution, *, capacity, batch_size, gradient=N
         positions, g = hermite(params, positions, endpoints, values, counts, points)
         vertices = place(active, ce, positions, g, counts, *lower, *spacing, launch_dims=C, output_dims=C)[0]
         result = faces(ids, endpoints, values, level, fs, vertices, counts, launch_dims=E, output_dims=3 * T)[0]
-        return ResidentMesh(vertices, result.reshape(T, 3), counts)
+        return DualContouringBuffers(vertices, result.reshape(T, 3), counts)
 
     return extract

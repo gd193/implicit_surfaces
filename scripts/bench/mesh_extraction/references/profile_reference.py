@@ -34,7 +34,7 @@ def main():
     import jax
     import warp as wp
     from warp.geometry import IsoSurfaceMarchingCubes
-    from meshExtractor.warp import _FieldEvaluator
+    from meshExtractor._field import _FieldEvaluator
     from scripts.bench.mesh_extraction._cases import fixture, LOWER, UPPER
     from scripts.bench.mesh_extraction.benchmark import trace_samples, source_digest
     from .build_reference import source_hashes
@@ -45,7 +45,7 @@ def main():
         raise RuntimeError("CUDA required")
     wp.init()
     wp.set_device("cuda:0")
-    from meshExtractor.warp import _extract_dense as compact_extract
+    from scripts.bench.mesh_extraction._warp_mc import _extract_dense as compact_extract
 
     reference = VTKmReference(args.library)
     initial_sources = source_hashes()

@@ -16,7 +16,7 @@ from scripts.bench.mesh_extraction._cases import (  # noqa: E402
     MC_BACKENDS, fixture, host_mesh, make_runner, validate_mesh,
 )
 from scripts.bench.mesh_extraction.benchmark import trace_samples  # noqa: E402
-from meshExtractor.warp import _extract_dense, make_marching_cubes  # noqa: E402
+from scripts.bench.mesh_extraction._warp_mc import _extract_dense  # noqa: E402
 
 
 @pytest.mark.parametrize("name,level,phase", [
@@ -85,26 +85,3 @@ def test_dense_workspace_alias_matches_upstream(shape):
         actual = _extract_dense(data, level, lower=(-2., -1., 0.), upper=(1., 3., 2.))
         for a, b in zip(actual, expected, strict=True):
             np.testing.assert_array_equal(a.numpy(), b.numpy())
-
-
-@pytest.mark.parametrize("bound", [None, 1.])
-def test_public_factory_dynamic_parameters_rectangular_grid(bound):
-    def scalar(params, point):
-        assert point.shape == (3,)
-        return jnp.linalg.norm(point - params["center"]) - params["radius"]
-
-    lower, upper, cells = (-1., -1.2, -1.4), (1., 1.3, 1.1), (15, 17, 13)
-    extract = make_marching_cubes(scalar, (lower, upper), cells, lipschitz_bound=bound, batch_size=256)
-    axes = [jnp.linspace(a, b, n+1) for a, b, n in zip(lower, upper, cells, strict=True)]
-    points = jnp.stack(jnp.meshgrid(*axes, indexing="ij"), axis=-1).reshape(-1, 3)
-    for radius in (.4, .6):
-        center = [.013 if radius == .4 else .85, -.027, .019]  # Second mesh crosses the box boundary.
-        params = {"center": jnp.array(center, jnp.float32), "radius": jnp.float32(radius)}
-        vertices, faces = extract(params)
-        assert isinstance(vertices, jax.Array) and faces.dtype == jnp.int32
-        values = np.array(jax.vmap(scalar, (None, 0))(params, points)).reshape(tuple(n+1 for n in cells))
-        reference, ref_faces, _, _ = marching_cubes(values, 0., method="lorensen")
-        reference = np.asarray(lower) + reference * ((np.asarray(upper)-lower)/cells)
-        assert len(faces) == len(ref_faces)
-        for source, target in ((vertices, reference), (reference, vertices)):
-            assert cKDTree(np.asarray(target)).query(np.asarray(source))[0].max() < 2e-5

@@ -7,7 +7,8 @@ import pytest
 import trimesh
 
 from sengi import bvh
-from surfaces.explicit.trimesh import TriMesh, TriMeshSurface
+from surfaces.meshes import TriMesh
+from surfaces.explicit.trimesh import TriMeshSurface
 
 
 pytest.importorskip("warp")
@@ -17,10 +18,10 @@ def _index_mesh(mesh, builder):
     from sengi.primitives.triangles import Triangles
 
     model = TriMesh(
-        jnp.asarray(mesh.vertices, jnp.float32), jnp.asarray(mesh.faces, jnp.int32)
+        np.asarray(mesh.vertices, np.float32), np.asarray(mesh.faces, np.int32)
     )
     primitive = Triangles()
-    source = primitive.indexed(model.vertices, model.faces)
+    source = primitive.indexed(model.vertices, model.elements)
     index = bvh.build(primitive, source, builder=builder)
     boundary = bvh.prepare_boundary(index, source, silhouettes=False)
     return model, boundary
@@ -47,7 +48,7 @@ def test_trimesh_surface_signed_value_and_first_hit(builder):
         jnp.float32(4.0),
     )
     assert bool(hit) and float(time) == 1.0
-    np.testing.assert_array_equal(mesh.vertices[mesh.faces[face], 0], [1.0, 1.0, 1.0])
+    np.testing.assert_array_equal(mesh.vertices[mesh.elements[face], 0], [1.0, 1.0, 1.0])
 
     for center, expected in (([0, 0, 0], -1), ([2, 0, 0], 1), ([1, 0, 0], 0)):
         center = jnp.array(center, jnp.float32)
@@ -99,7 +100,7 @@ def test_triangle_vertex_velocity_across_scales(side):
 
 def test_surface_rejects_different_mesh_with_same_array_shapes():
     mesh, boundary = _index_mesh(trimesh.creation.box(), "sah")
-    for other in (TriMesh(mesh.vertices + 1, mesh.faces),
-                  TriMesh(mesh.vertices, mesh.faces[::-1])):
+    for other in (TriMesh(mesh.vertices + 1, mesh.elements),
+                  TriMesh(mesh.vertices, mesh.elements[::-1])):
         with pytest.raises(ValueError):
             TriMeshSurface(other, boundary)
