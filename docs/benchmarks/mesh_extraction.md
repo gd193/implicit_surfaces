@@ -3,9 +3,11 @@
 Requires `environment-warp.yml` (Warp 1.18.0) and CUDA JAX; tested with
 JAX/JAXLIB 0.10.2. Adaptive dual contouring uses SciPy for the bounded least-squares fit. The reference tests also require scikit-image.
 
-The marching-cubes backends in this benchmark measure fixed-grid Warp
-reference implementations. The public adaptive extractor and its accuracy
-criterion are documented in [mesh extraction](../mesh_extraction.md).
+The adaptive marching-cubes and dual-contouring pipelines use the same field,
+isovalue and world-space tolerance. For a resolution of N cells per axis,
+the harness uses the cell diagonal (2√3/N) as the tolerance and caps octree
+depth at ⌈log₂ N⌉. Both report unresolved boxes alongside triangle counts
+and field residuals. See [mesh extraction](../mesh_extraction.md).
 
 Dense extraction imports Warp's kernels and tables. It scans in place and reuses
 dead vertex-prefix storage as the edge map; geometry and output order match
@@ -19,9 +21,9 @@ Run from the repository root with artifacts on local storage:
 
 ```sh
 python -m scripts.bench.mesh_extraction.benchmark \
-  --gpu 0 --field sphere torus neural --resolutions 32 128 256 \
-  --backend warp-dense compact-dense warp-sparse \
-  --phase pipeline extraction --output /path/to/local/mesh-run
+  --gpu 0 --field sphere torus neural --resolutions 16 32 \
+  --backend mc-adaptive dual-adaptive \
+  --phase pipeline --output /path/to/local/mesh-run
 ```
 
 Each case runs in a fresh process. Results include source hashes, versions,
@@ -33,6 +35,7 @@ them. Failed cases or source changes fail the run. Output directories must be ne
 | `warp-dense` | Bounded JAX sampling + stock Warp MC | Resident scalar grid + stock Warp MC |
 | `compact-dense` | Same sampler + compact MC | Resident scalar grid + compact MC |
 | `warp-sparse` | Warp Lipschitz octree + JAX sampling + sparse MC | Resident cells/corner values + sparse MC |
+| `mc-adaptive` | Certified adaptive octree and marching-cubes triangulation | Pipeline only |
 | `dual-adaptive` | Certified adaptive octree and Hermite triangulation | Pipeline only |
 | `dual-dense` | Fixed-capacity dense dual contouring | Pipeline only |
 | `dual-sparse` | Fixed-capacity sparse dual contouring | Pipeline only |

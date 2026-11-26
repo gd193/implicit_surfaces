@@ -13,7 +13,7 @@ wp = pytest.importorskip("warp")
 pytest.importorskip("warp.geometry")
 
 from scripts.bench.mesh_extraction._cases import (  # noqa: E402
-    MC_BACKENDS, fixture, host_mesh, make_runner, validate_mesh,
+    FIXED_MC_BACKENDS, fixture, host_mesh, make_runner, validate_mesh,
 )
 from scripts.bench.mesh_extraction.benchmark import trace_samples  # noqa: E402
 from scripts.bench.mesh_extraction._warp_mc import _extract_dense  # noqa: E402
@@ -35,7 +35,7 @@ def test_mesh_adapters_against_dense_reference(name, level, phase):
         reference -= 1.
     else:
         reference, reference_faces = np.empty((0, 3)), np.empty((0, 3), int)
-    for backend in MC_BACKENDS:
+    for backend in FIXED_MC_BACKENDS:
         run, _ = make_runner(backend, scene, cells, phase, 1024)
         vertices, faces = host_mesh(run())
         validate_mesh(vertices, faces, scene, cells)
@@ -50,6 +50,20 @@ def test_mesh_adapters_against_dense_reference(name, level, phase):
             edges = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
             _, counts = np.unique(edges, axis=0, return_counts=True)
             assert np.all(counts == 2), backend
+
+
+def test_adaptive_mc_pipeline_uses_requested_level_and_resolution():
+    scene, cells = fixture("sphere", .2), 12
+    run, details = make_runner("mc-adaptive", scene, cells, "pipeline", 1024)
+    assert details["max_depth"] == 4
+    assert details["tolerance"] == pytest.approx(2 * np.sqrt(3) / cells)
+    assert not details["gradient_evaluation_in_timed_region"]
+    vertices, faces = host_mesh(run())
+    metrics = validate_mesh(vertices, faces, scene, cells, tolerance=details["tolerance"])
+    assert metrics["triangles"] > 0
+    assert metrics["max_field_residual"] < .05
+    with pytest.raises(ValueError, match="pipeline"):
+        make_runner("mc-adaptive", scene, cells, "extraction", 1024)
 
 
 def test_trace_excludes_host_gaps_and_accounts_for_copies(tmp_path):

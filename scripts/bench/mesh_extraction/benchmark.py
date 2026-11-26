@@ -65,6 +65,7 @@ def worker(args):
     import jax
     import numpy as np
     import warp as wp
+    from meshExtractor import AdaptiveMeshResult
     from ._cases import fixture, host_mesh, make_runner, validate_mesh
 
     device = jax.devices()[0]
@@ -126,7 +127,7 @@ def worker(args):
     vertices, faces = host_mesh(mesh)
     validation = validate_mesh(vertices, faces, scene, args.resolutions[0],
                                tolerance=details.get("tolerance"))
-    if args.backend[0] == "dual-adaptive":
+    if isinstance(mesh, AdaptiveMeshResult):
         validation["unresolved_boxes"] = len(mesh.unresolved_boxes)
     no_op = args.phase[0] == "extraction" and (
         args.backend[0] == "warp-sparse" and details["cells"] == 0)
@@ -162,10 +163,10 @@ def source_digest():
 
 
 def main():
-    from ._cases import BACKENDS, FIELDS, MC_BACKENDS
+    from ._cases import ADAPTIVE_BACKENDS, BACKENDS, FIELDS, FIXED_MC_BACKENDS
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backend", nargs="+", choices=BACKENDS, default=list(MC_BACKENDS))
+    parser.add_argument("--backend", nargs="+", choices=BACKENDS, default=list(FIXED_MC_BACKENDS))
     parser.add_argument("--field", nargs="+", choices=FIELDS, default=["sphere", "torus", "neural"])
     parser.add_argument("--resolutions", nargs="+", type=int, default=[32, 64, 128], help="cells per axis")
     parser.add_argument("--phase", nargs="+", choices=("pipeline", "extraction"), default=["pipeline"])
@@ -183,8 +184,8 @@ def main():
     args = parser.parse_args()
     if min(*args.resolutions, args.batch_size, args.repeats) < 1 or args.warmup < 1:
         parser.error("resolutions, batch size, repeats and warmup must be positive")
-    if "dual-adaptive" in args.backend and "extraction" in args.phase:
-        parser.error("dual-adaptive supports pipeline timing only")
+    if "extraction" in args.phase and any(b in ADAPTIVE_BACKENDS for b in args.backend):
+        parser.error("adaptive backends support pipeline timing only")
     if args.capacity is None and any(b in ("dual-dense", "dual-sparse") for b in args.backend):
         parser.error("fixed-grid dual backends require --capacity")
     if args.root_steps < 0 or (args.root_steps and any(b not in ("dual-dense", "dual-sparse") for b in args.backend)):
@@ -244,7 +245,7 @@ def main():
                         print(f"{label}: FAILED ({folder / 'run.log'})", flush=True)
                     else:
                         result = json.loads((folder / "result.json").read_text())
-                        family = "marching-cubes" if backend in MC_BACKENDS else backend
+                        family = "marching-cubes" if backend in FIXED_MC_BACKENDS else backend
                         if backend in ("dual-dense", "dual-sparse"):
                             family = "dual-fixed"
                         previous = triangle_counts.setdefault((name, resolution, family), result["mesh"]["triangles"])

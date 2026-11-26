@@ -132,7 +132,7 @@ requirement is a lower bound at the first failed level. Dense F/K/U counts are 0
 Budgets are explicit. Calling `buffers.compact()` raises `CapacityOverflow`
 on shortage and exposes the count record as `.counts`.
 
-The benchmark supports the adaptive pipeline with `--backend dual-adaptive`.
+The benchmark runs both adaptive pipelines with `--backend mc-adaptive dual-adaptive`.
 Use `--backend dual-dense` or `dual-sparse` with explicit capacities for
 the fixed-grid pipeline. The latter also requires sparse frontier and corner
 capacities. Add `--resident` to time padded output before compaction.

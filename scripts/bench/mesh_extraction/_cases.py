@@ -9,15 +9,18 @@ import warp as wp
 import warp.geometry as geometry
 
 from surfaces.meshes import TriMesh
-from meshExtractor import DualContouringBuffers, DC_COMPILER_OPTIONS, make_dual_contouring, make_dual_contouring_resident
-from meshExtractor import AdaptiveMeshResult
+from meshExtractor import (
+    AdaptiveMeshResult, DC_COMPILER_OPTIONS, DualContouringBuffers,
+    make_dual_contouring, make_dual_contouring_resident, make_marching_cubes,
+)
 from surfaces.implicit.lipschitz import lipschitzImplicit
 from meshExtractor._field import _FieldEvaluator
 from scripts.bench.mesh_extraction._warp_mc import _extract_dense, _extract_sparse
 
 FIELDS = ("sphere", "torus", "neural", "gyroid")
-MC_BACKENDS = ("warp-dense", "warp-sparse", "compact-dense")
-BACKENDS = MC_BACKENDS + ("dual-adaptive", "dual-dense", "dual-sparse")
+FIXED_MC_BACKENDS = ("warp-dense", "warp-sparse", "compact-dense")
+ADAPTIVE_BACKENDS = {"mc-adaptive": make_marching_cubes, "dual-adaptive": make_dual_contouring}
+BACKENDS = (*ADAPTIVE_BACKENDS, *FIXED_MC_BACKENDS, "dual-dense", "dual-sparse")
 LOWER, UPPER = (-1., -1., -1.), (1., 1., 1.)
 
 
@@ -69,14 +72,15 @@ def make_runner(backend, scene, cells, phase, batch_size, root_steps=0, *,
                 capacity=None, sparse_capacity=None, resident=False):
     """Prepare resident inputs and return the measured operation."""
     details = {"input": "implicit_function", "field_evaluation_in_timed_region": True}
-    if backend == "dual-adaptive":
+    if backend in ADAPTIVE_BACKENDS:
         if phase != "pipeline":
-            raise ValueError("adaptive dual contouring measures the whole pipeline")
+            raise ValueError(f"{backend} supports pipeline timing only")
         depth = (cells - 1).bit_length()
         tolerance = np.nextafter(2. * np.sqrt(3.) / cells, np.inf)
         surface = lipschitzImplicit(scene.lipschitz, fn=scene, level_set=scene.level, dim=3)
-        extract = make_dual_contouring(surface, (LOWER, UPPER), tolerance=tolerance, max_depth=depth)
-        details.update(max_depth=depth, tolerance=tolerance, gradient_evaluation_in_timed_region=True)
+        extract = ADAPTIVE_BACKENDS[backend](surface, (LOWER, UPPER), tolerance=tolerance, max_depth=depth)
+        details.update(max_depth=depth, tolerance=tolerance,
+                       gradient_evaluation_in_timed_region=backend == "dual-adaptive")
         return partial(extract, scene.params), details
     if backend in ("dual-dense", "dual-sparse"):
         if capacity is None or phase != "pipeline":
