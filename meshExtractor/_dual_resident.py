@@ -14,6 +14,13 @@ from meshExtractor._dual_scan import scan
 from meshExtractor.results import DualContouringBuffers
 
 
+DC_COMPILER_OPTIONS = {
+    'xla_gpu_enable_command_buffer':
+        'CONDITIONAL,CUBLAS,CUBLASLT,CUDNN,CUSTOM_CALL,DYNAMIC_SLICE_FUSION,FUSION,WHILE',
+    'xla_gpu_graph_min_graph_size': 1,
+}
+
+
 def make_dual_contouring_resident(field, bounds, resolution=128, *, capacity,
                                   sparse_capacity=None, gradient=None, level=0.,
                                   lipschitz_bound=None, batch_size=65536, root_steps=0):

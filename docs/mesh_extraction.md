@@ -67,44 +67,35 @@ transformations. To export the accepted triangles to OBJ, run
 python scripts/extract_mesh.py --extractor mc --surface torus --max-depth 6 --tolerance .15 --out torus.obj
 ```
 
-## Dual contouring
+## Adaptive dual contouring
+
+Use the same surface, bounds and world-space tolerance as marching cubes.
 
 ```python
 from meshExtractor import make_dual_contouring
 
-extract = make_dual_contouring(
-    field, ((-1., -1., -1.), (1., 1., 1.)), resolution=128,
-    lipschitz_bound=1.,  # omit for dense sampling
-)
-mesh = extract(params)
+extract = make_dual_contouring(surface, ((-1.,) * 3, (1.,) * 3),
+                               tolerance=.12, max_depth=6)
+mesh, unresolved_boxes = extract(jnp.float32(.6))
 ```
 
-`make_dual_contouring` takes
-`field(params, point) -> scalar float32` and returns an eager
-extractor producing a `TriMesh` with JAX float32 vertices `(V, 3)` and int32 triangles `(F, 3)`.
-Parameters remain dynamic; invoke extraction outside `jit`, `grad`, and `vmap`
-because mesh sizes depend on field values. Resolution counts cells and accepts
-one integer or three integers; bounds may be rectangular. `level=0.` selects the
-isovalue, and `batch_size=65536` bounds field and gradient query batches.
+The eager extractor returns an indexed `TriMesh`. It refines shared crossing
+edges by bracketed bisection and interpolation. It uses
+`surface.spatial_derivative(params, point)` for Hermite normals, or JAX
+autodiff of `signed_value` on surfaces that supply only point values.
+Each active cell fits a box-constrained least-squares vertex. Rank-deficient
+fits favor the crossing centroid. Multiple contour loops in one cell trigger
+subdivision or an unresolved box at the depth limit.
 
-Dual contouring evaluates gradients at unique crossing edges, using
-`jax.grad(field, argnums=1)` by default. Supply `gradient(params, point)` returning
-a float32 `(3,)` vector when an analytic gradient is available. `root_steps=0`
-uses linear edge interpolation; positive integers add safeguarded bracketed
-refinement passes. Gradients always come from the original field, including at
-domain boundaries. A cell-constrained Hermite QEF preserves sharp features;
-faces join cell vertices around crossing edges and split each quad into two
-triangles. The domain boundary remains open. One vertex per active cell cannot
-represent every ambiguous configuration; nonmanifold meshes and degenerate
-triangles at exact grid ties are possible. Extraction is not differentiable.
+Triangles join the incident cell vertices around a crossing edge. Four cells
+form a triangulated quad and three form a transition triangle. Along the
+domain boundary, the extractor uses shared face-segment midpoints and edge
+crossings to extend the mesh to the box. It also uses these points beside
+certified coarse slabs to keep their triangles inside the enclosure.
+The octree acceptance, unresolved-box format, and host execution model match
+marching cubes. Query batching runs on the JAX device.
 
-A supplied positive, conservative Lipschitz bound enables sparse octree pruning.
-This retains the same finest uniform grid as dense extraction, rather than
-joining cells at mixed refinement levels. An underestimated bound can omit
-surface components. Rectangular and non-power-of-two requests retain their
-physical grid spacing: only pruning queries outside the domain use a clamped
-extension. Sparse extraction stores retained cells and unique corners, without a
-full-volume allocation. The implementation pins Warp 1.18 private helpers.
+## Fixed-capacity dual contouring
 
 For GPU-resident dual contouring, choose static capacity budgets and compile
 the outer computation:
@@ -138,20 +129,10 @@ Sparse resident sampling additionally requires `sparse_capacity=(F, K)`.
 F bounds the frontier including expanded children; K bounds eight records per
 retained leaf before corner deduplication. On frontier overflow, the reported
 requirement is a lower bound at the first failed level. Dense F/K/U counts are 0.
-Budgets are explicit and never grow silently. Passing the same capacities to
-`make_dual_contouring` returns an exact-sized `TriMesh` with one count readback and
-raises `CapacityOverflow` on shortage; without capacities it retains dynamic
-allocation. The exception exposes the count record as `.counts`.
+Budgets are explicit. Calling `buffers.compact()` raises `CapacityOverflow`
+on shortage and exposes the count record as `.counts`.
 
-The benchmark module `scripts.bench.mesh_extraction.benchmark` accepts
-`dual-dense` and `dual-sparse` alongside the marching-cubes backends. Pipeline
-measurements include sampling, gradients, QEF, and topology. Extraction
-measurements start from resident unique corners and values but still include
-Hermite gradient evaluation, QEF, topology, and field queries for enabled root
-refinement. Triangle counts are compared within each algorithm family.
-
-Use `--capacity C E T --resident` to benchmark the resident dual pipeline; add
-`--sparse-capacity F K` for `dual-sparse`. Omit `--resident` to include exact-size
-compaction. Conditional CUDA graph bodies are missing from CUPTI's kernel trace
-on this stack, so these runs report synchronized wall time and mark full device
-activity timing unavailable.
+The benchmark supports the adaptive pipeline with `--backend dual-adaptive`.
+Use `--backend dual-dense` or `dual-sparse` with explicit capacities for
+the fixed-grid pipeline. The latter also requires sparse frontier and corner
+capacities. Add `--resident` to time padded output before compaction.

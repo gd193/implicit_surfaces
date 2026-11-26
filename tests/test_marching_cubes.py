@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from surfaces.meshes import TriMesh
-from meshExtractor import make_marching_cubes
+from meshExtractor import make_dual_contouring, make_marching_cubes
 from surfaces.implicit.lipschitz import lipschitzImplicit
 
 BOUNDS = ((-1., -1., -1.), (1., 1., 1.))
@@ -15,7 +15,8 @@ def mesh_edges(faces):
     return np.unique(np.sort(edges, axis=1), axis=0, return_counts=True)
 
 
-def test_certified_root_skips_point_evaluation():
+@pytest.mark.parametrize("factory", [make_marching_cubes, make_dual_contouring])
+def test_certified_root_skips_point_evaluation(factory):
     class Empty:
         def classify_box(self, params, lower, upper):
             return -1
@@ -23,17 +24,18 @@ def test_certified_root_skips_point_evaluation():
         def signed_value(self, params, point):
             raise AssertionError("certified box reached point sampler")
 
-    mesh, unresolved = make_marching_cubes(Empty(), BOUNDS, tolerance=.01)(None)
+    mesh, unresolved = factory(Empty(), BOUNDS, tolerance=.01)(None)
     assert mesh.vertices.shape == mesh.elements.shape == (0, 3)
     assert unresolved.shape == (0, 2, 3)
 
 
-def test_hidden_component_and_point_only_depth_limit():
+@pytest.mark.parametrize("factory", [make_marching_cubes, make_dual_contouring])
+def test_hidden_component_and_point_only_depth_limit(factory):
     class PointOnly:
         def signed_value(self, params, p):
             return jnp.linalg.norm(p) - .1
 
-    mesh, unresolved = make_marching_cubes(PointOnly(), BOUNDS, tolerance=4., max_depth=0)(None)
+    mesh, unresolved = factory(PointOnly(), BOUNDS, tolerance=4., max_depth=0)(None)
     assert not len(mesh.elements)
     np.testing.assert_array_equal(unresolved, [BOUNDS])
 
@@ -73,9 +75,10 @@ class BentGraph:
                          jnp.where(hi[..., 2] < self.height(lo[..., 0]), -1, 0))
 
 
-def test_mixed_depth_stitches_shared_edges():
+@pytest.mark.parametrize("factory", [make_marching_cubes, make_dual_contouring])
+def test_mixed_depth_stitches_shared_edges(factory):
     surface = BentGraph()
-    mesh, unresolved = make_marching_cubes(surface, BOUNDS, tolerance=.14, max_depth=5)(None)
+    mesh, unresolved = factory(surface, BOUNDS, tolerance=.14, max_depth=5)(None)
     vertices, faces = map(np.asarray, (mesh.vertices, mesh.elements))
     assert not len(unresolved)
     edges, counts = mesh_edges(faces)
@@ -84,7 +87,7 @@ def test_mixed_depth_stitches_shared_edges():
     assert np.all(np.any((boundary[:, 0] == boundary[:, 1]) &
                          (np.abs(boundary[:, 0]) == 1), axis=1))
     lengths = np.linalg.norm(vertices[edges[:, 0]] - vertices[edges[:, 1]], axis=1)
-    assert lengths.max() >= 1 and lengths.min() < .1
+    assert lengths.max() >= (1 if factory is make_marching_cubes else .5) and lengths.min() < .1
     # The triangles cover the whole graph once in projection, including the seam.
     a, b, c = vertices[faces].transpose(1, 0, 2)
     areas = np.cross(b - a, c - a)[:, 2] * .5
@@ -93,18 +96,26 @@ def test_mixed_depth_stitches_shared_edges():
     assert np.max(np.abs(vertices[:, 2] - surface.height(vertices[:, 0]))) < .14
 
 
-def test_autobound_plane_accepted_at_root():
+@pytest.mark.parametrize("factory", [make_marching_cubes, make_dual_contouring])
+def test_autobound_plane_accepted_at_root(factory):
     pytest.importorskip("jnp_bounds")
     from surfaces.implicit.jnp_bounded import jnpboundedImplicit
     surface = jnpboundedImplicit(autobounds_max_degree=2, use_warp=False,
                                  fn=lambda p, x: x[2] + p, level_set=.25, dim=3)
-    mesh, unresolved = make_marching_cubes(surface, BOUNDS, tolerance=.01, max_depth=0)(jnp.float32(.125))
-    assert mesh.elements.shape == (2, 3) and mesh.vertices.shape == (4, 3)
+    mesh, unresolved = factory(surface, BOUNDS, tolerance=.01, max_depth=0)(jnp.float32(.125))
+    if factory is make_marching_cubes:
+        assert mesh.elements.shape == (2, 3) and mesh.vertices.shape == (4, 3)
+    triangles = np.asarray(mesh.vertices)[np.asarray(mesh.elements)]
+    a, b, c = triangles.transpose(1, 0, 2)
+    area = np.cross(b - a, c - a)[:, 2] * .5
+    assert np.all(area > 0)
+    np.testing.assert_allclose(area.sum(), 4.)
     assert not len(unresolved)
     np.testing.assert_allclose(np.asarray(mesh.vertices)[:, 2], .125)
 
 
-def test_tangent_corner_refines_to_depth_limit():
+@pytest.mark.parametrize("factory", [make_marching_cubes, make_dual_contouring])
+def test_tangent_corner_refines_to_depth_limit(factory):
     class Tangency:
         def signed_value(self, params, p):
             return p.sum() - 3.
@@ -113,6 +124,6 @@ def test_tangent_corner_refines_to_depth_limit():
             return jnp.where(upper.sum() < 3., -1, 0)
 
     bounds = ((-1., -.5, 0.), (1., 1., 1.))
-    mesh, unresolved = make_marching_cubes(Tangency(), bounds, tolerance=4., max_depth=3)(None)
+    mesh, unresolved = factory(Tangency(), bounds, tolerance=4., max_depth=3)(None)
     assert not len(mesh.elements) and not len(mesh.vertices)
     np.testing.assert_array_equal(unresolved, [[[.75, .8125, .875], [1., 1., 1.]]])

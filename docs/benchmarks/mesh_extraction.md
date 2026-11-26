@@ -1,7 +1,7 @@
 # JAX mesh extraction
 
 Requires `environment-warp.yml` (Warp 1.18.0) and CUDA JAX; tested with
-JAX/JAXLIB 0.10.2. SciPy and scikit-image are test dependencies.
+JAX/JAXLIB 0.10.2. Adaptive dual contouring uses SciPy for the bounded least-squares fit. The reference tests also require scikit-image.
 
 The marching-cubes backends in this benchmark measure fixed-grid Warp
 reference implementations. The public adaptive extractor and its accuracy
@@ -33,8 +33,9 @@ them. Failed cases or source changes fail the run. Output directories must be ne
 | `warp-dense` | Bounded JAX sampling + stock Warp MC | Resident scalar grid + stock Warp MC |
 | `compact-dense` | Same sampler + compact MC | Resident scalar grid + compact MC |
 | `warp-sparse` | Warp Lipschitz octree + JAX sampling + sparse MC | Resident cells/corner values + sparse MC |
-| `dual-dense` | Dense sampling + dual contouring | Resident grid values + Hermite evaluation and triangulation |
-| `dual-sparse` | Lipschitz pruning + dual contouring | Retained cells and corner values + Hermite evaluation and triangulation |
+| `dual-adaptive` | Certified adaptive octree and Hermite triangulation | Pipeline only |
+| `dual-dense` | Fixed-capacity dense dual contouring | Pipeline only |
+| `dual-sparse` | Fixed-capacity sparse dual contouring | Pipeline only |
 
 All backends use the same fields and isovalue. The neural fixture is a seeded
 residual MLP. Export and validation run outside the timed region.

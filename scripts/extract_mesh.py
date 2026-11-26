@@ -2,7 +2,7 @@
 
 Usage:
     python scripts/extract_mesh.py --surface sphere --extractor mc --tolerance .15 --max-depth 6 --out sphere.obj
-    python scripts/extract_mesh.py --surface torus --extractor dc --resolution 64 --out torus.obj
+    python scripts/extract_mesh.py --surface torus --extractor dc --tolerance .15 --max-depth 6 --out torus.obj
 """
 import argparse
 import os
@@ -22,19 +22,12 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--surface", default="sphere", choices=["sphere", "torus"])
     p.add_argument("--extractor", default="dc", choices=["mc", "dc"])
-    p.add_argument("--resolution", type=int, help="Dual contouring cells per axis (default 64)")
-    p.add_argument("--max-depth", type=int, help="Marching cubes subdivision limit (default 6)")
-    p.add_argument("--tolerance", type=float, help="Marching cubes world-space distance tolerance (default 0.15)")
-    p.add_argument("--sparse", action="store_true", help="Enable sparse pruning for dual contouring")
+    p.add_argument("--max-depth", type=int, default=6, help="Subdivision limit (default 6)")
+    p.add_argument("--tolerance", type=float, default=.15, help="World-space distance tolerance (default 0.15)")
     p.add_argument("--bounds", type=float, default=1.5, help="Half-width of root box")
     p.add_argument("--out", default="mesh.obj")
     p.add_argument("--device", default="cpu", choices=["cpu", "gpu"])
-    args = p.parse_args()
-    if args.extractor == "mc" and (args.resolution is not None or args.sparse):
-        p.error("marching cubes uses --max-depth and --tolerance")
-    if args.extractor == "dc" and (args.max_depth is not None or args.tolerance is not None):
-        p.error("--max-depth and --tolerance apply to marching cubes")
-    return args
+    return p.parse_args()
 
 
 def main():
@@ -64,18 +57,12 @@ def main():
     b = float(args.bounds)
     bounds = ((-b, -b, -b), (b, b, b))
     t0 = time.time()
-    if args.extractor == "mc":
-        from surfaces.implicit.lipschitz import sdfImplicit
-        surface = sdfImplicit(fn=field, dim=3)
-        extract = make_marching_cubes(surface, bounds,
-                                      tolerance=0.15 if args.tolerance is None else args.tolerance,
-                                      max_depth=6 if args.max_depth is None else args.max_depth)
-        mesh, unresolved = extract(params)
-        print(f"{len(unresolved)} unresolved boxes")
-    else:
-        extract = make_dual_contouring(field, bounds, resolution=64 if args.resolution is None else args.resolution,
-                                       lipschitz_bound=1.0 if args.sparse else None)
-        mesh = extract(params)
+    from surfaces.implicit.lipschitz import sdfImplicit
+    factory = make_marching_cubes if args.extractor == "mc" else make_dual_contouring
+    extract = factory(sdfImplicit(fn=field, dim=3), bounds,
+                      tolerance=args.tolerance, max_depth=args.max_depth)
+    mesh, unresolved = extract(params)
+    print(f"{len(unresolved)} unresolved boxes")
     dt = time.time() - t0
 
     print(f"extracted {len(mesh.elements)} triangles, {len(mesh.vertices)} vertices in {dt:.2f}s")

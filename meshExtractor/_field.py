@@ -88,11 +88,3 @@ def _validate_grid(bounds, resolution, level, lipschitz_bound, batch_size):
     if lipschitz_bound is None and max(3*prod(nodes), 15*prod(cells)) > np.iinfo(np.int32).max:
         raise ValueError("dense grid exceeds int32 mesh indexing")
     return cells, nodes, lower, upper, batch_size
-
-
-def _parameter_device(params):
-    devices = {v.device for v in jax.tree_util.tree_leaves(params) if isinstance(v, jax.Array)}
-    if len(devices) > 1:
-        raise ValueError("parameters must share one device")
-    device = next(iter(devices), jax.devices()[0])
-    return wp.device_from_jax(device)

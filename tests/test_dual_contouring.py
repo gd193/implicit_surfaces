@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 wp = pytest.importorskip("warp")
+from surfaces.implicit.lipschitz import lipschitzImplicit
 from surfaces.meshes import TriMesh
 from meshExtractor import CapacityOverflow, DC_COMPILER_OPTIONS, make_dual_contouring, make_dual_contouring_resident
 from meshExtractor._dual_qef import solve_qef
@@ -80,18 +81,18 @@ def _mesh_checks(vertices, faces, closed=False):
     return vertices, faces
 
 
-@pytest.mark.parametrize("sparse", [False, True])
 @pytest.mark.parametrize("shape", ["sphere", "box"])
-def test_public_closed_geometry_dynamic_parameters(shape, sparse):
+def test_public_closed_geometry_dynamic_parameters(shape):
     def field(params, point):
         q = point - params["center"]
         return jnp.linalg.norm(q) - params["radius"] if shape == "sphere" else jnp.max(jnp.abs(q) - params["radius"])
-    extract = make_dual_contouring(field, ((-1., -1.2, -1.4), (1.1, 1.3, 1.2)),
-                                  (15, 17, 13), lipschitz_bound=1. if sparse else None, batch_size=256, root_steps=5 if shape == "box" else 0)
+    surface = lipschitzImplicit(1., fn=field, level_set=0., dim=3)
+    extract = make_dual_contouring(surface, ((-1., -1.2, -1.4), (1.1, 1.3, 1.2)),
+                                   tolerance=.27, max_depth=5)
     retained = []
     for radius in (.41, .57):
         params = {"center": jnp.array([.023, -.031, .017]), "radius": jnp.float32(radius)}
-        mesh = extract(params)
+        mesh = extract(params).mesh
         assert isinstance(mesh, TriMesh)
         vertices, faces = mesh.vertices, mesh.elements
         assert isinstance(vertices, jax.Array)
@@ -105,7 +106,7 @@ def test_public_closed_geometry_dynamic_parameters(shape, sparse):
         if shape == "box":
             corners = np.array(list(itertools.product((-radius, radius), repeat=3))) + np.asarray(params["center"])
             assert np.max(np.min(np.linalg.norm(corners[:, None]-vertices[None], axis=2), axis=1)) < 3e-5
-    mesh = extract({"center": jnp.zeros(3), "radius": jnp.float32(5.)})
+    mesh = extract({"center": jnp.zeros(3), "radius": jnp.float32(5.)}).mesh
     assert mesh.vertices.shape == mesh.elements.shape == (0, 3)
     for array, expected in retained:
         np.testing.assert_array_equal(array, expected)
@@ -124,10 +125,14 @@ def test_plane_winding_explicit_gradient_and_fallback(axis, normal_kind):
         if normal_kind == "nonfinite":
             return jnp.full(3, jnp.nan)
         return params[0] * jnp.eye(3)[axis]
-    extract = make_dual_contouring(field, ((-1., -2., -3.), (1., 2., 3.)), (7, 9, 11),
-                                  gradient=gradient, capacity=(693, 2880, 4158) if normal_kind == "zero" else None)
+    class Plane:
+        signed_value = staticmethod(field)
+        spatial_derivative = staticmethod(gradient)
+
+    extract = make_dual_contouring(Plane(), ((-1., -2., -3.), (1., 2., 3.)),
+                                   tolerance=2., max_depth=2)
     for sign in (-1., 1.):
-        mesh = extract(jnp.array([sign, .071]))
+        mesh = extract(jnp.array([sign, .071])).mesh
         vertices, faces = _mesh_checks(mesh.vertices, mesh.elements)
         assert len(faces)
         np.testing.assert_allclose(vertices[:, axis], .071, atol=2e-6)
@@ -142,13 +147,12 @@ def test_root_refinement_reduces_smooth_surface_residual(explicit_gradient):
     gradient = (lambda radius, point: jnp.array([jnp.exp(point[0]), 0., 0.])) if explicit_gradient else None
     errors = []
     for steps in (0, 5):
-        extract = make_dual_contouring(field, ((-1.,)*3, (1.,)*3), (9, 11, 13),
-                                      root_steps=steps, gradient=gradient, level=.125)
-        mesh = extract(jnp.float32(1.13))
+        extract = make_dual_contouring_resident(field, ((-1.,)*3, (1.,)*3), (9, 11, 13),
+                                      capacity=(1287, 1536, 2048), root_steps=steps, gradient=gradient, level=.125)
+        mesh = jax.jit(extract, compiler_options=DC_COMPILER_OPTIONS)(jnp.float32(1.13)).compact()
         vertices, faces = _mesh_checks(mesh.vertices, mesh.elements)
         errors.append(np.mean(np.abs(np.exp(vertices[:, 0])-1.255)))
     assert errors[1] < errors[0]
-
 
 
 @pytest.mark.parametrize("sparse,steps,analytic,batch", [
@@ -168,7 +172,6 @@ def test_resident_composition_geometry_and_retention(sparse, steps, analytic, ba
                    batch_size=batch, gradient=gradient if analytic else None)
     resident = make_dual_contouring_resident(field, bounds, shape, **options)
     nested = jax.jit(lambda params: resident(params), compiler_options=DC_COMPILER_OPTIONS)
-    exact = make_dual_contouring(field, bounds, shape, **options)
     retained = []
     for radius in (.41, .57, 5.):
         params = {"center": jnp.array([.023, -.031, .017]), "radius": jnp.float32(radius)}
@@ -180,7 +183,7 @@ def test_resident_composition_geometry_and_retention(sparse, steps, analytic, ba
         assert mesh.vertices.shape == (capacity[0], 3) and mesh.faces.shape == (capacity[2], 3)
         vertices, faces = _mesh_checks(np.asarray(mesh.vertices)[:counts[0]],
                                       np.asarray(mesh.faces)[:counts[2]], closed=True)
-        expected = exact(params)
+        expected = mesh.compact()
         np.testing.assert_array_equal(faces, expected.elements)
         np.testing.assert_allclose(vertices, expected.vertices, atol=1e-6, rtol=0)
         if radius == 5.:
@@ -225,7 +228,31 @@ def test_resident_overflow_rejects_exact_output(limited):
     if limited in ("C", "E", "F", "K"):
         assert counts[2] == -1
     assert mesh.vertices.shape == (capacity[0], 3) and mesh.faces.shape == (capacity[2], 3)
-    exact = make_dual_contouring(field, bounds, shape, **options)
     with pytest.raises(CapacityOverflow) as error:
-        exact(params)
+        mesh.compact()
     assert error.value.counts == tuple(map(int, counts))
+
+
+def test_grid_corner_ties_share_indices():
+    surface = lipschitzImplicit(1., fn=lambda radius, p: jnp.linalg.norm(p) - radius,
+                                level_set=0., dim=3)
+    extract = make_dual_contouring(surface, ((-1.,) * 3, (1.,) * 3),
+                                   tolerance=.22, max_depth=5)
+    mesh = extract(jnp.float32(.75)).mesh
+    assert len(mesh.elements)
+    _mesh_checks(mesh.vertices, mesh.elements, closed=True)
+
+
+def test_two_contours_in_one_cell_require_subdivision():
+    class CornerPatches:
+        def signed_value(self, params, p):
+            return jnp.minimum(jnp.linalg.norm(p), jnp.linalg.norm(p - 1)) - .3
+
+    bounds = ((0.,) * 3, (1.,) * 3)
+    coarse = make_dual_contouring(CornerPatches(), bounds, tolerance=2., max_depth=0)(None)
+    assert len(coarse.mesh.elements) == 0
+    np.testing.assert_array_equal(coarse.unresolved_boxes, [bounds])
+    refined = make_dual_contouring(CornerPatches(), bounds, tolerance=2., max_depth=1)(None)
+    vertices, faces = _mesh_checks(refined.mesh.vertices, refined.mesh.elements)
+    assert len(faces)
+    assert np.all(np.ptp(vertices[faces], axis=1) < .5)

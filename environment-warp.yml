@@ -9,4 +9,5 @@ dependencies:
   - jax=0.10.2
   - jaxlib=0.10.2
   - warp-lang=1.18.0
+  - scipy
   - trimesh

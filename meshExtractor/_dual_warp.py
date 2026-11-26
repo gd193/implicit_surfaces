@@ -1,9 +1,7 @@
-"""Shared dual-contouring kernels and dynamically allocated workspace."""
-from dataclasses import dataclass
+"""Shared dual-contouring kernels."""
 from pathlib import Path
 
 import warp as wp
-from warp._src import utils
 from ._dual_qef import solve_qef
 
 
@@ -59,14 +57,6 @@ def dense_cell(row: int, ny: int, nz: int):
     return wp.vec3i(row // (ny * nz), (row // nz) % ny, row % nz)
 
 
-@wp.func
-def cell_corner(cc: wp.array2d(dtype=int), row: int, k: int, ny: int, nz: int):
-    if ny > 0:
-        p = dense_cell(row, ny, nz) + corner(k)
-        return (p[0] * (ny + 1) + p[1]) * (nz + 1) + p[2]
-    return cc[row, k]
-
-
 vec8i = wp.types.vector(length=8, dtype=int)
 
 
@@ -83,16 +73,6 @@ def mark_crossings(corners: vec8i, values: wp.array(dtype=float), level: float, 
             wp.atomic_max(edges, 3*corners[ca] + e//4, 1)
             found = 1
     return found
-
-
-@wp.kernel
-def mark(cc: wp.array2d(dtype=int), values: wp.array(dtype=float), level: float,
-         edges: wp.array(dtype=int), active: wp.array(dtype=int), ny: int, nz: int):
-    i = wp.tid()
-    corners = vec8i(0)
-    for k in range(8):
-        corners[k] = cell_corner(cc, i, k, ny, nz)
-    active[i] = mark_crossings(corners, values, level, edges)
 
 
 @wp.func_native("return dual_grid::position(c, lower, spacing);")
@@ -136,18 +116,6 @@ def emit_edge(j: int, cc: wp.array2d(dtype=int), values: wp.array(dtype=float),
             endpoints[j, 1] = b
 
 
-
-@wp.kernel
-def emit_edges(cc: wp.array2d(dtype=int), values: wp.array(dtype=float),
-               points: wp.array(dtype=wp.vec3), level: float,
-               positions: wp.array(dtype=wp.vec3), endpoints: wp.array2d(dtype=int),
-               ids: wp.array2d(dtype=int), cell_edges: wp.array2d(dtype=int),
-               face_scan: wp.array(dtype=int), ny: int, nz: int, lower: wp.vec3, spacing: wp.vec3):
-    j = wp.tid()
-    emit_edge(j, cc, values, points, level, positions, endpoints, ids, cell_edges, face_scan,
-              ny, nz, lower, spacing)
-
-
 @wp.func
 def assign_incidence(i: int, cc: wp.array2d(dtype=int), values: wp.array(dtype=float), level: float,
               scan: wp.array(dtype=int),
@@ -167,15 +135,6 @@ def assign_incidence(i: int, cc: wp.array2d(dtype=int), values: wp.array(dtype=f
             elif u == 1 and v == 1: q = 2
             elif u == 0 and v == 1: q = 3
             ids[j, q] = i
-
-
-
-@wp.kernel
-def incidence(cc: wp.array2d(dtype=int), values: wp.array(dtype=float), level: float,
-              scan: wp.array(dtype=int),
-              ids: wp.array2d(dtype=int), cell_edges: wp.array2d(dtype=int)):
-    i = wp.tid()
-    assign_incidence(i, cc, values, level, scan, ids, cell_edges)
 
 
 @wp.func
@@ -209,133 +168,6 @@ def write_quad(a: int, b: int, c: int, d: int, reverse: bool, k: int,
     faces[k+5] = d
 
 
-@wp.kernel
-def emit_faces(ids: wp.array2d(dtype=int), endpoints: wp.array2d(dtype=int),
-               values: wp.array(dtype=float), level: float, scan: wp.array(dtype=int),
-               vertices: wp.array(dtype=wp.vec3), faces: wp.array(dtype=int)):
-    i = wp.tid()
-    if ids[i, 0] >= 0 and ids[i, 1] >= 0 and ids[i, 2] >= 0 and ids[i, 3] >= 0:
-        a = int(ids[i, 0])
-        b = int(ids[i, 1])
-        c = int(ids[i, 2])
-        d = int(ids[i, 3])
-        write_quad(a, b, c, d, values[endpoints[i, 0]] >= level,
-                   6*(scan[i]-1), vertices, faces)
-
-
-@wp.kernel
-def compact(cells: wp.array(dtype=wp.vec3i), cc: wp.array2d(dtype=int),
-            scan: wp.array(dtype=int), out: wp.array(dtype=wp.vec3i),
-            out_cc: wp.array2d(dtype=int), ny: int, nz: int):
-    i = wp.tid()
-    previous = int(0)
-    if i > 0:
-        previous = scan[i-1]
-    if scan[i] > previous:
-        j = scan[i]-1
-        if ny > 0:
-            out[j] = dense_cell(i, ny, nz)
-        else:
-            out[j] = cells[i]
-        for k in range(8):
-            out_cc[j, k] = cell_corner(cc, i, k, ny, nz)
-
-
-
-@wp.kernel(enable_backward=False)
-def compact_children(cells: wp.array(dtype=wp.vec3i), scan: wp.array(dtype=int),
-                      out: wp.array(dtype=wp.vec3i), final: bool):
-    i = wp.tid()
-    previous = int(0)
-    if i > 0:
-        previous = scan[i-1]
-    if scan[i] > previous:
-        j = scan[i]-1
-        c = cells[i]
-        if final:
-            out[j] = c
-        else:
-            for k in range(8):
-                out[8*j+k] = 2*c + wp.vec3i(k & 1, (k >> 1) & 1, k >> 2)
-
-
-@dataclass
-class Workspace:
-    positions: wp.array
-    edge_endpoints: wp.array
-    cells: wp.array
-    cell_edges: wp.array
-    incident: wp.array
-    corner_values: wp.array
-    lower: wp.vec3
-    spacing: wp.vec3
-    level: float
-    face_scan: wp.array
-    face_count: int
-
-
-@wp.kernel
-def count_tails(a: wp.array(dtype=int), b: wp.array(dtype=int), counts: wp.array(dtype=int)):
-    if a.shape[0] > 0:
-        counts[0] = a[a.shape[0]-1]
-    else:
-        counts[0] = 0
-    if b.shape[0] > 0:
-        counts[1] = b[b.shape[0]-1]
-    else:
-        counts[1] = 0
-
-
-
-def prepare(cells, cell_corners, corner_positions, corner_values, lower, spacing, level):
-    device = corner_values.device
-    ny, nz = 0, 0
-    if isinstance(cells, tuple):
-        nx, ny, nz = cells
-        n = nx * ny * nz
-        cells = None
-    else:
-        n = cells.shape[0]
-    m = corner_values.shape[0]
-    if max(3*m, 12*n) > 2147483647:
-        raise ValueError("dual contouring exceeds int32 indexing")
-    edge_scan = wp.zeros(3*m, dtype=int, device=device)
-    active = wp.empty(n, dtype=int, device=device)
-    if n:
-        wp.launch(mark, n, [cell_corners, corner_values, level, edge_scan, active, ny, nz], device=device)
-    for array in (edge_scan, active):
-        if array.size:
-            utils.array_scan(array, array, inclusive=True)
-    counts = wp.empty(2, dtype=int, device=device)
-    wp.launch(count_tails, 1, [edge_scan, active, counts], device=device)
-    ne, nv = map(int, counts.numpy())
-    compact_cells = wp.empty(nv, dtype=wp.vec3i, device=device)
-    compact_corners = wp.empty((nv, 8), dtype=int, device=device)
-    if n:
-        wp.launch(compact, n, [cells, cell_corners, active, compact_cells, compact_corners, ny, nz], device=device)
-    cells, cell_corners, n = compact_cells, compact_corners, nv
-    positions = wp.empty(ne, dtype=wp.vec3, device=device)
-    endpoints = wp.empty((ne, 2), dtype=int, device=device)
-    incident = wp.full((ne, 4), -1, dtype=int, device=device)
-    cell_edges = wp.empty((n, 12), dtype=int, device=device)
-    face_scan = wp.empty(ne, dtype=int, device=device)
-    if n:
-        wp.launch(incidence, n, [cell_corners, corner_values, level, edge_scan,
-                               incident, cell_edges], device=device)
-    if ne:
-        wp.launch(emit_edges, ne, [cell_corners, corner_values, corner_positions, level,
-                                 positions, endpoints, incident, cell_edges, face_scan,
-                                 ny + 1 if ny else 0, nz + 1 if ny else 0, lower, spacing], device=device)
-    nf = 0
-    if ne:
-        utils.array_scan(face_scan, face_scan, inclusive=True)
-        nf = int(face_scan[-1:].numpy()[0])
-    if 6*nf > 2147483647:
-        raise ValueError("dual contouring exceeds int32 face indexing")
-    return Workspace(positions, endpoints, cells, cell_edges, incident,
-                     corner_values, lower, spacing, level, face_scan, nf)
-
-
 @wp.func
 def place_vertex(i: int, c: wp.vec3i, cell_edges: wp.array2d(dtype=int),
                  positions: wp.array(dtype=wp.vec3), normals: wp.array(dtype=wp.vec3),
@@ -364,26 +196,3 @@ def place_vertex(i: int, c: wp.vec3i, cell_edges: wp.array2d(dtype=int),
         vertex = origin + solve_qef(A, b, centroid, wp.vec3(0.0), spacing)
 
     return vertex
-
-
-@wp.kernel
-def place(cells: wp.array(dtype=wp.vec3i), cell_edges: wp.array2d(dtype=int),
-          positions: wp.array(dtype=wp.vec3),
-          normals: wp.array(dtype=wp.vec3), lower: wp.vec3, spacing: wp.vec3,
-          vertices: wp.array(dtype=wp.vec3)):
-    i = wp.tid()
-    vertices[i] = place_vertex(i, cells[i], cell_edges, positions, normals, lower, spacing)
-
-
-def finish(w: Workspace, normals):
-    device = w.cells.device
-    vertices = wp.empty(w.cells.size, dtype=wp.vec3, device=device)
-    if w.cells.size:
-        wp.launch(place, w.cells.size,
-                  [w.cells, w.cell_edges, w.positions, normals,
-                   w.lower, w.spacing, vertices], device=device)
-    faces = wp.empty(6 * w.face_count, dtype=int, device=device)
-    if w.face_count:
-        wp.launch(emit_faces, w.positions.size,
-                  [w.incident, w.edge_endpoints, w.corner_values, w.level, w.face_scan, vertices, faces], device=device)
-    return vertices, faces

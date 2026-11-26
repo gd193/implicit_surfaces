@@ -10,13 +10,14 @@ import warp.geometry as geometry
 
 from surfaces.meshes import TriMesh
 from meshExtractor import DualContouringBuffers, DC_COMPILER_OPTIONS, make_dual_contouring, make_dual_contouring_resident
-from meshExtractor.dual import _make_dual_stages
+from meshExtractor import AdaptiveMeshResult
+from surfaces.implicit.lipschitz import lipschitzImplicit
 from meshExtractor._field import _FieldEvaluator
 from scripts.bench.mesh_extraction._warp_mc import _extract_dense, _extract_sparse
 
 FIELDS = ("sphere", "torus", "neural", "gyroid")
 MC_BACKENDS = ("warp-dense", "warp-sparse", "compact-dense")
-BACKENDS = MC_BACKENDS + ("dual-dense", "dual-sparse")
+BACKENDS = MC_BACKENDS + ("dual-adaptive", "dual-dense", "dual-sparse")
 LOWER, UPPER = (-1., -1., -1.), (1., 1., 1.)
 
 
@@ -68,27 +69,30 @@ def make_runner(backend, scene, cells, phase, batch_size, root_steps=0, *,
                 capacity=None, sparse_capacity=None, resident=False):
     """Prepare resident inputs and return the measured operation."""
     details = {"input": "implicit_function", "field_evaluation_in_timed_region": True}
+    if backend == "dual-adaptive":
+        if phase != "pipeline":
+            raise ValueError("adaptive dual contouring measures the whole pipeline")
+        depth = (cells - 1).bit_length()
+        tolerance = np.nextafter(2. * np.sqrt(3.) / cells, np.inf)
+        surface = lipschitzImplicit(scene.lipschitz, fn=scene, level_set=scene.level, dim=3)
+        extract = make_dual_contouring(surface, (LOWER, UPPER), tolerance=tolerance, max_depth=depth)
+        details.update(max_depth=depth, tolerance=tolerance, gradient_evaluation_in_timed_region=True)
+        return partial(extract, scene.params), details
     if backend in ("dual-dense", "dual-sparse"):
+        if capacity is None or phase != "pipeline":
+            raise ValueError("fixed-capacity dual contouring needs a pipeline run and capacity")
         bound = scene.lipschitz if backend == "dual-sparse" else None
-        if phase == "pipeline":
-            factory = make_dual_contouring_resident if resident else make_dual_contouring
-            extract = factory(scene, (LOWER, UPPER), cells,
-                          lipschitz_bound=bound, level=scene.level, batch_size=batch_size,
-                          root_steps=root_steps, capacity=capacity, sparse_capacity=sparse_capacity)
-            if resident:
-                extract = jax.jit(extract, compiler_options=DC_COMPILER_OPTIONS)
-            run = partial(extract, scene.params)
-        else:
-            # Resident corners omit sampling, but Hermite gradients remain timed.
-            sample_grid, triangulate = _make_dual_stages(
-                scene, (LOWER, UPPER), cells, level=scene.level, lipschitz_bound=bound,
-                batch_size=batch_size, root_steps=root_steps)
-            run = partial(triangulate, scene.params, sample_grid(scene.params))
-            details.update(input="resident_cells_unique_corners_and_values",
-                           field_evaluation_in_timed_region=bool(root_steps))
+        extract = make_dual_contouring_resident(
+            scene, (LOWER, UPPER), cells, lipschitz_bound=bound, level=scene.level,
+            batch_size=batch_size, root_steps=root_steps, capacity=capacity, sparse_capacity=sparse_capacity)
+        compiled = jax.jit(extract, compiler_options=DC_COMPILER_OPTIONS)
+
+        def run():
+            buffers = compiled(scene.params)
+            return buffers if resident else buffers.compact()
+
         details.update(gradient_evaluation_in_timed_region=True, root_steps=root_steps,
-                       topology="dual_contouring", capacity=capacity,
-                       sparse_capacity=sparse_capacity, resident=resident)
+                       capacity=capacity, sparse_capacity=sparse_capacity, resident=resident)
         return run, details
 
     evaluate = _FieldEvaluator(scene, batch_size)
@@ -128,6 +132,8 @@ def make_runner(backend, scene, cells, phase, batch_size, root_steps=0, *,
 
 
 def host_mesh(mesh):
+    if isinstance(mesh, AdaptiveMeshResult):
+        mesh = mesh.mesh
     if isinstance(mesh, DualContouringBuffers):
         mesh = mesh.compact()
     if isinstance(mesh, TriMesh):
@@ -135,14 +141,15 @@ def host_mesh(mesh):
     return tuple((x.numpy() if isinstance(x, wp.array) else np.asarray(x)).reshape(-1, 3) for x in mesh)
 
 
-def validate_mesh(vertices, faces, scene, cells):
+def validate_mesh(vertices, faces, scene, cells, *, tolerance=None):
     if not np.isfinite(vertices).all() or (faces.size and (faces.min() < 0 or faces.max() >= len(vertices))):
         raise AssertionError("invalid mesh coordinates or indices")
     if vertices.size and (vertices.min() < -1.00001 or vertices.max() > 1.00001):
         raise AssertionError("mesh outside domain")
     values = np.asarray(_FieldEvaluator(scene, 65536).values(scene.params, jnp.asarray(vertices))) - scene.level
     residual = float(np.max(np.abs(values), initial=0.))
-    if residual > scene.lipschitz * (2. / cells) + 1e-5:
+    distance_limit = 2. / cells if tolerance is None else tolerance
+    if residual > scene.lipschitz * distance_limit + 1e-5:
         raise AssertionError(f"field residual too large: {residual}")
     return {"vertices": len(vertices), "triangles": len(faces),
             "output_bytes": vertices.nbytes + faces.nbytes, "max_field_residual": residual}

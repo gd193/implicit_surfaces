@@ -8,7 +8,7 @@ import warp as wp
 from meshExtractor import _dual_common as common, _dual_warp as topology
 from meshExtractor._field import _FieldEvaluator
 
-wp.set_module_options(wp.get_module_options(topology.emit_edges.module), module=__name__)
+wp.set_module_options(wp.get_module_options(topology.grid_position.module), module=__name__)
 
 
 @wp.kernel

@@ -124,7 +124,10 @@ def worker(args):
     trace_file, = trace_dir.rglob("*.trace.json.gz")
     mesh = invoke()
     vertices, faces = host_mesh(mesh)
-    validation = validate_mesh(vertices, faces, scene, args.resolutions[0])
+    validation = validate_mesh(vertices, faces, scene, args.resolutions[0],
+                               tolerance=details.get("tolerance"))
+    if args.backend[0] == "dual-adaptive":
+        validation["unresolved_boxes"] = len(mesh.unresolved_boxes)
     no_op = args.phase[0] == "extraction" and (
         args.backend[0] == "warp-sparse" and details["cells"] == 0)
     device_samples, kernels = trace_samples(trace_file, allow_no_kernels=no_op or args.capacity is not None)
@@ -159,10 +162,10 @@ def source_digest():
 
 
 def main():
-    from ._cases import BACKENDS, FIELDS
+    from ._cases import BACKENDS, FIELDS, MC_BACKENDS
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backend", nargs="+", choices=BACKENDS, default=list(BACKENDS))
+    parser.add_argument("--backend", nargs="+", choices=BACKENDS, default=list(MC_BACKENDS))
     parser.add_argument("--field", nargs="+", choices=FIELDS, default=["sphere", "torus", "neural"])
     parser.add_argument("--resolutions", nargs="+", type=int, default=[32, 64, 128], help="cells per axis")
     parser.add_argument("--phase", nargs="+", choices=("pipeline", "extraction"), default=["pipeline"])
@@ -180,10 +183,14 @@ def main():
     args = parser.parse_args()
     if min(*args.resolutions, args.batch_size, args.repeats) < 1 or args.warmup < 1:
         parser.error("resolutions, batch size, repeats and warmup must be positive")
-    if args.root_steps < 0 or (args.root_steps and any(not b.startswith("dual-") for b in args.backend)):
+    if "dual-adaptive" in args.backend and "extraction" in args.phase:
+        parser.error("dual-adaptive supports pipeline timing only")
+    if args.capacity is None and any(b in ("dual-dense", "dual-sparse") for b in args.backend):
+        parser.error("fixed-grid dual backends require --capacity")
+    if args.root_steps < 0 or (args.root_steps and any(b not in ("dual-dense", "dual-sparse") for b in args.backend)):
         parser.error("root steps must be nonnegative and require dual-contouring backends")
     if args.capacity is not None:
-        if args.phase != ["pipeline"] or any(not b.startswith("dual-") for b in args.backend):
+        if args.phase != ["pipeline"] or any(b not in ("dual-dense", "dual-sparse") for b in args.backend):
             parser.error("capacities require dual-contouring pipeline benchmarks")
         if min(args.capacity) < 1 or (args.sparse_capacity is not None and min(args.sparse_capacity) < 1):
             parser.error("capacities must be positive")
@@ -237,7 +244,10 @@ def main():
                         print(f"{label}: FAILED ({folder / 'run.log'})", flush=True)
                     else:
                         result = json.loads((folder / "result.json").read_text())
-                        previous = triangle_counts.setdefault((name, resolution, "dual" if backend.startswith("dual-") else "marching-cubes"), result["mesh"]["triangles"])
+                        family = "marching-cubes" if backend in MC_BACKENDS else backend
+                        if backend in ("dual-dense", "dual-sparse"):
+                            family = "dual-fixed"
+                        previous = triangle_counts.setdefault((name, resolution, family), result["mesh"]["triangles"])
                         if previous != result["mesh"]["triangles"]:
                             failed = True
                             result.update(status="failed", error=f"triangle count differs from peer: {previous}")
