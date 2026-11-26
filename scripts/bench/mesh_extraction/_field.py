@@ -1,11 +1,8 @@
-"""Shared bounded JAX field evaluation and extraction-grid validation."""
+"""Batched scalar field sampling for mesh extraction benchmarks."""
 from functools import lru_cache
-from math import prod
-from operator import index
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import warp as wp
 
 
@@ -19,15 +16,13 @@ def _map_batches(fn, points, batch_size):
 
 
 class _FieldEvaluator:
-    def __init__(self, field, batch_size, *, output_shape=()):
+    def __init__(self, field, batch_size):
         self.batch_size = batch_size
-        self.output_shape = output_shape
 
         def scalar(params, point):
             value = jnp.asarray(field(params, point))
-            if value.shape != output_shape or value.dtype != jnp.float32:
-                expected = "a scalar float32" if output_shape == () else "a float32 vector of shape (3,)"
-                raise TypeError(f"field/gradient must return {expected}")
+            if value.shape != () or value.dtype != jnp.float32:
+                raise TypeError("field must return a scalar float32")
             return value
 
         self.evaluate = jax.jit(jax.vmap(scalar, in_axes=(None, 0)))
@@ -37,8 +32,7 @@ class _FieldEvaluator:
         return _map_batches(lambda p: self.evaluate(params, p), points, self.batch_size)
 
     def __call__(self, params, points):
-        return wp.from_jax(self.values(params, wp.to_jax(points)),
-                           dtype=wp.vec3 if self.output_shape == (3,) else None)
+        return wp.from_jax(self.values(params, wp.to_jax(points)))
 
     def dense(self, params, shape, lower, upper):
         batch = self._dense_batch(tuple(shape), tuple(lower), tuple(upper))
@@ -71,20 +65,3 @@ class _FieldEvaluator:
             return self.evaluate(params, lo + p.astype(jnp.float32)*delta)
 
         return batch
-
-
-def _validate_grid(bounds, resolution, level, lipschitz_bound, batch_size):
-    cells = (index(resolution),)*3 if np.isscalar(resolution) else tuple(map(index, resolution))
-    lower, upper = (np.asarray(b, np.float32) for b in bounds)
-    batch_size = index(batch_size)
-    if len(cells) != 3 or min(cells) < 1 or batch_size < 1:
-        raise ValueError("resolution and batch_size must be positive")
-    if lower.shape != (3,) or upper.shape != (3,) or not np.all(np.isfinite([lower, upper])) or np.any(upper <= lower):
-        raise ValueError("bounds must be finite increasing 3D corners")
-    if not np.isfinite(level) or (lipschitz_bound is not None and
-                                (not np.isfinite(lipschitz_bound) or lipschitz_bound <= 0)):
-        raise ValueError("level must be finite and Lipschitz bound positive and finite")
-    nodes = tuple(n+1 for n in cells)
-    if lipschitz_bound is None and max(3*prod(nodes), 15*prod(cells)) > np.iinfo(np.int32).max:
-        raise ValueError("dense grid exceeds int32 mesh indexing")
-    return cells, nodes, lower, upper, batch_size

@@ -95,44 +95,5 @@ certified coarse slabs to keep their triangles inside the enclosure.
 The octree acceptance, unresolved-box format, and host execution model match
 marching cubes. Query batching runs on the JAX device.
 
-## Fixed-capacity dual contouring
-
-For GPU-resident dual contouring, choose static capacity budgets and compile
-the outer computation:
-
-```python
-import jax
-from meshExtractor import make_dual_contouring_resident, DC_COMPILER_OPTIONS
-
-extract = make_dual_contouring_resident(
-    field, bounds, resolution=256,
-    capacity=(max_cells, max_edges, max_triangles),
-    batch_size=65536,
-)
-extract = jax.jit(extract, compiler_options=DC_COMPILER_OPTIONS)
-buffers = extract(params)
-mesh = buffers.compact()  # host reads counts and checks overflow
-```
-
-The raw callable returns `DualContouringBuffers` and composes inside a larger JAX computation. Apply the graph
-options only to its outermost JIT. The captured pipeline keeps counts on the
-GPU; `batch_size` independently bounds field and gradient batches.
-
-`buffers.vertices` and `buffers.faces` have capacity-sized leading dimensions.
-`buffers.counts` is int32 `[C, E, T, status, F, K, U]`: active cells, crossing edges,
-triangles, overflow bits, peak frontier, raw corner records and unique corners.
-When `status == 0`, the first C vertices and T faces are valid; tails are
-unspecified. Overflow bits 1/2/4/8/16 identify C/E/T/F/K shortages. All payload
-is invalid on overflow; unknown downstream counts are -1.
-
-Sparse resident sampling additionally requires `sparse_capacity=(F, K)`.
-F bounds the frontier including expanded children; K bounds eight records per
-retained leaf before corner deduplication. On frontier overflow, the reported
-requirement is a lower bound at the first failed level. Dense F/K/U counts are 0.
-Budgets are explicit. Calling `buffers.compact()` raises `CapacityOverflow`
-on shortage and exposes the count record as `.counts`.
-
-The benchmark runs both adaptive pipelines with `--backend mc-adaptive dual-adaptive`.
-Use `--backend dual-dense` or `dual-sparse` with explicit capacities for
-the fixed-grid pipeline. The latter also requires sparse frontier and corner
-capacities. Add `--resident` to time padded output before compaction.
+The [mesh benchmark](benchmarks/mesh_extraction.md) runs both adaptive pipelines
+with `--backend mc-adaptive dual-adaptive`.

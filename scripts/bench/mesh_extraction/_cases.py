@@ -2,25 +2,21 @@
 from dataclasses import dataclass
 from functools import partial
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import warp as wp
 import warp.geometry as geometry
 
 from surfaces.meshes import TriMesh
-from meshExtractor import (
-    AdaptiveMeshResult, DC_COMPILER_OPTIONS, DualContouringBuffers,
-    make_dual_contouring, make_dual_contouring_resident, make_marching_cubes,
-)
+from meshExtractor import AdaptiveMeshResult, make_dual_contouring, make_marching_cubes
 from surfaces.implicit.lipschitz import lipschitzImplicit
-from meshExtractor._field import _FieldEvaluator
+from scripts.bench.mesh_extraction._field import _FieldEvaluator
 from scripts.bench.mesh_extraction._warp_mc import _extract_dense, _extract_sparse
 
 FIELDS = ("sphere", "torus", "neural", "gyroid")
 FIXED_MC_BACKENDS = ("warp-dense", "warp-sparse", "compact-dense")
 ADAPTIVE_BACKENDS = {"mc-adaptive": make_marching_cubes, "dual-adaptive": make_dual_contouring}
-BACKENDS = (*ADAPTIVE_BACKENDS, *FIXED_MC_BACKENDS, "dual-dense", "dual-sparse")
+BACKENDS = (*ADAPTIVE_BACKENDS, *FIXED_MC_BACKENDS)
 LOWER, UPPER = (-1., -1., -1.), (1., 1., 1.)
 
 
@@ -68,8 +64,7 @@ def fixture(name, level=0.):
     return Fixture(name, tuple(params), float(bound), level)
 
 
-def make_runner(backend, scene, cells, phase, batch_size, root_steps=0, *,
-                capacity=None, sparse_capacity=None, resident=False):
+def make_runner(backend, scene, cells, phase, batch_size):
     """Prepare resident inputs and return the measured operation."""
     details = {"input": "implicit_function", "field_evaluation_in_timed_region": True}
     if backend in ADAPTIVE_BACKENDS:
@@ -82,23 +77,6 @@ def make_runner(backend, scene, cells, phase, batch_size, root_steps=0, *,
         details.update(max_depth=depth, tolerance=tolerance,
                        gradient_evaluation_in_timed_region=backend == "dual-adaptive")
         return partial(extract, scene.params), details
-    if backend in ("dual-dense", "dual-sparse"):
-        if capacity is None or phase != "pipeline":
-            raise ValueError("fixed-capacity dual contouring needs a pipeline run and capacity")
-        bound = scene.lipschitz if backend == "dual-sparse" else None
-        extract = make_dual_contouring_resident(
-            scene, (LOWER, UPPER), cells, lipschitz_bound=bound, level=scene.level,
-            batch_size=batch_size, root_steps=root_steps, capacity=capacity, sparse_capacity=sparse_capacity)
-        compiled = jax.jit(extract, compiler_options=DC_COMPILER_OPTIONS)
-
-        def run():
-            buffers = compiled(scene.params)
-            return buffers if resident else buffers.compact()
-
-        details.update(gradient_evaluation_in_timed_region=True, root_steps=root_steps,
-                       capacity=capacity, sparse_capacity=sparse_capacity, resident=resident)
-        return run, details
-
     evaluate = _FieldEvaluator(scene, batch_size)
     if backend in ("warp-dense", "compact-dense"):
         implementation = _extract_dense if backend == "compact-dense" else geometry.IsoSurfaceMarchingCubes.extract
@@ -138,8 +116,6 @@ def make_runner(backend, scene, cells, phase, batch_size, root_steps=0, *,
 def host_mesh(mesh):
     if isinstance(mesh, AdaptiveMeshResult):
         mesh = mesh.mesh
-    if isinstance(mesh, DualContouringBuffers):
-        mesh = mesh.compact()
     if isinstance(mesh, TriMesh):
         return np.asarray(mesh.vertices), np.asarray(mesh.elements)
     return tuple((x.numpy() if isinstance(x, wp.array) else np.asarray(x)).reshape(-1, 3) for x in mesh)

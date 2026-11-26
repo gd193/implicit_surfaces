@@ -37,8 +37,6 @@ them. Failed cases or source changes fail the run. Output directories must be ne
 | `warp-sparse` | Warp Lipschitz octree + JAX sampling + sparse MC | Resident cells/corner values + sparse MC |
 | `mc-adaptive` | Certified adaptive octree and marching-cubes triangulation | Pipeline only |
 | `dual-adaptive` | Certified adaptive octree and Hermite triangulation | Pipeline only |
-| `dual-dense` | Fixed-capacity dense dual contouring | Pipeline only |
-| `dual-sparse` | Fixed-capacity sparse dual contouring | Pipeline only |
 
 All backends use the same fields and isovalue. The neural fixture is a seeded
 residual MLP. Export and validation run outside the timed region.

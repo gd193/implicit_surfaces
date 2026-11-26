@@ -34,7 +34,7 @@ def main():
     import jax
     import warp as wp
     from warp.geometry import IsoSurfaceMarchingCubes
-    from meshExtractor._field import _FieldEvaluator
+    from scripts.bench.mesh_extraction._field import _FieldEvaluator
     from scripts.bench.mesh_extraction._cases import fixture, LOWER, UPPER
     from scripts.bench.mesh_extraction.benchmark import trace_samples, source_digest
     from .build_reference import source_hashes
