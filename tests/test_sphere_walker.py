@@ -935,44 +935,6 @@ def test_fluid_pairs_invalid_starts_typed_keys_and_x64_refill_rounds():
         assert out.termination_counts.dtype == jnp.int32
 
 
-def test_wob_pressure_float32_positions_float64_velocity_under_x64():
-    from examples.fluids.pressure_prototype.boundary_integrator import WoBPressureIntegrator
-    from examples.fluids.pressure_prototype.boundary_sampling import SphereBoundary
-    from examples.fluids.pressure_prototype.pressure import ClosedPressureProjector
-
-    with jax.enable_x64(True):
-        velocity = lambda p, x: jnp.stack([x[1], -x[0], 0.5 * x[2]]).astype(jnp.float64)
-        integrator = WoBPressureIntegrator(SphereBoundary(), velocity, path_length=3,
-                                           volume_samples=2, boundary_volume_samples=2)
-        details = integrator.integrate_batch(
-            None, jnp.zeros((4, 3), jnp.float32), jr.PRNGKey(76), init_trust_region_size=1.,
-            n_samples=1, return_details=True, max_active_states=4, steps_between_refill=4,
-            jit_buck_size=4)
-        assert details.contribution_sum.dtype == jnp.float32
-        assert bool(jnp.all(details.complete & (details.successful_samples == 1)))
-        assert bool(jnp.all(jnp.isfinite(details.contribution_sum)))
-
-        # Velocity differences must preserve float64 precision before casting:
-        # adding a large constant 1e8 cancels algebraically in u(y) - u(x).
-        pt = jnp.array([0.1, 0.2, -0.1], jnp.float32)
-        base_v = lambda p, x: (x * x).astype(jnp.float64)
-        shifted_v = lambda p, x: jnp.float64(1e8) + (x * x).astype(jnp.float64)
-        wob_base = WoBPressureIntegrator(SphereBoundary(), base_v, path_length=3,
-                                         volume_samples=4, boundary_volume_samples=4)
-        wob_shifted = WoBPressureIntegrator(SphereBoundary(), shifted_v, path_length=3,
-                                            volume_samples=4, boundary_volume_samples=4)
-        v_base = wob_base._volume(None, pt, jr.PRNGKey(77), 4)
-        v_shifted = wob_shifted._volume(None, pt, jr.PRNGKey(77), 4)
-        np.testing.assert_allclose(v_shifted, v_base, rtol=1e-5, atol=1e-6)
-
-        # Public ClosedPressureProjector.project succeeds with float64 velocity under x64.
-        projector = ClosedPressureProjector(SphereBoundary(), velocity, path_length=3,
-                                            volume_samples=2, boundary_volume_samples=2)
-        res = projector.project(None, pt[None], jr.PRNGKey(78), n_samples=4,
-                                max_active_states=4, steps_between_refill=4, jit_buck_size=4)
-        assert bool(jnp.all(jnp.isfinite(res.velocity)))
-
-
 def test_re_review_edge_cases_multidraw_python_scalar_simultaneous_stall_and_int_draws():
     # 1. average_draws handles integer and boolean samplers without carry dtype error.
     assert float(average_draws(jr.PRNGKey(80), lambda k: jnp.int32(2), count=3)) == pytest.approx(2.0)

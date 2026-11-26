@@ -217,8 +217,7 @@ when nothing is selected.
 - `MCIntegrator` (`driver.py`): the refill/compaction/reduction batch driver.
   It knows nothing about PDEs; subclasses implement `step`,
   `_get_initial_state` and `_compute_accumulator_update`. Refill, phase
-  transition, completion and block stepping have generic defaults. The fluid
-  pressure prototype (`WoBPressureIntegrator`) builds on it directly.
+  transition, completion and block stepping have generic defaults.
 - `WalkIntegrator` (`walk.py`): Dirichlet/source callbacks for interior walks
   of `-Δu = f`, `source_samples`, `truncate`, and one Dirichlet WoS ball step
   shared by WoS, its gradient and differential WoS.

@@ -34,6 +34,3 @@ outputs/
 !scripts/bench/
 scripts/bench/*
 !scripts/bench/mesh_extraction/
-!scripts/bench/pressure/
-scripts/bench/pressure/*
-!scripts/bench/pressure/benchmark.py
