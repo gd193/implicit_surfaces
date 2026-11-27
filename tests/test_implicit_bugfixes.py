@@ -205,3 +205,46 @@ def test_camera_jit_and_material_zero_ref_idx():
             jr.PRNGKey(idx),
         )
         assert bool(jnp.all(jnp.isfinite(out[0])))
+
+
+def test_autobound_empty_sphere_stops_at_nearest_quadratic_root():
+    pytest.importorskip("jnp_bounds")
+    from surfaces.implicit.jnp_bounded import jnpboundedImplicit
+
+    # Quadratic coefficient eigenvalues (3, 0, 0). The nearest zero is at |x| = 1.
+    surface = jnpboundedImplicit(fn=lambda p, x: 3 * x[0] ** 2 - 3,
+                                 dim=3, level_set=0., autobounds_max_degree=2, use_warp=False)
+    _, radius, _ = jax.jit(surface.empty_sphere)(None, jnp.zeros(3), 4.)
+    assert float(radius) == pytest.approx(1., abs=1e-6)
+
+
+def test_autobound_empty_sphere_nearly_isotropic_quadratic():
+    pytest.importorskip("jnp_bounds")
+    from surfaces.implicit.jnp_bounded import jnpboundedImplicit
+
+    surface = jnpboundedImplicit(
+        fn=lambda p, x: p * x[0]**2 + x[1]**2 + x[2]**2 - 1.,
+        dim=3, level_set=0., autobounds_max_degree=2, use_warp=False,
+    )
+    p = np.float32(1.0003)
+    _, radius, _ = jax.jit(surface.empty_sphere)(p, jnp.zeros(3, jnp.float32), 4.)
+    nearest_zero = 1 / np.sqrt(float(p))
+    assert float(radius) <= nearest_zero
+    np.testing.assert_allclose(radius, nearest_zero, rtol=2e-7)
+
+
+@pytest.mark.parametrize("dim", [1, 2, 3])
+def test_autobound_empty_sphere_constant_enclosure(dim):
+    pytest.importorskip("jnp_bounds")
+    from surfaces.implicit.jnp_bounded import jnpboundedImplicit
+
+    surface = jnpboundedImplicit(
+        fn=lambda p, x: p[0] * x[0]**2 + p[1],
+        dim=dim, level_set=1., autobounds_max_degree=2, use_warp=False,
+    )
+    query = jax.jit(surface.empty_sphere)
+    for offset, expected_radius in [(-2., 2.), (1., 0.), (4., 2.)]:
+        residual, radius, next_width = query(jnp.array([0., offset]), jnp.zeros(dim), 4.)
+        assert float(residual) == offset - 1.
+        assert float(radius) == expected_radius
+        assert float(next_width) == 2.

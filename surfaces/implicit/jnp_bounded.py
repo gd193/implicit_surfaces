@@ -72,25 +72,16 @@ class jnpboundedImplicit(ImplicitSurface):
         self.autobounds_max_degree = autobounds_max_degree
         self._derivative_builders = {}
         self.use_classify_subcubes = use_classify_subcubes
-        self.use_warp = use_warp
         self._grow = float(grow_factor)
         self._shrink = float(shrink_factor)
         self._max_tr = float(max_trust_region_size)
         self._min_tr = float(min_trust_region_size)
-        # use_warp routes polynomial composition through fused NVIDIA-Warp kernels for the
-        # supported activations (softplus / swish / sigmoid). GPU-only fast path; harmless
-        # but unused on CPU. Default True since neural-surface workloads are the common case.
-        composition_implementation = "warp_fused" if self.use_warp else "jax"
-        # Box ranges of the Taylor polynomial (step guard, box/subcube classification)
-        # use the Warp range kernel on GPU; elsewhere, and for unsupported layouts, JAX eval.
-        self.range_implementation = (
-            "warp" if self.use_warp and jax.default_backend() == "gpu" else "jax"
-        )
+        self.implementation = "warp" if use_warp and jax.default_backend() == "gpu" else "jax"
         self.taylor_bounds = autobounds.taylor_bounds(
             self.fn,
             max_degree=self.autobounds_max_degree,
-            composition_algorithm="softplus_cheap",
-            composition_implementation=composition_implementation,
+            composition_algorithm="specialized",
+            composition_implementation=self.implementation,
             precision_mode=precision_mode,
         )
 
@@ -156,7 +147,7 @@ class jnpboundedImplicit(ImplicitSurface):
                     derivative_enclosure.polynomial_enclosure,
                     -box_half_extents,
                     box_half_extents,
-                    implementation=self.range_implementation,
+                    implementation=self.implementation,
                 )
             )
         if order == 1:
@@ -232,7 +223,7 @@ class jnpboundedImplicit(ImplicitSurface):
                 polynomial_enclosure,
                 -trust_region_half_extents,
                 trust_region_half_extents,
-                implementation=self.range_implementation,
+                implementation=self.implementation,
             )
         )
         trust_region_excludes_surface = jnp.logical_or(
@@ -257,7 +248,7 @@ class jnpboundedImplicit(ImplicitSurface):
             domain=(0.0, ray_exit_parameter),
             level=self.level_set,
             implementation=(
-                self.range_implementation if self.autobounds_max_degree <= 2 else "jax"
+                self.implementation if self.autobounds_max_degree <= 2 else "jax"
             ),
         )
         has_envelope_root, envelope_root_parameter = first_root(envelope_root_result)
@@ -335,7 +326,7 @@ class jnpboundedImplicit(ImplicitSurface):
                 polynomial_enclosure,
                 -box_half_extents,
                 box_half_extents,
-                implementation=self.range_implementation,
+                implementation=self.implementation,
             )
         )
         field_lower_bound = field_lower_bound - self.level_set
@@ -353,7 +344,7 @@ class jnpboundedImplicit(ImplicitSurface):
                 polynomial_enclosure,
                 -box_half_extents,
                 box_half_extents,
-                implementation=self.range_implementation,
+                implementation=self.implementation,
             )
         )
 
@@ -383,7 +374,7 @@ class jnpboundedImplicit(ImplicitSurface):
             polynomial_enclosure,
             subbox_lower_offsets,
             subbox_upper_offsets,
-            implementation=self.range_implementation,
+            implementation=self.implementation,
             batched=True,
         )
         field_lower_bound, field_upper_bound = (
@@ -410,8 +401,8 @@ class jnpboundedImplicit(ImplicitSurface):
         Returns (field_residual, safe_radius, next_trust_region_size) for WoSIntegrator:
           * field_residual: f(x) − level_set
           * safe_radius: largest empty-sphere radius, clamped to TR/2
-          * next_trust_region_size: TR · grow_factor when the polynomial-derived radius fills
-            the TR (surface provably outside TR), else TR · shrink_factor.
+          * next_trust_region_size: TR · grow_factor when the polynomial has a finite radius
+            beyond TR/2, else TR · shrink_factor.
             Clipped to [min_tr, max_tr].
         """
         if self.autobounds_max_degree != 2:
@@ -431,14 +422,16 @@ class jnpboundedImplicit(ImplicitSurface):
         radius = empty_sphere_2nd_order_tensor(
             polynomial_enclosure, upper_lower_flag, dim=x.shape[0], isolevel=self.level_set
         ).squeeze()
-        # Sanitize: empty_sphere_2nd_order_tensor can return NaN/negative for
-        # degenerate polynomial cases (root-find on near-flat coefs). Treat those
-        # as "no usable radius" → 0; downstream logic shrinks tr next step.
-        radius = jnp.where(jnp.isfinite(radius), radius, jnp.asarray(0.0, dtype=radius.dtype))
-        radius = jnp.maximum(radius, jnp.asarray(0.0, dtype=radius.dtype))
-        # Surface provably outside TR ⇔ radius reaches the TR boundary (= TR/2).
-        outside_trust_region = radius > trust_region_size * 0.5
-        safe_radius = jnp.where(outside_trust_region, trust_region_size * 0.5, radius)
+        region_radius = trust_region_size * 0.5
+        # An unbounded constant enclosure fills the ball. Keep the existing
+        # adaptation rule, which grows only for finite roots beyond the region.
+        outside_trust_region = jnp.isfinite(radius) & (radius > region_radius)
+        # Round finite polynomial radii one representable value toward zero.
+        # Compute the margin from a detached value so the radius retains its JVP.
+        finite_radius = jnp.where(jnp.isfinite(radius), radius, 0.)
+        rounded = jax.lax.stop_gradient(finite_radius)
+        margin = rounded - jnp.nextafter(rounded, jnp.zeros_like(rounded))
+        safe_radius = jnp.minimum(radius - margin, region_radius)
         # NIQ-style adaptive TR update.
         next_trust_region_size = jnp.where(
             outside_trust_region, trust_region_size * self._grow, trust_region_size * self._shrink
