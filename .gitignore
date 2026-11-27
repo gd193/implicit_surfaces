@@ -34,3 +34,6 @@ outputs/
 !scripts/bench/
 scripts/bench/*
 !scripts/bench/mesh_extraction/
+
+# Paper styling/results helpers stay local
+/utils/paper_utils/
