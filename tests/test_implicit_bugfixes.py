@@ -241,10 +241,21 @@ def test_autobound_empty_sphere_constant_enclosure(dim):
     surface = jnpboundedImplicit(
         fn=lambda p, x: p[0] * x[0]**2 + p[1],
         dim=dim, level_set=1., autobounds_max_degree=2, use_warp=False,
+        max_trust_region_size=8.,
     )
     query = jax.jit(surface.empty_sphere)
-    for offset, expected_radius in [(-2., 2.), (1., 0.), (4., 2.)]:
-        residual, radius, next_width = query(jnp.array([0., offset]), jnp.zeros(dim), 4.)
-        assert float(residual) == offset - 1.
-        assert float(radius) == expected_radius
-        assert float(next_width) == 2.
+    origin = jnp.zeros(dim)
+    for offset in (-2., 4.):
+        params = jnp.array([0., offset])
+        position, width = origin, 4.
+        for expected_radius, expected_width in [(2., 6.), (3., 8.), (4., 8.)]:
+            residual, radius, width = query(params, position, width)
+            assert float(residual) == offset - 1.
+            assert float(radius) == expected_radius
+            assert float(width) == expected_width
+            position = position.at[0].add(radius)
+
+    residual, radius, next_width = query(jnp.array([0., 1.]), origin, 4.)
+    assert float(residual) == 0.
+    assert float(radius) == 0.
+    assert float(next_width) == 2.

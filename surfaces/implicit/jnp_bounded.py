@@ -401,8 +401,8 @@ class jnpboundedImplicit(ImplicitSurface):
         Returns (field_residual, safe_radius, next_trust_region_size) for WoSIntegrator:
           * field_residual: f(x) − level_set
           * safe_radius: largest empty-sphere radius, clamped to TR/2
-          * next_trust_region_size: TR · grow_factor when the polynomial has a finite radius
-            beyond TR/2, else TR · shrink_factor.
+          * next_trust_region_size: TR · grow_factor when the polynomial radius exceeds
+            TR/2 (including +inf), else TR · shrink_factor.
             Clipped to [min_tr, max_tr].
         """
         if self.autobounds_max_degree != 2:
@@ -423,9 +423,7 @@ class jnpboundedImplicit(ImplicitSurface):
             polynomial_enclosure, upper_lower_flag, dim=x.shape[0], isolevel=self.level_set
         ).squeeze()
         region_radius = trust_region_size * 0.5
-        # An unbounded constant enclosure fills the ball. Keep the existing
-        # adaptation rule, which grows only for finite roots beyond the region.
-        outside_trust_region = jnp.isfinite(radius) & (radius > region_radius)
+        outside_trust_region = radius > region_radius
         # Round finite polynomial radii one representable value toward zero.
         # Compute the margin from a detached value so the radius retains its JVP.
         finite_radius = jnp.where(jnp.isfinite(radius), radius, 0.)
