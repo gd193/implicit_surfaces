@@ -33,7 +33,6 @@ def test_trimesh_surface_signed_value_and_first_hit(builder):
         trimesh.creation.box(extents=[2, 2, 2]), builder
     )
     surface = TriMeshSurface(mesh, boundary)
-    assert surface.has_box_bounds
     lower = jnp.ones(3, jnp.float32) * 0.1
     assert int(surface.classify_box(None, lower, -lower)) == 0
     points = jnp.array([[0, 0, 0], [2, 0, 0], [1, 0, 0]], jnp.float32)

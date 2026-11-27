@@ -3,7 +3,6 @@
 import abc
 import time
 from functools import partial
-from numbers import Integral
 from typing import Any, Generic, Optional, Tuple
 
 import jax
@@ -22,13 +21,7 @@ from sphereWalker.ops import (
 from sphereWalker.types import StateT, WalkerDiagnostics, WalkerOutput
 from sphereWalker.types import WalkerTermination as WT
 from utils.jnp_array_compaction import should_compact
-
-
-def _positive_int(name, value, *, minimum=1):
-    if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
-        kind = 'positive' if minimum == 1 else 'nonnegative'
-        raise ValueError(f'{name} must be a {kind} integer')
-    return int(value)
+from utils.validation import check_int
 
 
 def _validate_rng_key(rng_key):
@@ -64,9 +57,9 @@ class MCIntegrator(Generic[StateT], abc.ABC):
     """
 
     def __init__(self, dim: int, *, max_steps: int = 1000, print_progress: bool = False):
-        self.dim = _positive_int('dim', dim)
+        self.dim = check_int('dim', dim)
         # Zero is allowed: a walk then terminates (MAX_STEPS) at its first step.
-        self.max_steps = _positive_int('max_steps', max_steps, minimum=0)
+        self.max_steps = check_int('max_steps', max_steps, minimum=0)
         self.print_progress = print_progress
 
     # ----------------------------------------------------------------- hooks
@@ -152,8 +145,8 @@ class MCIntegrator(Generic[StateT], abc.ABC):
                            max_active_states, jit_buck_size, n_compactions):
         for name, value in (('n_samples', n_samples), ('steps_between_refill', steps_between_refill),
                             ('max_active_states', max_active_states), ('jit_buck_size', jit_buck_size)):
-            _positive_int(name, value)
-        _positive_int('n_compactions', n_compactions, minimum=0)
+            check_int(name, value)
+        check_int('n_compactions', n_compactions, minimum=0)
         positions = jnp.asarray(positions, dtype=jnp.result_type(positions, jnp.float32))
         if positions.ndim != 2 or positions.shape[1] != self.dim:
             raise ValueError('positions must have shape (N, dim)')
@@ -287,7 +280,7 @@ class MCIntegrator(Generic[StateT], abc.ABC):
         initial_position_batch = self._prepare_positions(
             initial_position_batch, n_samples, steps_between_refill,
             max_active_states, jit_buck_size, n_compactions)
-        _positive_int('refill_rounds', refill_rounds)
+        check_int('refill_rounds', refill_rounds)
         if initial_position_batch.shape[0] == 0:
             return
         positions_padded, N_original = pad_to_bucket(initial_position_batch, bucket_size=jit_buck_size)
@@ -376,7 +369,7 @@ class MCIntegrator(Generic[StateT], abc.ABC):
         initial_position_batch = self._prepare_positions(
             initial_position_batch, n_samples, steps_between_refill,
             max_active_states, jit_buck_size, n_compactions)
-        _positive_int('refill_rounds', refill_rounds)
+        check_int('refill_rounds', refill_rounds)
         if compaction_mode not in ('uniform', 'geometric'):
             raise ValueError('compaction_mode must be uniform or geometric')
         if initial_position_batch.shape[0] == 0:

@@ -71,7 +71,7 @@ hit = marcher.first_hit(params, origins, directions)
 scene = ImplicitScene([surface_a, surface_b], max_steps=256)
 hit = scene.closest_hit([params_a, params_b], origins, directions)
 
-renderer = SimpleIntegrator.from_surface(camera, background, surface)
+renderer = SimpleIntegrator(camera, background, surface)
 image, query_counts = renderer.render(params, key)
 ```
 
@@ -81,9 +81,9 @@ to one surface. `renderer.intersect(...)` delegates to `scene.closest_hit(...)`.
 The scene evaluates normals at the nearest hit positions after comparing all
 surfaces.
 
-Use `SimpleIntegrator.from_surface` to inherit the surface's ray-query policy
-and dimensional scene bounds. The callback constructor expects the supplied
-ray step to return the shifted residual.
+`SimpleIntegrator(camera, background, surface, ...)` builds its RayMarcher from
+the surface, so it inherits the surface's ray-query policy and dimensional
+scene bounds.
 
 ## Sampling through the interior
 

@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--depth", type=int, default=6)
     parser.add_argument("--out", type=Path, default=Path("materials.png"))
     args = parser.parse_args()
-    from render_sphere import configure_device
+    from scripts.render_sphere import configure_device
     configure_device(args.device)
 
     import jax

@@ -20,13 +20,6 @@ import jax.numpy as jnp
 
 class ExplicitSurface(abc.ABC):
     dim: int = 3
-    # Capability flags — explicit reps have explicit normals (no autograd
-    # for shading) and conservative signed-distance box bounds.
-    needs_grad_for_normals: bool = False
-    has_box_bounds: bool = True
-    is_differentiable_wrt_params: bool = False  # subclasses flip when
-                                                #   vertex_velocity_fn is provided
-
     # =====================================================================
     # Foundation primitives — every explicit rep must implement these.
     # All other query methods reduce to them by default.

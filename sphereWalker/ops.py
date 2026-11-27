@@ -1,7 +1,6 @@
 """Stateless JAX primitives shared by the sphereWalker integrators."""
 
 from functools import partial
-from numbers import Integral
 
 import jax
 import jax.numpy as jnp
@@ -21,6 +20,7 @@ from utils.sampling_primitives import (
     weighted_greens_fn_1ball,
     weighted_greens_fn_2ball,
 )
+from utils.validation import check_int
 
 
 sphere_sampling_fn_select = {
@@ -73,20 +73,14 @@ def finish_step(state, updated):
     return jax.tree.map(lambda old, new: jnp.where(state.done_flag, old, new), state, updated)
 
 
-def _require_positive_int(name, value):
-    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
-        raise ValueError(f'{name} must be a positive integer')
-    return int(value)
-
-
 def average_draws(key, sample_fn, *, count: int, chunk_size: int = 32):
     """Mean of `count` draws of `sample_fn(key)`, vmapped in fixed-width chunks.
 
     Storage is independent of the budget; one copy of the sampler is traced.
     Draw n uses fold_in(key, n), so results do not depend on chunk_size.
     """
-    count = _require_positive_int('count', count)
-    chunk_size = _require_positive_int('chunk_size', chunk_size)
+    count = check_int('count', count)
+    chunk_size = check_int('chunk_size', chunk_size)
     width = min(count, chunk_size)
     offsets0 = jnp.arange(width)
     zeros = jax.tree.map(lambda s: jnp.zeros(s.shape, jnp.result_type(s.dtype, 0.)),
@@ -114,7 +108,7 @@ def run_chunked(mask, bucket_size, body_fn, init_carry):
     real selected states (never index 0 or zero-filled data). The body runs
     ceil(count / bucket) times, i.e. never when no lane is selected.
     """
-    bucket_size = _require_positive_int('bucket_size', bucket_size)
+    bucket_size = check_int('bucket_size', bucket_size)
     n = mask.shape[0]
     if n == 0:
         return init_carry

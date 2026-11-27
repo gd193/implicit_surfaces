@@ -32,6 +32,11 @@ def _scalar_pair(value):
     return tuple(_scalar(x) for x in interval_arithmetic.endpoints(value))
 
 
+def _interval_sign(lower, upper):
+    """Three-valued sign of an interval: -1 below zero, +1 above, 0 straddling."""
+    return jnp.where(upper < 0, jnp.int8(-1), jnp.where(lower > 0, jnp.int8(1), jnp.int8(0)))
+
+
 class jnpboundedImplicit(ImplicitSurface):
     """
     A class for implicit surfaces that can bounded by the jnp autobound library.
@@ -48,7 +53,6 @@ class jnpboundedImplicit(ImplicitSurface):
     def __init__(
         self,
         autobounds_max_degree: int,
-        use_classify_subcubes: bool = True,
         use_warp: bool = True,
         grow_factor: float = 1.5,
         shrink_factor: float = 0.5,
@@ -71,7 +75,6 @@ class jnpboundedImplicit(ImplicitSurface):
         super().__init__(**kwargs)
         self.autobounds_max_degree = autobounds_max_degree
         self._derivative_builders = {}
-        self.use_classify_subcubes = use_classify_subcubes
         self._grow = float(grow_factor)
         self._shrink = float(shrink_factor)
         self._max_tr = float(max_trust_region_size)
@@ -329,13 +332,7 @@ class jnpboundedImplicit(ImplicitSurface):
                 implementation=self.implementation,
             )
         )
-        field_lower_bound = field_lower_bound - self.level_set
-        field_upper_bound = field_upper_bound - self.level_set
-        return jnp.where(
-            field_upper_bound < 0,
-            jnp.int8(-1),
-            jnp.where(field_lower_bound > 0, jnp.int8(1), jnp.int8(0)),
-        )
+        return _interval_sign(field_lower_bound - self.level_set, field_upper_bound - self.level_set)
 
     def box_bounds(self, params, lower, upper):
         polynomial_enclosure, box_half_extents = self._box_polynomial(params, lower, upper)
@@ -380,13 +377,7 @@ class jnpboundedImplicit(ImplicitSurface):
         field_lower_bound, field_upper_bound = (
             x.reshape(subbox_lower_offsets.shape[0]) for x in interval_arithmetic.endpoints(value)
         )
-        field_lower_bound = field_lower_bound - self.level_set
-        field_upper_bound = field_upper_bound - self.level_set
-        return jnp.where(
-            field_upper_bound < 0,
-            jnp.int8(-1),
-            jnp.where(field_lower_bound > 0, jnp.int8(1), jnp.int8(0)),
-        )
+        return _interval_sign(field_lower_bound - self.level_set, field_upper_bound - self.level_set)
 
     def empty_sphere(
         self,

@@ -37,7 +37,6 @@ RADIUS, THICKNESS, TOP = .2, .8, .55
 OPEN = np.pi * 5. / 6. * THICKNESS
 PERIOD = 4. * RADIUS * np.sin(OPEN)
 TIP = TOP + 2. * RADIUS * np.cos(OPEN) - RADIUS
-INLET = (-(TOP + RADIUS), TIP)
 LO, HI = (0., -.8), (6 * PERIOD, .8)
 geometry = {"box": {"min_corner": jnp.array(LO), "max_corner": jnp.array(HI)},
             "wave": {"center": jnp.array([0., TOP]), "thickness": jnp.asarray(THICKNESS),

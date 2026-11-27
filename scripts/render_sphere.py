@@ -83,7 +83,7 @@ def main():
         vup=jnp.array([0.0, 1.0, 0.0]),
     )
 
-    integrator = SimpleIntegrator.from_surface(
+    integrator = SimpleIntegrator(
         camera=camera,
         background_color=jnp.array([0.5, 0.7, 1.0]),
         surface=surface,

@@ -62,7 +62,6 @@ def load_surface(checkpoint: str, use_warp: bool = True):
     import jax
     import jax.numpy as jnp
     import numpy as np
-    import jnp_bounds.autobounds as jb
     jax.config.update('jax_default_matmul_precision', 'highest')
     from surfaces.implicit.jnp_bounded import jnpboundedImplicit
     with np.load(checkpoint, allow_pickle=False) as data:
@@ -76,17 +75,12 @@ def load_surface(checkpoint: str, use_warp: bool = True):
     affine = tuple((w*beta if i == 0 else w/beta if i == len(weights)-1 else w,
                     b*beta if i < len(weights)-1 else b)
                    for i, (w, b) in enumerate(weights))
-    def field(x):
+    def field(_params, x):
         for w, b in affine[:-1]:
             x = jax.nn.softplus(x @ w + b)
         return x @ affine[-1][0] + affine[-1][1]
-    surface = jnpboundedImplicit(fn=lambda unused, x: field(x), dim=3, level_set=0.,
+    surface = jnpboundedImplicit(fn=field, dim=3, level_set=0.,
                                  autobounds_max_degree=2, use_warp=use_warp)
-    # The bounding backend traces a function of position only. Freeze this
-    # checkpoint in both the field and the bound, rather than tracing params.
-    surface.taylor_bounds = jb.taylor_bounds(
-        field, max_degree=2, composition_algorithm='softplus_cheap',
-        composition_implementation='warp_fused' if use_warp else 'jax')
     return surface, None
 
 

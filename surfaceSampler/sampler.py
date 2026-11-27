@@ -9,11 +9,12 @@ from utils.sampling_primitives import sample_uniform_ray_bbox_2d, sample_uniform
 from utils.types import RayBuffer, MultiHitRayState, MultiHitRayOutput, SurfaceSamples, Termination
 from surfaces.queries import RayQuery
 from utils.batch_driver import (run_bounded_batch, finished_rays, mask_finished_padding,
-                                DEFAULT_MAX_ACTIVE_STATES, validate_max_active_states)
+                                DEFAULT_MAX_ACTIVE_STATES)
+from utils.validation import check_int
 
 
 
-samping_ray_bbox_selector = {
+_ray_bbox_samplers = {
     2: sample_uniform_ray_bbox_2d,
     3: sample_uniform_ray_bbox_3d
 }
@@ -63,7 +64,7 @@ class SurfaceSampler:
                  dim: int, max_step: int, epsilon: float, max_hits: int, init_trust_region_size: float,
                  n_compactions: int = 10,
                  ray_sample_batch_size: int=1000000, ray_sample_max_iter: int=1000, 
-                 print_progress: bool = False, debug: bool = False,
+                 debug: bool = False,
                  *, max_active_states: int = DEFAULT_MAX_ACTIVE_STATES,
                  lipschitz_bound: float | None = None,
                  continuation: Callable | None = None,
@@ -76,7 +77,7 @@ class SurfaceSampler:
             raise ValueError('epsilon must be finite and positive')
         if not math.isfinite(init_trust_region_size) or init_trust_region_size <= 0:
             raise ValueError('initial trust region must be finite and positive')
-        self.max_active_states = validate_max_active_states(max_active_states)
+        self.max_active_states = check_int('max_active_states', max_active_states)
         self.initialize = jax.jit(self._initialize)
         self.query = query if query is not None else RayQuery(ray_march_fn, update_tr=update_tr_fn)
         self.dim = dim
@@ -93,14 +94,12 @@ class SurfaceSampler:
             if lipschitz_bound is None:
                 raise ValueError('sampling needs lipschitz_bound or an explicit continuation policy')
             continuation = LipschitzContinuation(lipschitz_bound)
-        self.lipschitz_bound = lipschitz_bound
         self.continuation = continuation
         self.init_trust_region_size = init_trust_region_size
         self.ray_sample_batch_size = ray_sample_batch_size
         self.ray_sample_max_iter = ray_sample_max_iter
-        self.print_progress = print_progress
         self.debug = debug
-        self.sampling_ray_bbox_fn = samping_ray_bbox_selector[dim]
+        self.sampling_ray_bbox_fn = _ray_bbox_samplers[dim]
         self.step_states_fn = jax.jit(jax.vmap(self.step_fn, in_axes=(None, 0)))
         self.n_compactions = n_compactions
 

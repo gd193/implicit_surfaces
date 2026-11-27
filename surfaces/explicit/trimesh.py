@@ -66,8 +66,6 @@ class TriMeshSurface(ExplicitSurface):
             np.divide(np.sqrt(np.float32(0.5)), np.sqrt(area), out=scale, where=area > 0)
             self._barycentric_scale = jnp.zeros_like(normals[:, 0]).at[tree.prim_ids].set(scale)
 
-        self.is_differentiable_wrt_params = vertex_velocity_fn is not None
-
     def closest_point(self, params: Any, x: jnp.ndarray
                       ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
         return self._nearest(self._boundary.data, x)[:3]

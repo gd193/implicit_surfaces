@@ -17,6 +17,7 @@ from sphereWalker import WoSIntegrator
 from sphereWalker.types import WalkerDiagnostics, WalkerState
 from sphereWalker.types import WalkerTermination as WT
 from utils.sampling_primitives import sample_uniform_2sphere, unit_interval, sample_green_2ball as _green_ball
+from utils.validation import check_int
 
 
 def antithetic_source_samples(total_samples: int, walks: int) -> int:
@@ -36,18 +37,13 @@ class VectorPotentialResult(NamedTuple):
     velocity: jax.Array
     diagnostics: WalkerDiagnostics
 
-class VelocitySolver(NamedTuple):
-    """Prepare static query geometry once; solve changing source fields per step."""
-    prepare_queries: Callable
-    solve: Callable
-
 def curl_from_jacobian(jac):
     return jnp.stack((jac[..., 2, 1]-jac[..., 1, 2],
                       jac[..., 0, 2]-jac[..., 2, 0],
                       jac[..., 1, 0]-jac[..., 0, 1]), axis=-1)
 
 def make_gradient_velocity_solve(gradient_factory, *args, **kwargs):
-    """Adapt an existing gradient integrator to the velocity solver contract."""
+    """Wrap a gradient integrator as solve(params, points, key) -> velocity = curl."""
     integrate = gradient_factory(*args, **kwargs)
 
     @jax.jit
@@ -59,7 +55,7 @@ def make_gradient_velocity_solve(gradient_factory, *args, **kwargs):
         details = integrate(params, points, key, return_details=True, **options)
         return velocity_result(details)
 
-    return VelocitySolver(lambda points: points, solve)
+    return solve
 
 class _PairState(NamedTuple):
     walkers: WalkerState
@@ -73,6 +69,9 @@ class _PairState(NamedTuple):
         return self.walkers.position
 
 
+# TODO: migrate into a comprehensive integrated WoSGradientIntegrator
+# (antithetic pairs via mirror_first_sphere plus a local-source hook for the
+# fused Warp first-ball integral) and drop this subclass.
 class _FluidPairs(WoSIntegrator):
     """One scheduled sample is a pair of ordinary WoS continuations.
 
@@ -124,14 +123,6 @@ class _FluidPairs(WoSIntegrator):
         weight = (3/jnp.where(valid, radius, 1.))[:, None]*directions
         return _PairState(walkers, weight, jnp.zeros(size, jnp.int32), ~valid,
                           jnp.where(valid, WT.ACTIVE, WT.MAX_STEPS).astype(jnp.int32))
-
-    def step(self, params, state):
-        walkers = jax.vmap(super().step, in_axes=(None, 0))(params, state.walkers)
-        done = jnp.all(walkers.done_flag)
-        # The driver schedules pairs. Actual per-leg termination reasons and
-        # accepted sample counts are carried by the contribution below.
-        return _PairState(walkers, state.weight, walkers.nSteps.sum(dtype=jnp.int32), done,
-                          jnp.where(done, WT.MAX_STEPS, WT.ACTIVE).astype(jnp.int32))
 
     def _step_block(self, params, states, steps, unroll):
         # Pairing affects initialization and reduction only. Keep the existing
@@ -247,9 +238,7 @@ def make_dirichlet_gradient_solve(empty_sphere, boundary, source, *, dim,
     for walker in (paired, paired.continuation):
         walker.ball_sampling_fn = _green_ball
         walker.weighted_greens_fn = lambda r, R: R**2/6
-    draws = gradient_source_samples
-    if isinstance(draws, bool) or not isinstance(draws, int) or draws < 1:
-        raise ValueError('gradient_source_samples must be a positive integer')
+    draws = check_int('gradient_source_samples', gradient_source_samples)
 
     @partial(jax.jit, static_argnames=('pairs',))
     def local_gradient(params, points, radii, key, *, pairs):
@@ -329,8 +318,7 @@ def make_dirichlet_gradient_solve(empty_sphere, boundary, source, *, dim,
         pairs = n_samples//2
         options['steps_between_refill'] = min(options.get('steps_between_refill', 16), max_steps)
         active = options.get('max_active_states', 1000**2)
-        if isinstance(active, bool) or not isinstance(active, Integral) or active < 2:
-            raise ValueError('max_active_states must be an integer >= 2 for paired walks')
+        check_int('max_active_states', active, minimum=2)  # paired walks
         # The public limit counts individual walks, not pairs.
         options['max_active_states'] = active//2
         seeds, radii = prepare(params, points, init_trust_region_size)

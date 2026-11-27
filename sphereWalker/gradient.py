@@ -1,6 +1,5 @@
 """First-ball spatial gradient estimator, mixable into any WalkIntegrator."""
 
-from numbers import Integral
 
 import jax
 import jax.numpy as jnp
@@ -10,6 +9,7 @@ from sphereWalker.ops import average_draws, finish_step, first_ball_source_weigh
 from sphereWalker.types import WalkerTermination as WT
 from sphereWalker.walk import check_broadcast
 from utils.sampling_primitives import unit_interval
+from utils.validation import check_int
 
 
 class FirstBallGradientMixin:
@@ -44,10 +44,7 @@ class FirstBallGradientMixin:
     def __init__(self, *args, control_fn=None, control_takes_params=False,
                  mirror_first_sphere=False, gradient_source_samples: int = 1, **kwargs):
         super().__init__(*args, **kwargs)
-        if (isinstance(gradient_source_samples, bool)
-                or not isinstance(gradient_source_samples, Integral) or gradient_source_samples < 1):
-            raise ValueError('gradient_source_samples must be a positive integer')
-        self.gradient_source_samples = int(gradient_source_samples)
+        self.gradient_source_samples = check_int('gradient_source_samples', gradient_source_samples)
         self.control_fn = control_fn
         # A dynamic pilot travels with problem parameters, never a mutable JIT closure.
         self.control_takes_params = control_takes_params

@@ -245,12 +245,6 @@ def sample_green_radius(key, dim, dtype):
     raise ValueError("Green sampling supports dimensions 2 and 3")
 
 
-def sample_green_1ball(key, dtype):
-    """Green-weighted sample in the unit disk."""
-    kr, kd = jr.split(key)
-    return sample_green_radius(kr, 2, dtype), sample_uniform_1sphere(kd, dtype)
-
-
 def sample_green_2ball(key, dtype):
     """Green-weighted sample in the unit ball."""
     kr, kd = jr.split(key)

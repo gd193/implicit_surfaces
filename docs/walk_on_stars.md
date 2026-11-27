@@ -306,16 +306,9 @@ is a field-value tolerance, not a certified distance tolerance. Conservative
 empty-sphere radii alone never establish boundary proximity. Finite epsilon,
 floating-point geometry, and finite walk budgets remain numerical limitations.
 
-`scripts/test_star_walker.py` checks analytic rays in 2D/3D, boundary starts,
-invalid contacts, dynamic parameters, batching/compaction, output dtypes,
-explicit failure propagation, radial sampling moments, constant/vector data,
-and manufactured Poisson solutions with homogeneous reflecting walls. The
-statistical regressions use fixed seeds and sample-derived standard errors.
-
-```sh
-JAX_PLATFORMS=cpu python -m unittest scripts.test_star_walker -v
-JAX_ENABLE_X64=true JAX_PLATFORMS=cpu python -m unittest scripts.test_star_walker -v
-```
+The walker suite checks the mixed-boundary annulus solution, source weighting,
+and invalid ray distances. Run the WoSt cases with
+`JAX_PLATFORMS=cpu python -m pytest tests/test_sphere_walker.py -k wost`.
 
 Reference: Sawhney et al., [Walk on Stars](https://www.cs.cmu.edu/~kmcrane/Projects/WalkOnStars/WalkOnStars.pdf),
 Algorithm 1 and Sections 4.4–4.6. This implementation does not include the

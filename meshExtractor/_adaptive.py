@@ -216,7 +216,7 @@ def make_adaptive_extractor(surface, bounds, tolerance, max_depth, sample_edges,
     box_query = getattr(surface, "classify_box", None)
     group_query = getattr(surface, "classify_subcubes", None)
     classify_root = jax.jit(box_query) if box_query is not None else None
-    if group_query and getattr(surface, "use_classify_subcubes", True):
+    if group_query:
         classify = _batched(lambda params, lo, hi, a, b: group_query(params, lo, hi, a, b), 4)
     elif box_query:
         classify_boxes = _batched(box_query, 2)

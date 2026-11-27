@@ -1,20 +1,14 @@
 """Bounded, refillable buffers of independent states; no geometry semantics."""
 from functools import partial
-from numbers import Integral
 from typing import Any, Callable
 
 import jax
 import jax.numpy as jnp
 
 from utils.jnp_array_compaction import perform_compaction, should_compact, uniform_size_generator
+from utils.validation import check_int
 
 DEFAULT_MAX_ACTIVE_STATES = 4096
-
-
-def validate_max_active_states(value):
-    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
-        raise ValueError('max_active_states must be a positive integer')
-    return int(value)
 
 
 @partial(jax.jit, static_argnames=('initialize', 'write_finished'))
@@ -45,7 +39,7 @@ def run_bounded_batch(params: Any, inputs: Any, output: Any, *,
     Input/output storage is caller-owned and may scale with total task count.
     Return (remaining buffer, output, original indices) for diagnostics.
     """
-    capacity = min(batch_size, validate_max_active_states(max_active_states))
+    capacity = min(batch_size, check_int('max_active_states', max_active_states))
     indices = jnp.arange(capacity)
     state = initialize(inputs, indices, jnp.ones(capacity, bool))
     if batch_size == 0:
@@ -84,7 +78,7 @@ def bounded_map(fn, *arrays, max_active_states):
     This is for stateless work; iterative traversal uses run_bounded_batch.
     Outputs retain input order. Padding is discarded before assembly.
     """
-    limit = validate_max_active_states(max_active_states)
+    limit = check_int('max_active_states', max_active_states)
     n = jax.tree.leaves(arrays)[0].shape[0]
     if n == 0:
         return fn(*arrays)

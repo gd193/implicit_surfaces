@@ -20,6 +20,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from boundaryConditions.base import MIXED, BoundaryPartition, float_dtype, storage_float_dtype
+from utils.validation import check_int
 
 
 class TreeArrays(NamedTuple):
@@ -46,8 +47,7 @@ class TreePartition(BoundaryPartition):
         super().__init__(dim, n_regions)
         if not 0 <= default_region < n_regions:
             raise ValueError("default_region must be in [0, n_regions)")
-        if isinstance(max_depth, bool) or not isinstance(max_depth, int) or max_depth < 0:
-            raise ValueError("max_depth must be a nonnegative integer")
+        check_int('max_depth', max_depth, minimum=0)
         self.arrays = arrays
         self.default_region = int(default_region)
         self.max_depth = max_depth
@@ -165,18 +165,3 @@ class TreePartition(BoundaryPartition):
                           uniform=jnp.asarray(uniform, jnp.int32),
                           lower=jnp.asarray(lower, fdtype), upper=jnp.asarray(upper, fdtype),
                           split=split)
-
-    @classmethod
-    def _make_arrays(cls, children, uniform, lower, upper, split: Any = ()) -> TreeArrays:
-        """Host-validated storage for hand-built trees."""
-        children, uniform = np.asarray(children), np.asarray(uniform)
-        n_nodes = len(uniform)
-        if n_nodes > np.iinfo(np.int32).max:
-            raise ValueError("too many nodes for int32 indices")
-        leaf = children[:, 0] < 0
-        if not (np.all(children[leaf] == -1) and np.all(children[~leaf] > 0)
-                and np.all(children[~leaf] < n_nodes)):
-            raise ValueError("children must be all -1 (leaf) or all valid node ids")
-        if np.any(uniform[leaf] < 0) or np.any(uniform[~leaf] != MIXED):
-            raise ValueError("leaves need a region id and internal nodes MIXED")
-        return cls._tree_arrays(children, uniform, lower, upper, split)

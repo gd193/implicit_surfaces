@@ -7,12 +7,6 @@ from .primitives import safe_norm
 
 
 class ImplicitSurface(abc.ABC):
-    # Whether `classify_subcubes` is meaningfully tighter/cheaper than N independent
-    # `classify_box` calls. Surfaces with a local model (autobound polynomial) override
-    # this to True so callers can prune subcubes from one parent-level model.
-    # Class-level default; subclasses may flip per-instance.
-    use_classify_subcubes: bool = False
-
     def __init__(self, fn: Callable[[Any, jnp.ndarray], jnp.ndarray], level_set: float, dim: int):
         self.fn = fn
         self.level_set = level_set
@@ -156,8 +150,7 @@ class ImplicitSurface(abc.ABC):
                 proved no level-set crossing inside the trust region (= safe, full step
                 taken, integrator should *grow* tr next iteration). False when a crossing
                 was found inside tr (= step stopped at root, integrator should *shrink* tr).
-                Naming reflects the integrator's tr-update logic in
-                `update_trust_region_size_*` in `utils/helpers.py`.
+                `surfaces.queries.RayQuery` turns it into the next trust region.
         """
         raise NotImplementedError("This method should be implemented by subclasses.")
 
@@ -169,8 +162,8 @@ class ImplicitSurface(abc.ABC):
         Same as `ray_step` but also returns ∇f(ray_origin) — shape (dim,).
         Default: call `ray_step`, then `jax.grad(self.__call__)`. Subclasses with a
         cheaper grad path (e.g. autobound's polynomial) override this to avoid the
-        extra autograd pass. SimpleIntegrator picks this method at construction
-        only when the chosen termination criterion declares `needs_grad = True`.
+        extra autograd pass. `RayQuery` picks this method at construction only
+        when the chosen termination criterion declares `needs_grad = True`.
         """
         fn_val, t_step, in_tr = self.ray_step(params, ray_origin, ray_direction,
                                                trust_region_size, upper_lower_flag)

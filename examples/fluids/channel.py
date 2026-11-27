@@ -1,5 +1,5 @@
 """Shared 2D Monte Carlo fluid (vorticity / stream function, after Rioux-Lavoie
-et al. 2022) for the fluid examples: an inflow profile (Jet or BoundaryLayer)
+et al. 2022) for the fluid examples: an inflow profile (Jet)
 enters at the left edge x = lo[0].
 
 Each step solves -Lap psi = omega with the example's Dirichlet psi (constant on
@@ -50,31 +50,6 @@ class Jet(NamedTuple):
 
 
     label = "inlet: jet u_x = U + J sech^2(y/d)"
-
-
-class BoundaryLayer(NamedTuple):
-    """Inflow u_x(y) = U tanh((halfwidth - |y - center|) / delta): 0 at the
-    inlet walls y = center +- halfwidth, U in the core, so the wall layers
-    carry vorticity of opposite sign."""
-    U: float = 1.
-    delta: float = .08
-    halfwidth: float = 1.
-    center: float = 0.
-
-    def psi(self, y):
-        """Stream function of the inflow, constant beyond the inlet walls."""
-        y = jnp.clip(y - self.center, -self.halfwidth, self.halfwidth)
-        cosh = lambda t: jnp.log(jnp.cosh(t))
-        return jnp.sign(y) * self.U * self.delta * (cosh(self.halfwidth / self.delta)
-                                                    - cosh((self.halfwidth - jnp.abs(y)) / self.delta))
-
-    def omega(self, y):
-        y = y - self.center
-        s = 1. / jnp.cosh((self.halfwidth - jnp.abs(y)) / self.delta)
-        return jnp.where(jnp.abs(y) <= self.halfwidth, jnp.sign(y) * self.U / self.delta * s * s, 0.)
-
-
-    label = "inlet: wall layers u_x = U tanh((h - |y|)/d)"
 
 
 def make_transport(points, solid, inlet, lo, hi, nx, ny, dt, *, fluid_fn=None, inflow_only=False):

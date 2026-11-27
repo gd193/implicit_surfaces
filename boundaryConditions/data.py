@@ -1,9 +1,8 @@
 """Function-backed boundary data.
 
 One class covers constant and spatially varying data: the user function
-receives the region id and chooses how to dispatch. A gather such as
-`params['values'][r]` costs the same for any region count; `from_region_fns`
-builds a lax.switch over per-region formulas, which traces every branch.
+receives the region id and chooses how to dispatch, e.g. a gather such as
+`params['values'][r]`, which costs the same for any region count.
 """
 from typing import Any, Callable, Sequence, Tuple
 
@@ -34,22 +33,6 @@ class FunctionBoundaryData(BoundaryData):
         super().__init__(len(kinds_np), value_shape)
         self._kinds = kinds_np.astype(np.int32)
         self.fn = fn
-
-    @classmethod
-    def from_region_fns(cls, kinds: Sequence[int],
-                        fns: Sequence[Callable[[Any, jax.Array, jax.Array], Any]],
-                        value_shape: Tuple[int, ...] = ()):
-        """One formula per region: fns[r](params, x, outward_normal) -> c."""
-        if len(fns) != len(kinds):
-            raise ValueError("need one function per region")
-
-        def fn(params, region_id, x, normal):
-            ftype = x.dtype
-            # Every branch must return the same dtype and shape for lax.switch.
-            branches = [lambda p, x, n, f=f: _checked(f(p, x, n), ftype, value_shape)
-                        for f in fns]
-            return jax.lax.switch(region_id, branches, params, x, normal)
-        return cls(kinds, fn, value_shape)
 
     def kinds(self) -> jax.Array:
         return jnp.asarray(self._kinds, jnp.int32)

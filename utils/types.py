@@ -88,16 +88,3 @@ class BoxBoundarySample(NamedTuple):
     face_radius: jnp.ndarray
     radial_fraction: jnp.ndarray
     valid: jnp.ndarray
-
-    @property
-    def inverse_pdf(self):
-        """Inverse surface-area/length PDF, including the selected-face probability.
-
-        The 2D endpoint t=1 has zero density and infinite inverse PDF. Green
-        weights must use the cancelled expression below, not inf times zero.
-        """
-        dim = self.position.shape[0]
-        a, t = self.face_radius, self.radial_fraction
-        if dim == 3:
-            return (2*dim)*(2*jnp.pi*a*(a*t))
-        return (2*dim)*(2*a)/(-jnp.log(t))

@@ -16,6 +16,14 @@ python scripts/render_orbit.py --device cpu --frames 60 --fps 20 \
   --width 256 --height 256 --out orbit.gif
 ```
 
+To train a neural field and render its orbit in one command, pass the same
+training factory used by the still-image example.
+
+```sh
+python scripts/render_orbit.py --surface scripts.render_neural_implicit:train_surface \
+  --surface-kwargs '{"target":"torus","train_steps":2000}' --out neural_implicit.gif
+```
+
 To supply a surface, write a Python factory returning `(surface, params)`:
 
 ```python

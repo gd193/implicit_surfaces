@@ -8,9 +8,10 @@ import jax.numpy as jnp
 from rayMarcher.utils import DEFAULT_SCENE_BOUNDS, ray_scene_interval, validate_scene_bounds
 from surfaces.queries import RayQuery
 from utils.batch_driver import (run_bounded_batch, finished_rays, mask_finished_padding,
-                                DEFAULT_MAX_ACTIVE_STATES, validate_max_active_states)
+                                DEFAULT_MAX_ACTIVE_STATES)
 from utils.helpers import level_set_termination_criterion
 from utils.types import RayMarchState, RayMarchOutput, Termination
+from utils.validation import check_int
 
 
 def write_ray_results(state, output, indices):
@@ -41,7 +42,7 @@ class RayMarcher:
             raise ValueError('max_distance must be positive')
         if getattr(termination, 'needs_grad', False) and not query.needs_grad:
             raise ValueError('termination requires a gradient query')
-        self.max_active_states = validate_max_active_states(max_active_states)
+        self.max_active_states = check_int('max_active_states', max_active_states)
         self.initialize = jax.jit(self._initialize)
         self.query = query
         self.max_steps = max_steps
@@ -134,5 +135,3 @@ class RayMarcher:
             ~active, jnp.zeros(n, bool), jnp.where(active, end, 0.).astype(origins.dtype), status,
         )
         return state
-
-    trace_rays = first_hit

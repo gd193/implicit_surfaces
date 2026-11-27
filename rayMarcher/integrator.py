@@ -11,11 +11,11 @@ from rayMarcher.sampler import sample_camera_rays
 from rayMarcher.scene import ImplicitScene, SceneHit
 from rayMarcher.traversal import RayMarcher
 from rayMarcher.utils import DEFAULT_SCENE_BOUNDS, SceneBounds, sky_background
-from surfaces.queries import RayQuery
 from utils.batch_driver import (DEFAULT_MAX_ACTIVE_STATES, bounded_map, finished_rays,
-                                mask_finished_padding, run_bounded_batch, validate_max_active_states)
+                                mask_finished_padding, run_bounded_batch)
 from utils.helpers import level_set_termination_criterion
 from utils.types import RayMarchOutput
+from utils.validation import check_int
 
 if TYPE_CHECKING:
     from surfaces.implicit.base import ImplicitSurface
@@ -24,55 +24,23 @@ if TYPE_CHECKING:
 class SimpleIntegrator:
     """Render surface normals. Camera and background can change between renders.
 
-    Construct from a surface with from_surface(), or supply a ray-step callback
-    that returns the shifted residual.
+    The surface supplies ray_step (and ray_step_with_grad for gradient-based
+    termination) and normal_at; marching options configure the RayMarcher.
     """
     def __init__(self, camera: Camera, background_color: jax.Array,
-                 ray_march_fn: Callable | None, surface_normal_fn: Callable, *,
-                 image_height: int, image_width: int, max_ray_march_steps: int = 128,
+                 surface: "ImplicitSurface", *, max_ray_march_steps: int = 128,
                  max_ray_distance: float = 20., epsilon: float = 1e-4, n_compactions: int = 4,
-                 max_active_states: int = DEFAULT_MAX_ACTIVE_STATES,
                  termination_crit_fn: Callable = level_set_termination_criterion,
-                 update_tr_fn: Callable | None = None,
-                 ray_march_with_grad_fn: Callable | None = None,
-                 scene_bounds=DEFAULT_SCENE_BOUNDS,
-                 marcher: RayMarcher | None = None):
-        if marcher is None:
-            if ray_march_fn is None:
-                raise ValueError("a ray-step callback or a marcher is required")
-            query = RayQuery(ray_march_fn, update_tr=update_tr_fn,
-                             step_with_grad=ray_march_with_grad_fn,
-                             needs_grad=getattr(termination_crit_fn, 'needs_grad', False))
-            marcher = RayMarcher(query, max_steps=max_ray_march_steps,
-                                 max_distance=max_ray_distance, epsilon=epsilon,
-                                 n_compactions=n_compactions, max_active_states=max_active_states,
-                                 scene_bounds=scene_bounds, termination=termination_crit_fn)
+                 update_tr_fn: Callable | None = None, **march_options):
         self.camera = camera
         self.background_color = background_color
-        self.surface_normal_fn = surface_normal_fn
-        self.image_height = image_height
-        self.image_width = image_width
-        self.marcher = marcher
-        self.max_active_states = marcher.max_active_states
-        self._post_process_jit = jax.jit(self._post_process_impl)
-
-    @classmethod
-    def from_surface(cls, camera, background_color, surface, *,
-                     max_ray_march_steps=128, max_ray_distance=20., epsilon=1e-4,
-                     n_compactions=4, termination_crit_fn=level_set_termination_criterion,
-                     update_tr_fn=None, **march_options):
-        marcher = RayMarcher.from_surface(
+        self.surface_normal_fn = surface.normal_at
+        self.marcher = RayMarcher.from_surface(
             surface, max_steps=max_ray_march_steps, max_distance=max_ray_distance,
             epsilon=epsilon, n_compactions=n_compactions,
             termination=termination_crit_fn, update_tr=update_tr_fn, **march_options)
-        return cls(camera, background_color, None, surface.normal_at,
-                   image_height=camera.image_height, image_width=camera.image_width,
-                   marcher=marcher)
-
-    def trace_rays(self, params, ray_origins, ray_directions,
-                   init_trust_region_size=0.5, active_mask=None):
-        return self.marcher.first_hit(params, ray_origins, ray_directions,
-                                      init_trust_region_size, active_mask)
+        self.max_active_states = self.marcher.max_active_states
+        self._post_process_jit = jax.jit(self._post_process_impl)
 
     def _post_process_impl(self,
                            params: Any,
@@ -91,16 +59,16 @@ class SimpleIntegrator:
                params: Any,
                key: jax.Array,
                init_trust_region_size: float = 0.5):
-        camera = self.camera._replace(image_height=self.image_height, image_width=self.image_width)
-        ray_origins, ray_directions = sample_camera_rays(camera, key)
-        output_states = self.trace_rays(params, ray_origins, ray_directions, init_trust_region_size)
+        ray_origins, ray_directions = sample_camera_rays(self.camera, key)
+        output_states = self.marcher.first_hit(params, ray_origins, ray_directions,
+                                               init_trust_region_size)
 
         image, niter = bounded_map(
             lambda states, directions: self._post_process_jit(
                 params, states, directions, self.background_color),
             output_states, ray_directions, max_active_states=self.marcher.max_active_states)
-        return (image.reshape(self.image_height, self.image_width, 3),
-                niter.reshape(self.image_height, self.image_width))
+        shape = (self.camera.image_height, self.camera.image_width)
+        return image.reshape(*shape, 3), niter.reshape(shape)
 
 
 class PathState(NamedTuple):
@@ -146,7 +114,7 @@ class MaterialIntegrator:
                  scene_bounds: SceneBounds | None = DEFAULT_SCENE_BOUNDS,
                  termination_crit_fn: Callable = level_set_termination_criterion,
                  update_tr_fn: Callable | None = None):
-        self.max_active_states = validate_max_active_states(max_active_states)
+        self.max_active_states = check_int('max_active_states', max_active_states)
         self.n_compactions = n_compactions
         self.initialize_paths = jax.jit(self._initialize_paths)
         self.surfaces = tuple(surfaces)

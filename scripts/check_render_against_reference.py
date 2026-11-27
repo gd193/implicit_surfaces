@@ -11,10 +11,11 @@ Exit code: 0 if max-pixel error ≤ 0.05 (≈ 13/255) AND hit-mask agreement
 ≥ 99.5%, else 1. Tunneling typically shows up as flipped hit-mask pixels
 on silhouettes — these get reported separately.
 """
+from pathlib import Path
 import sys
 import numpy as np
 
-REF = '/system/user/volkmann/implicit_surfaces_project/outputs/reference_renders/dense_gt/image.npz'
+REF = Path(__file__).resolve().parents[1] / "outputs/reference_renders/dense_gt/image.npz"
 
 def main():
     if len(sys.argv) != 2:

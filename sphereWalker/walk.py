@@ -1,7 +1,6 @@
 """Tier 2: shared PDE base for interior random-walk solvers of -Lap u = f."""
 
 import abc
-from numbers import Integral
 from typing import Any, Callable, Tuple
 
 import jax
@@ -20,6 +19,7 @@ from sphereWalker.ops import (
 from sphereWalker.types import StateT
 from sphereWalker.types import WalkerTermination as WT
 from surfaces.queries import EmptySphere, EmptySphereQuery
+from utils.validation import check_int
 
 
 def check_broadcast(shape, target, what):
@@ -60,9 +60,7 @@ class WalkIntegrator(MCIntegrator[StateT]):
                  truncate: bool = False):
         if dim not in (2, 3):
             raise ValueError('walk integrators support dimensions 2 and 3')
-        if (isinstance(source_samples, bool) or not isinstance(source_samples, Integral)
-                or source_samples < 1):
-            raise ValueError('source_samples must be a positive integer')
+        check_int('source_samples', source_samples)
         super().__init__(dim, max_steps=max_steps, print_progress=print_progress)
         self.empty_sphere = EmptySphereQuery(empty_sphere_fn)
         self.boundary_condition_fn = boundary_condition_fn

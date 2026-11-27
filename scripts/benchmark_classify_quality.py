@@ -50,14 +50,13 @@ p.add_argument("--eqx_path", default=None,
 p.add_argument("--activation", default="softplus",
                help="MLP activation (jax.nn.* name); must match the .eqx file")
 p.add_argument("--d2", action=argparse.BooleanOptionalAction, default=True,
-               help="include autobound deg-2 (warp=True)")
+               help="include autobound deg-2")
 p.add_argument("--d3", action=argparse.BooleanOptionalAction, default=False,
-               help="include autobound deg-3 (warp=True)")
+               help="include autobound deg-3")
 p.add_argument("--ab_modes", nargs="+", default=["default"],
-               choices=["default", "fp32", "mixed", "fp64"],
+               choices=["default", "fp32", "fp64"],
                help="precision_mode(s) for autobound: 'default' = compute matches "
-                    "storage (fp32×fp32); 'mixed' = fp32 storage + fp64 compute "
-                    "(tighter bounds, ~30-50%% slower).")
+                    "storage dtype.")
 p.add_argument("--region_dims", nargs="+", type=int, default=[1, 3],
                choices=[1, 3],
                help="which query shapes to evaluate: 1=random-direction segments, "
@@ -79,8 +78,8 @@ p.add_argument("--width", type=int, default=None,
                help="MLP width for results metadata (auto-inferred from .eqx if None)")
 p.add_argument("--loss", default="SDF",
                help="loss the network was trained with")
-p.add_argument("--no_record", action="store_true",
-               help="skip writing to paper_utils.results")
+p.add_argument("--record", action="store_true",
+               help="record results with the optional paper_utils package")
 args = p.parse_args()
 if not (args.d2 or args.d3):
     p.error("select at least one degree with --d2 or --d3")
@@ -96,8 +95,7 @@ print(f"network={args.network}  activation={args.activation}  "
 # ----------------------------------------------------------------------------
 # Generic eqx MLP loader (alternating W, b arrays; works for any depth)
 # ----------------------------------------------------------------------------
-mlp_fn, weights = load_eqx_mlp(EQX_PATH, args.activation, DTYPE)
-def fn_2arg(_p, x): return mlp_fn(x)
+field, weights = load_eqx_mlp(EQX_PATH, args.activation, DTYPE)
 print(f"loaded {EQX_PATH}: {len(weights)} layers, in={weights[0].shape[1]} out={weights[-1].shape[0]} "
       f"hidden={tuple(W.shape[0] for W in weights[:-1])}", flush=True)
 
@@ -112,9 +110,8 @@ if args.width is None:
 # Build classify_box callables per mode
 # ----------------------------------------------------------------------------
 def build_autobound(max_degree, precision_mode=None):
-    return jnpboundedImplicit(autobounds_max_degree=max_degree, fn=fn_2arg,
-                             level_set=0.0, dim=3, precision_mode=precision_mode,
-                             use_warp=jax.default_backend() == "gpu")
+    return jnpboundedImplicit(autobounds_max_degree=max_degree, fn=field,
+                             level_set=0.0, dim=3, precision_mode=precision_mode)
 
 
 methods = {}
@@ -189,6 +186,7 @@ key = jax.random.PRNGKey(args.seed)
 
 # results[label][region_dim][s] -> fraction
 DIMS = sorted(set(args.region_dims))
+failed = False
 results = {label: {dim: {} for dim in DIMS} for label in methods}
 
 # Cache jit'd callables once per surface (capture by class).
@@ -222,6 +220,7 @@ for s in sizes:
             except Exception as e:
                 print(f"  [warn] {label} dim={dim} @ s={float(s):.3e} failed: "
                       f"{type(e).__name__}: {str(e)[:80]}")
+                failed = True
                 f = float("nan")
             results[label][dim][float(s)] = f
 print(f"sweep took {time.time() - t_total:.1f}s", flush=True)
@@ -254,9 +253,8 @@ for dim in DIMS:
 # ----------------------------------------------------------------------------
 # Record to paper_utils.results / single_query_bound.jsonl
 # ----------------------------------------------------------------------------
-if not args.no_record:
+if args.record:
     import re as _re
-    sys.path.insert(0, "/system/user/volkmann/implicit_surfaces_project")
     from utils.paper_utils.results import record, make_id
     net = dict(depth=args.depth, width=args.width,
                activation=args.activation, loss=args.loss)
@@ -297,7 +295,11 @@ if not args.no_record:
                 })
                 n_recorded += 1
             except Exception as e:
+                failed = True
                 print(f"  [warn] record({variant}, dim={dim}) failed: "
                       f"{type(e).__name__}: {e}", flush=True)
     print(f"  recorded {n_recorded} rows → paper_utils.results/single_query_bound.jsonl",
           flush=True)
+
+if failed:
+    raise SystemExit(1)

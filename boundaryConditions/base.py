@@ -17,6 +17,8 @@ from typing import Any, Callable, NamedTuple, Tuple
 import jax
 import jax.numpy as jnp
 
+from utils.validation import check_int
+
 
 class BoundaryKind(IntEnum):
     DIRICHLET = 0
@@ -53,12 +55,6 @@ def storage_float_dtype() -> jnp.dtype:
     return jax.dtypes.canonicalize_dtype(jnp.float64)
 
 
-def _check_count(name: str, value: Any) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        raise ValueError(f"{name} must be a positive integer")
-    return value
-
-
 class BoundaryPartition(abc.ABC):
     """Assigns every point exactly one region id.
 
@@ -68,8 +64,8 @@ class BoundaryPartition(abc.ABC):
     """
 
     def __init__(self, dim: int, n_regions: int):
-        self.dim = _check_count("dim", dim)
-        self.n_regions = _check_count("n_regions", n_regions)
+        self.dim = check_int("dim", dim)
+        self.n_regions = check_int("n_regions", n_regions)
 
     @abc.abstractmethod
     def classify_point(self, params: Any, x: jax.Array) -> jax.Array:
@@ -110,7 +106,7 @@ class BoundaryData(abc.ABC):
     """
 
     def __init__(self, n_regions: int, value_shape: Tuple[int, ...] = ()):
-        self.n_regions = _check_count("n_regions", n_regions)
+        self.n_regions = check_int("n_regions", n_regions)
         shape = tuple(value_shape)
         if not all(isinstance(s, int) and not isinstance(s, bool) and s > 0 for s in shape):
             raise ValueError("value_shape must be a tuple of positive integers")

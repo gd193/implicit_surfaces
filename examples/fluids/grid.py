@@ -1,10 +1,7 @@
-"""Explicit grid-backed velocity and the shared clamped JAX interpolant."""
-from dataclasses import dataclass
+"""Clamped trilinear interpolation for grid-backed fields."""
 from itertools import product
 
-import jax
 import jax.numpy as jnp
-import numpy as np
 
 
 def sample_vector_grid(field, x, lower, spacing):
@@ -50,29 +47,3 @@ def sample_vector_grid_nested(field, x, lower, spacing):
         return mix(along_z(i, low[1]), along_z(i, high[1]), fraction[1])
 
     return mix(along_y(low[0]), along_y(high[0]), fraction[0])
-
-
-@dataclass(frozen=True)
-class GridVelocity:
-    """Velocity callback with explicit layout for fused CUDA evaluation.
-
-    Runtime data is params['velocity'], shaped (Nx, Ny, Nz, 3). lower is the
-    first cell center, and spacing is positive along each of the three axes.
-    Other velocity callbacks continue to use the generic projector path.
-    """
-    lower: tuple[float, float, float]
-    spacing: tuple[float, float, float]
-
-    def __post_init__(self):
-        lower, spacing = np.asarray(self.lower), np.asarray(self.spacing)
-        if (lower.shape != (3,) or spacing.shape != (3,)
-                or not np.isfinite([lower, spacing]).all() or np.any(spacing <= 0)):
-            raise ValueError('grid velocity requires finite 3D lower and positive spacing')
-        object.__setattr__(self, 'lower', tuple(float(v) for v in lower))
-        object.__setattr__(self, 'spacing', tuple(float(v) for v in spacing))
-
-    def __call__(self, params, x: jax.Array) -> jax.Array:
-        field = params['velocity']
-        if field.ndim != 4 or field.shape[-1] != 3 or min(field.shape[:3]) < 1:
-            raise ValueError('velocity grid must have shape (Nx, Ny, Nz, 3)')
-        return sample_vector_grid(field, x, self.lower, self.spacing)

@@ -8,6 +8,8 @@ import jax.random as jr
 import numpy as np
 import warp as wp
 
+from utils.validation import check_int
+
 _BLOCK_SIZE = 512
 _WARP_SIZE = 32
 _NATIVE_DIR = Path(__file__).with_name('native')
@@ -154,8 +156,7 @@ def grid_local_gradient(field, points, radii, key, *, lower, spacing, pairs, dra
         raise ValueError('expected a vector grid, (Q,3) points and (Q,) radii')
     if points.dtype not in (jnp.float32, jnp.float64) or field.dtype != points.dtype or radii.dtype != points.dtype:
         raise TypeError('field, points and radii must share float32 or float64 dtype')
-    if any(isinstance(n, bool) or not isinstance(n, int) or n < 1 for n in (pairs, draws)):
-        raise ValueError('positive integer pair and draw counts required')
+    pairs, draws = check_int('pairs', pairs), check_int('draws', draws)
     if pairs*draws > 2**31-_WARP_SIZE or len(points)*_WARP_SIZE >= 2**31:
         raise ValueError('sample or query count exceeds Warp int32 indexing')
     call = _kernel(points.dtype, lower, spacing, pairs, draws, field.shape[:3])

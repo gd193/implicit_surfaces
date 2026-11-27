@@ -38,14 +38,6 @@ def grid2d(lower, upper, n):
     return jnp.asarray(np.stack([X.ravel(), Y.ravel()], 1), jnp.float32), (X, Y)
 
 
-def slice3d(lower, upper, n, axis=2, value=0.):
-    """(n*n, 3) points on the plane x[axis] = value; also the in-plane grids."""
-    plane, (A, B) = grid2d(lower, upper, n)
-    cols = [plane[:, 0], plane[:, 1]]
-    cols.insert(axis, jnp.full(n * n, value, jnp.float32))
-    return jnp.stack(cols, 1), (A, B)
-
-
 def solve(surface, g, points, *, source=None, params=None, n_walks=256, eps=1e-3,
           max_steps=1000, seed=0):
     """WoS estimate at every grid point inside the surface, NaN outside.

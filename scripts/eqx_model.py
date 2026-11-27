@@ -28,17 +28,17 @@ def eqx_to_layers(eqx_path: str | Path) -> list[tuple[np.ndarray, np.ndarray]]:
 
 
 def load_eqx_mlp(path, activation_name, dtype):
-    """Build the benchmark forward pass and expose weights for metadata."""
+    """Build field(params, x) -> f(x) for surfaces (params unused); expose weights for metadata."""
     import jax
     import jax.numpy as jnp
 
     layers = [(jnp.asarray(w, dtype), jnp.asarray(b, dtype)) for w, b in eqx_to_layers(path)]
     activation = getattr(jax.nn, activation_name)
 
-    def evaluate(x):
+    def field(_params, x):
         for weight, bias in layers[:-1]:
             x = activation(weight @ x + bias)
         weight, bias = layers[-1]
         return weight @ x + bias
 
-    return evaluate, [weight for weight, _ in layers]
+    return field, [weight for weight, _ in layers]

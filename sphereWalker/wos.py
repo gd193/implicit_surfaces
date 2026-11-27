@@ -1,7 +1,6 @@
 """Walk on Spheres: value, first-ball gradient, and differential (shape) estimators."""
 
 import math
-from numbers import Integral
 from typing import Any, Callable, Tuple
 
 import jax
@@ -12,6 +11,7 @@ from sphereWalker.ops import mask_leaf, run_chunked
 from sphereWalker.types import (DifferentialWalkerState, GradientWalkerState, WalkerState,
                                 WalkerTermination as WT)
 from sphereWalker.walk import WalkIntegrator
+from utils.validation import check_int
 
 
 class WoSIntegrator(WalkIntegrator[WalkerState]):
@@ -74,13 +74,10 @@ class DifferentialWoSIntegrator(WoSIntegrator):
         if not math.isfinite(self.offset_l) or self.offset_l <= self.eps:
             raise ValueError("offset_l must be finite and greater than eps")
         self.offset_segment_fn = offset_segment_fn
-        if (isinstance(transition_bucket_size, bool) or not isinstance(transition_bucket_size, Integral)
-                or transition_bucket_size < 1):
-            raise ValueError("transition_bucket_size must be a positive integer")
         # Walkers switching phase, and completed walkers' Df/V_n, are
         # evaluated in chunks of this size, so the cost scales with the number
         # of such walkers, not the buffer size.
-        self.transition_bucket_size = int(transition_bucket_size)
+        self.transition_bucket_size = check_int('transition_bucket_size', transition_bucket_size)
 
     def _get_initial_state(self, init_position_batch, rng_keys, init_tr, buffer_size):
         dtype = init_position_batch.dtype

@@ -34,6 +34,7 @@ from examples.wos.common import load_volume, volume_path, volume_stages
 from sphereWalker import WoSGradientIntegrator
 from examples.fluids.dirichlet import make_gradient_velocity_solve
 from examples.fluids.transport import make_transport, make_vortex_stretch
+from utils.validation import check_int
 
 
 def make_wos_gradient_solve(*args, **kwargs) -> Callable:
@@ -89,7 +90,6 @@ def run3d(name, surface, params, lo, hi, n, omega0, *, title, steps=300, dt=.02,
           bound_clearance=False, max_active_states=1 << 20, stages=volume_stages,
           dye0=None, continuous_dye=False, diagnostics_fn=None, require_complete=False, render_frames=600,
           rotate_camera=True, check_transport=False, smoke=False, obstacle_metadata=(),
-          make_velocity_solve=make_gradient_velocity_solve,
           n_compactions=4, compaction_mode='uniform', advection_method='bfecc', refill_rounds=4,
           frame_stride=1, render_cutaway=False):
     """surface: implicit with empty_sphere(params, x, tr) and signed_value, negative inside.
@@ -176,14 +176,13 @@ def run3d(name, surface, params, lo, hi, n, omega0, *, title, steps=300, dt=.02,
 
         empty_sphere = lambda p, x, tr: surface.empty_sphere(p["surface"], x, tr)
         boundary = wall_psi if wall_psi is not None else (lambda x: jnp.zeros(3, x.dtype))
-        solve_velocity = make_velocity_solve(make_gradient_solve, empty_sphere, boundary,
+        solve_velocity = make_gradient_velocity_solve(make_gradient_solve, empty_sphere, boundary,
                                        lambda p, x: sample_vec(p["omega"], x), dim=3, eps=eps,
                                        max_steps=max_steps, source_takes_params=True,
                                        control_fn=control_fn)
         pts = points_j[solve_mask]
         if pts.shape[0] == 0:
             raise ValueError("no interior gradient solve points; increase grid resolution")
-        prepared_queries = solve_velocity.prepare_queries(pts)
         solve_indices = jnp.asarray(np.flatnonzero(solve_mask))
 
         @jax.jit
@@ -220,7 +219,7 @@ def run3d(name, surface, params, lo, hi, n, omega0, *, title, steps=300, dt=.02,
         try:
             for step in range(steps):
                 step_start = time.perf_counter()
-                estimate = solve_velocity.solve({"surface": params, "omega": omega}, prepared_queries,
+                estimate = solve_velocity({"surface": params, "omega": omega}, pts,
                                                 jax.random.PRNGKey(step), **options)
                 vel, count_values, summary = prepare_velocity(estimate)
                 counts, (zero_success, contributed, complete, finite) = jax.device_get((count_values, summary))

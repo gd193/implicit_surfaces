@@ -42,6 +42,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts.eqx_model import load_eqx_mlp
+from scripts.gpu_memory import gpu_memory_bytes
 from surfaces.implicit.jnp_bounded import jnpboundedImplicit
 
 
@@ -59,13 +60,13 @@ p.add_argument("--activation", default="softplus")
 p.add_argument("--d2", action=argparse.BooleanOptionalAction, default=True)
 p.add_argument("--d3", action=argparse.BooleanOptionalAction, default=False)
 p.add_argument("--ab_modes", nargs="+", default=["default"],
-               choices=["default", "fp32", "mixed", "fp64"],
+               choices=["default", "fp32", "fp64"],
                help="autobound precision_mode list")
 p.add_argument("--shape", default="bunny")
 p.add_argument("--depth", type=int, default=None)
 p.add_argument("--width", type=int, default=None)
 p.add_argument("--loss", default="SDF")
-p.add_argument("--no_record", action="store_true")
+p.add_argument("--record", action="store_true")
 p.add_argument("--primitives", nargs="+", default=DEFAULT_PRIMITIVES,
                choices=["forward", "classify_box", "empty_sphere", "ray_step"])
 p.add_argument("--batch_sizes", nargs="+", type=int, default=DEFAULT_BATCH_SIZES)
@@ -90,8 +91,7 @@ print(f"network={args.network}  primitives={args.primitives}  "
 # ----------------------------------------------------------------------------
 # MLP load (generic)
 # ----------------------------------------------------------------------------
-mlp_fn, weights = load_eqx_mlp(EQX_PATH, args.activation, DTYPE)
-def fn_2arg(_p, x): return mlp_fn(x)
+field, weights = load_eqx_mlp(EQX_PATH, args.activation, DTYPE)
 
 # Infer the architecture from the loaded weights.
 if args.depth is None:
@@ -104,9 +104,8 @@ if args.width is None:
 # Surface registry
 # ----------------------------------------------------------------------------
 def make_autobound(max_degree, precision_mode=None):
-    return jnpboundedImplicit(autobounds_max_degree=max_degree, fn=fn_2arg,
-                             level_set=0.0, dim=3, precision_mode=precision_mode,
-                             use_warp=jax.default_backend() == "gpu")
+    return jnpboundedImplicit(autobounds_max_degree=max_degree, fn=field,
+                             level_set=0.0, dim=3, precision_mode=precision_mode)
 
 
 variants = []
@@ -159,20 +158,10 @@ def make_callable(surface, prim):
 
 
 # ----------------------------------------------------------------------------
-# Memory helper
-# ----------------------------------------------------------------------------
-_dev = jax.devices()[0]
-def gpu_bytes_in_use() -> int:
-    try:
-        return int(_dev.memory_stats().get('bytes_in_use', 0))
-    except Exception:
-        return -1
-
-
-# ----------------------------------------------------------------------------
 # Main loop
 # ----------------------------------------------------------------------------
 results = {}   # (variant_label, primitive, B) → dict
+failed = False
 key0 = jr.PRNGKey(args.seed)
 
 for variant_label, factory in variants:
@@ -185,6 +174,7 @@ for variant_label, factory in variants:
         try:
             cfn = make_callable(surface, prim)
         except Exception as e:
+            failed = True
             print(f"  [{prim}]: build failed: {type(e).__name__}: {e}")
             continue
 
@@ -197,7 +187,7 @@ for variant_label, factory in variants:
                     out = cfn(*inputs)
                     jax.block_until_ready(out)
                 # Memory snapshot after warmup steady state
-                mem_bytes = gpu_bytes_in_use()
+                mem_bytes = gpu_memory_bytes()
                 # Timed
                 times = []
                 for _ in range(args.n_timed):
@@ -216,6 +206,7 @@ for variant_label, factory in variants:
                       f"med={t_med:8.2f} ms  thru={throughput:>10.2e}/s  "
                       f"mem={mem_bytes/1024/1024:8.1f} MB", flush=True)
             except Exception as e:
+                failed = True
                 results[(variant_label, prim, B)] = dict(error=type(e).__name__)
                 print(f"  [{prim:>13}] B={B:>7d}  FAIL ({type(e).__name__}: {str(e)[:80]})",
                       flush=True)
@@ -261,12 +252,12 @@ print_table("=== device memory in use (MB) ===", 'mem_mb', "{:>11.1f}")
 # benches and quality benches can sit in the same JSONL file and be
 # disambiguated by `metrics.primitive`.
 # ----------------------------------------------------------------------------
-if not args.no_record:
+if args.record:
     import re as _re
-    sys.path.insert(0, "/system/user/volkmann/implicit_surfaces_project")
     from utils.paper_utils.results import record, make_id
     net = dict(depth=args.depth, width=args.width,
                activation=args.activation, loss=args.loss)
+    n_recorded = 0
     for variant_label, _ in variants:
         variant = _re.sub(r'[^a-z0-9]+', '_', variant_label.lower()).strip('_')
         for prim in args.primitives:
@@ -277,6 +268,8 @@ if not args.no_record:
                 for r in [results.get((variant_label, prim, B), {})]
                 if r and 'ms_min' in r
             }
+            if not cells:
+                continue
             try:
                 record({
                     "id": make_id(args.shape, net, f"{variant}__{prim}",
@@ -295,8 +288,13 @@ if not args.no_record:
                     "system": {"gpu_index": os.environ.get("CUDA_VISIBLE_DEVICES")},
                     "seed": int(args.seed),
                 })
+                n_recorded += 1
             except Exception as e:
+                failed = True
                 print(f"  [warn] record({variant}/{prim}) failed: {type(e).__name__}: {e}",
                       flush=True)
-    print(f"  recorded {len(variants)*len(args.primitives)} rows → "
+    print(f"  recorded {n_recorded} rows → "
           f"paper_utils.results/single_query_bound.jsonl", flush=True)
+
+if failed:
+    raise SystemExit(1)

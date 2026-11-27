@@ -39,11 +39,9 @@ function `fn(params, region_id, x, normal) -> c`:
 
 ```python
 FunctionBoundaryData(kinds, lambda p, r, x, n: p['values'][r])        # gather
-FunctionBoundaryData.from_region_fns(kinds, [f0, f1])                  # lax.switch
 ```
 
-A gather costs the same for any region count; `from_region_fns` traces every
-branch.
+A gather costs the same for any region count.
 
 `BoundaryConditions(partition, data)` checks region counts and provides
 `dirichlet_fn(partition_params, data_params, normal_fn=None)` for the current
@@ -111,18 +109,4 @@ On an RTX 5060 laptop GPU (3D ball, f32, after compilation): a `256^3` grid
 builds in about 4 ms into 166k nodes; 1M point queries take about 1 ms and
 1M box queries about 13 ms, 92% of them certified.
 
-## Validation
-
-`scripts/test_boundary.py` checks point lookup against `HalfSpacePartition`,
-split-plane and outside-root ownership, conservative boxes against sampled
-points, construction on random grids (valid storage, minimal node count,
-exact lookup), GPU build and query when available, a custom tree subclass,
-pytree passing, data kinds and
-dtypes, scalar and vector values, and the WoS adapter on a split disk
-(`u(0) = 1/2`, and `u(p) = p` for vector data `g(x) = x`).
-
-```
-JAX_PLATFORMS=cpu python -m unittest scripts/test_boundary.py
-JAX_ENABLE_X64=true JAX_PLATFORMS=cpu python -m unittest scripts/test_boundary.py
-JAX_PLATFORMS=cuda,cpu python -m unittest scripts/test_boundary.py   # GPU test
-```
+The mixed-star example uses a voxel partition to select Dirichlet data by region. Run it with `python -m examples.wos.run mixed_star`.

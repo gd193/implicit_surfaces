@@ -6,9 +6,6 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-# Generated kNN benchmark samples stay outside version control.
-/docs/benchmarks/warp_knn.json
-
 # --- Jupyter Notebooks ---
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
@@ -31,7 +28,9 @@ scripts/*
 outputs/
 
 # Keep maintained benchmarks; local experiments stay ignored.
+!scripts/__init__.py
 !scripts/eqx_model.py
+!scripts/gpu_memory.py
 !scripts/bench/
 scripts/bench/*
 !scripts/bench/mesh_extraction/

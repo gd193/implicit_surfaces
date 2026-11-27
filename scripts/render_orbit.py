@@ -129,7 +129,7 @@ def render_orbit(surface: Any, params: Any, output: str | Path,
                    scene_bounds=config.bounds, termination_crit_fn=criterion)
     normals = config.shading == 'normals'
     if normals:
-        renderer = SimpleIntegrator.from_surface(camera(0), jnp.asarray(config.background), surface, **options)
+        renderer = SimpleIntegrator(camera(0), jnp.asarray(config.background), surface, **options)
         render_params = params
     else:
         material = Material(jnp.array([('diffuse', 'metal', 'glass').index(config.shading)]),

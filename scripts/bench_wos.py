@@ -23,9 +23,10 @@ sys.path.insert(0, str(ROOT))
 import numpy as np
 import jax, jax.numpy as jnp
 import jax.random as jr
+from scripts.eqx_model import load_eqx_mlp
+from scripts.gpu_memory import gpu_memory_bytes
 
 # Surface module imports also set jax_default_matmul_precision='highest'.
-from scripts.eqx_model import load_eqx_mlp
 from surfaces.implicit.jnp_bounded import jnpboundedImplicit
 from sphereWalker import WoSIntegrator
 from utils.rejection_sampling import sample_points_batched
@@ -48,8 +49,8 @@ p.add_argument("--width", type=int, default=32,
                help="MLP hidden width (for results metadata)")
 p.add_argument("--loss", default="SDF",
                help="loss the network was trained with (for results metadata)")
-p.add_argument("--no_record", action="store_true",
-               help="skip writing to paper_utils.results")
+p.add_argument("--record", action="store_true",
+               help="record results with the optional paper_utils package")
 p.add_argument("--n_test_points", type=int, default=256)
 p.add_argument("--n_walkers", type=int, default=1024)
 p.add_argument("--n_walkers_high", type=int, default=4096)
@@ -75,7 +76,6 @@ args = p.parse_args()
 ASSETS = ROOT / "assets"
 OUTPUTS = ROOT / "outputs"
 EQX_PATH = f"{ASSETS}/models/{args.network}.eqx"
-TEST_POINTS_DIR = f"{OUTPUTS}/wos_test_points"
 SOLUTION_DIR = f"{OUTPUTS}/wos_solutions"
 
 
@@ -83,62 +83,37 @@ def _slug(label: str) -> str:
     return re.sub(r'[^a-z0-9]+', '_', label.lower()).strip('_')
 
 
-def gpu_peak_bytes():
-    """Peak GPU bytes in use since process start."""
-    try:
-        return int(jax.devices()[0].memory_stats()['peak_bytes_in_use'])
-    except Exception:
-        return -1
-
-
-def gpu_in_use_bytes():
-    try:
-        return int(jax.devices()[0].memory_stats()['bytes_in_use'])
-    except Exception:
-        return -1
-
-
 # ----------------------------------------------------------------------------
 # MLP load (generic, mirrors quality bench)
 # ----------------------------------------------------------------------------
-mlp_fn, _ = load_eqx_mlp(EQX_PATH, args.activation, jnp.float32)
-def fn_2arg(_p, x): return mlp_fn(x)
+field, _ = load_eqx_mlp(EQX_PATH, args.activation, jnp.float32)
 print(f"loaded {EQX_PATH}", flush=True)
 
 
 # ----------------------------------------------------------------------------
-# Test points: rejection-sample inside iso-surface, cache for reproducibility
+# Test points: rejection-sample inside iso-surface, with a fixed seed
 # ----------------------------------------------------------------------------
-def sample_interior_points(n, bbox_half, isolevel, mlp, seed):
+def sample_interior_points(n, bbox_half, isolevel, field, seed):
     """Reject-sample uniform points in [-bbox_half,bbox_half]^3 with f(x) < isolevel.
     Uses the project's jit-traceable batched rejection sampler."""
     aa = -jnp.full((3,), bbox_half, dtype=jnp.float32)
     bb =  jnp.full((3,), bbox_half, dtype=jnp.float32)
     pts, ok = sample_points_batched(
-        fn=lambda _p, x: jnp.squeeze(mlp(x)),
+        fn=lambda p, x: jnp.squeeze(field(p, x)),
         params=None,
         accept_sample_fn=lambda v: v < isolevel,
-        init_buffer=None,
         key=jr.PRNGKey(seed),
         aa=aa, bb=bb,
         num_points=n,
-        batch_size=min(max(4096, n), n),
+        batch_size=n,
     )
     if not bool(ok):
         raise RuntimeError(f"rejection sampling exhausted before producing {n} interior points")
     return pts
 
 
-os.makedirs(TEST_POINTS_DIR, exist_ok=True)
-points_path = f"{TEST_POINTS_DIR}/{args.network}_n{args.n_test_points}_seed{args.seed}.npy"
-if os.path.exists(points_path):
-    test_points = jnp.asarray(np.load(points_path))
-    print(f"loaded test points: {points_path}  shape={test_points.shape}", flush=True)
-else:
-    test_points = sample_interior_points(args.n_test_points, args.bbox_half,
-                                          args.isolevel, mlp_fn, args.seed)
-    np.save(points_path, np.asarray(test_points))
-    print(f"sampled + saved test points → {points_path}  shape={test_points.shape}", flush=True)
+test_points = sample_interior_points(args.n_test_points, args.bbox_half,
+                                     args.isolevel, field, args.seed)
 
 
 # ----------------------------------------------------------------------------
@@ -240,8 +215,8 @@ def run_method(label, surface):
     rms = float(np.sqrt(np.mean(diff ** 2)))
     max_abs = float(np.max(np.abs(diff)))
 
-    peak_gb = gpu_peak_bytes() / (1024 ** 3)
-    in_use_gb = gpu_in_use_bytes() / (1024 ** 3)
+    peak_gb = gpu_memory_bytes('peak_bytes_in_use') / (1024 ** 3)
+    in_use_gb = gpu_memory_bytes() / (1024 ** 3)
     print(f'  warm: best {t_min:7.1f} ms | median {t_med:7.1f} ms | '
           f'mean nSteps {n_steps_mean:6.1f} | '
           f'RMS(u_low − u_high) {rms:.4e} | max {max_abs:.4e} | '
@@ -254,52 +229,49 @@ def run_method(label, surface):
              n_steps=np.asarray(last_out.nSteps),
              test_points=np.asarray(test_points),
              warm_ms=t_min, median_ms=t_med,
-             peak_bytes=gpu_peak_bytes(),
+             peak_bytes=gpu_memory_bytes('peak_bytes_in_use'),
              n_walkers=args.n_walkers, n_walkers_high=args.n_walkers_high)
 
     # Record to paper_utils.results JSONL.
-    if not args.no_record:
+    if args.record:
         from utils.paper_utils.results import record, make_id
+
         net = dict(depth=args.depth, width=args.width,
                    activation=args.activation, loss=args.loss)
         variant_id = _slug(label)
-        try:
-            record({
-                "id": make_id(args.shape, net, variant_id, "wos", seed=args.seed),
-                "shape": args.shape,
-                "network": net,
-                "variant": variant_id,
-                "algorithm": "wos",
-                "metrics": {
-                    "warm_best_ms": float(t_min),
-                    "warm_median_ms": float(t_med),
-                    "mean_n_steps": float(n_steps_mean),
-                    "rms_u_low_minus_high": float(rms),
-                    "max_u_low_minus_high": float(max_abs),
-                    "peak_gb": float(peak_gb),
-                    "in_use_gb": float(in_use_gb),
-                    "n_test_points": int(test_points.shape[0]),
-                    "n_walkers": int(args.n_walkers),
-                    "n_walkers_high": int(args.n_walkers_high),
-                    "max_steps": int(args.max_steps),
-                    "init_tr": float(args.init_tr),
-                    "eps": float(args.eps),
-                    "boundary_fn": args.boundary_fn,
-                    "n_compactions": int(args.n_compactions),
-                    "n_warmup": int(args.n_warmup),
-                    "n_timed": int(args.n_timed),
-                },
-                "system": {"gpu_index": os.environ.get("CUDA_VISIBLE_DEVICES")},
-                "seed": int(args.seed),
-            })
-            print(f'  recorded → paper_utils.results / wos.jsonl', flush=True)
-        except Exception as e:
-            print(f'  [warn] record() failed: {type(e).__name__}: {e}', flush=True)
+        record({
+            "id": make_id(args.shape, net, variant_id, "wos", seed=args.seed),
+            "shape": args.shape,
+            "network": net,
+            "variant": variant_id,
+            "algorithm": "wos",
+            "metrics": {
+                "warm_best_ms": float(t_min),
+                "warm_median_ms": float(t_med),
+                "mean_n_steps": float(n_steps_mean),
+                "rms_u_low_minus_high": float(rms),
+                "max_u_low_minus_high": float(max_abs),
+                "peak_gb": float(peak_gb),
+                "in_use_gb": float(in_use_gb),
+                "n_test_points": int(test_points.shape[0]),
+                "n_walkers": int(args.n_walkers),
+                "n_walkers_high": int(args.n_walkers_high),
+                "max_steps": int(args.max_steps),
+                "init_tr": float(args.init_tr),
+                "eps": float(args.eps),
+                "boundary_fn": args.boundary_fn,
+                "n_compactions": int(args.n_compactions),
+                "n_warmup": int(args.n_warmup),
+                "n_timed": int(args.n_timed),
+            },
+            "system": {"gpu_index": os.environ.get("CUDA_VISIBLE_DEVICES")},
+            "seed": int(args.seed),
+        })
+        print(f'  recorded → paper_utils.results / wos.jsonl', flush=True)
     print(f'  saved → {method_dir}/u.npz', flush=True)
 
 
-surface = jnpboundedImplicit(autobounds_max_degree=2, fn=fn_2arg, level_set=args.isolevel,
-                             dim=3, use_warp=jax.default_backend() == "gpu")
-label = f"autobound deg-2 ({surface.range_implementation})"
+surface = jnpboundedImplicit(autobounds_max_degree=2, fn=field, level_set=args.isolevel, dim=3)
+label = f"autobound deg-2 ({surface.implementation})"
 print(f"\n[{label}]", flush=True)
 run_method(label, surface)
