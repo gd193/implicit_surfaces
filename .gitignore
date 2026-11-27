@@ -31,6 +31,7 @@ scripts/*
 outputs/
 
 # Keep maintained benchmarks; local experiments stay ignored.
+!scripts/eqx_model.py
 !scripts/bench/
 scripts/bench/*
 !scripts/bench/mesh_extraction/

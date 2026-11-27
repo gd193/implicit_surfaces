@@ -2,7 +2,7 @@
 
 `assets/models/` holds the two tracked neural implicit models:
 
-1. **Stanford Bunny** (`bunny_softplus.eqx` and `bunny_softplus.npz`) — softplus MLP stored in both Equinox stream (`.eqx`, for `jnpboundedImplicit`) and NIQ archive (`.npz`, for `niImplicitSurface`) formats.
+1. **Stanford Bunny** (`bunny_softplus.eqx`) — softplus MLP stored as an Equinox stream for the autobounded surface benchmarks.
 2. **Twisted Torus (twist 10)** (`twisted_torus_twist10_softplus_64k.npz` + `.json`) — three width-32 hidden layers (2,273 parameters), scaled Softplus with beta 10, seed 7, trained for 64,000 steps on the twisted field from `scripts/train_twisted_torus.py`. Weights are stored as `w0,b0,...,w3,b3` and load without pickle.
 
 | Checkpoint | Twist | Steps | Validation MSE | Mean residual on target surface |

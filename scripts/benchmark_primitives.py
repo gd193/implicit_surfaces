@@ -8,21 +8,22 @@ For each (surface mode, primitive, batch size) cell:
     Records the working-set at this batch size; peak is monotonic in JAX
     so we read current after sync.
 
-Three primitives covered today:
-  * forward       — `surface(params, x)`  (raw MLP / fn)
-  * classify_box  — `surface.classify_box(params, lower, upper)`
-  * empty_sphere  — `surface.empty_sphere(params, x, tr)`
-  * ray_step      — `surface.ray_step(params, x, dir, tr)`
+Four primitives covered today:
+  * forward       — `surface(None, x)`  (raw MLP / fn)
+  * classify_box  — `surface.classify_box(None, lower, upper)`
+  * empty_sphere  — `surface.empty_sphere(None, x, tr)`
+  * ray_step      — `surface.ray_step(None, x, dir, tr)`
 
 Network selection mirrors the other benches: `--network <basename>` resolves
-both `assets/models/<name>.eqx` and `assets/models/<name>.npz`.
+`assets/models/<name>.eqx`.
 
 Usage:
   scripts/benchmark_primitives.py                    # all defaults
   scripts/benchmark_primitives.py --primitives forward classify_box
   scripts/benchmark_primitives.py --batch_sizes 1 1024 1048576 --no-d3
-  scripts/benchmark_primitives.py --modes interval affine_all --d2
+  scripts/benchmark_primitives.py --d3 --ab_modes fp32 fp64
 """
+from pathlib import Path
 import argparse, gc, os, sys, time
 
 import numpy as np
@@ -37,18 +38,16 @@ import jax.random as jr
 _X64 = bool(jax.config.read("jax_enable_x64"))
 DTYPE = jnp.float64 if _X64 else jnp.float32
 
-sys.path.insert(0, '/system/user/volkmann/implicit_surfaces_project')
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-import jnp_bounds.autobounds as jb
-from surfaces.implicit.ni import niImplicitSurface
+from scripts.eqx_model import load_eqx_mlp
 from surfaces.implicit.jnp_bounded import jnpboundedImplicit
 
 
 # ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------
-DEFAULT_MODES = ["interval", "affine_fixed", "slope_interval",
-                 "affine_truncate", "affine_all"]
 DEFAULT_PRIMITIVES = ["forward", "classify_box", "empty_sphere", "ray_step"]
 DEFAULT_BATCH_SIZES = [1, 32, 128, 1024, 8192, 65536, 262144, 1048576]
 
@@ -56,11 +55,7 @@ p = argparse.ArgumentParser()
 p.add_argument("--network", default="bunny_softplus")
 p.add_argument("--eqx_path", default=None,
                help="explicit eqx path; overrides --network resolution")
-p.add_argument("--npz_path", default=None,
-               help="explicit niq npz path; overrides --network resolution")
 p.add_argument("--activation", default="softplus")
-p.add_argument("--modes", nargs="*", default=DEFAULT_MODES,
-               help="NIQ modes; pass empty (--modes) to skip NIQ entirely.")
 p.add_argument("--d2", action=argparse.BooleanOptionalAction, default=True)
 p.add_argument("--d3", action=argparse.BooleanOptionalAction, default=False)
 p.add_argument("--ab_modes", nargs="+", default=["default"],
@@ -80,13 +75,12 @@ p.add_argument("--bbox_half", type=float, default=0.2,
                help="cube side / sphere radius / point sampling extent")
 p.add_argument("--init_tr", type=float, default=0.1)
 p.add_argument("--seed", type=int, default=0)
-p.add_argument("--affine_n_truncate", type=int, default=8)
-p.add_argument("--affine_truncate_policy", default="absolute")
 args = p.parse_args()
+if not (args.d2 or args.d3):
+    p.error("select at least one degree with --d2 or --d3")
 
-ASSETS = "/system/user/volkmann/implicit_surfaces_project/assets"
+ASSETS = ROOT / "assets"
 EQX_PATH = args.eqx_path or f"{ASSETS}/models/{args.network}.eqx"
-NPZ_PATH = args.npz_path or f"{ASSETS}/models/{args.network}.npz"
 
 print(f"JAX: {[d.platform for d in jax.devices()]}", flush=True)
 print(f"network={args.network}  primitives={args.primitives}  "
@@ -96,64 +90,26 @@ print(f"network={args.network}  primitives={args.primitives}  "
 # ----------------------------------------------------------------------------
 # MLP load (generic)
 # ----------------------------------------------------------------------------
-def load_eqx_mlp(path, activation_name):
-    arrs = []
-    with open(path, "rb") as f:
-        while True:
-            try: arrs.append(np.lib.format.read_array(f))
-            except (EOFError, ValueError): break
-    weights = [jnp.asarray(a, dtype=DTYPE) for a in arrs[0::2]]
-    biases  = [jnp.asarray(a, dtype=DTYPE) for a in arrs[1::2]]
-    act = getattr(jax.nn, activation_name)
-    def mlp(x):
-        h = x
-        for i in range(len(weights) - 1):
-            h = act(weights[i] @ h + biases[i])
-        return weights[-1] @ h + biases[-1]
-    return mlp
-
-
-mlp_fn = load_eqx_mlp(EQX_PATH, args.activation)
+mlp_fn, weights = load_eqx_mlp(EQX_PATH, args.activation, DTYPE)
 def fn_2arg(_p, x): return mlp_fn(x)
 
-# Infer depth/width from the eqx file if not provided.
-def _peek_arch(path):
-    arrs = []
-    with open(path, "rb") as f:
-        while True:
-            try: arrs.append(np.lib.format.read_array(f))
-            except (EOFError, ValueError): break
-    weights = arrs[0::2]
-    return len(weights) - 1, (weights[0].shape[0] if len(weights) > 1 else weights[-1].shape[0])
-
-if args.depth is None or args.width is None:
-    d_, w_ = _peek_arch(EQX_PATH)
-    args.depth = args.depth or d_
-    args.width = args.width or w_
+# Infer the architecture from the loaded weights.
+if args.depth is None:
+    args.depth = len(weights) - 1
+if args.width is None:
+    args.width = weights[0].shape[0]
 
 
 # ----------------------------------------------------------------------------
 # Surface registry
 # ----------------------------------------------------------------------------
-def make_niq(mode):
-    kw = {}
-    if mode == "affine_truncate":
-        kw["affine_n_truncate"] = args.affine_n_truncate
-        kw["affine_truncate_policy"] = args.affine_truncate_policy
-    return niImplicitSurface(mode=mode, npz_path=NPZ_PATH, level_set=0.0, dim=3, **kw)
-
 def make_autobound(max_degree, precision_mode=None):
-    s = jnpboundedImplicit(autobounds_max_degree=max_degree, fn=fn_2arg,
-                            level_set=0.0, dim=3, use_warp=True)
-    s.taylor_bounds = jb.taylor_bounds(mlp_fn, max_degree=max_degree, use_warp=True,
-                                        precision_mode=precision_mode)
-    return s
+    return jnpboundedImplicit(autobounds_max_degree=max_degree, fn=fn_2arg,
+                             level_set=0.0, dim=3, precision_mode=precision_mode,
+                             use_warp=jax.default_backend() == "gpu")
 
 
 variants = []
-for mode in args.modes:
-    label = f"niq:{mode}{f'({args.affine_n_truncate})' if mode=='affine_truncate' else ''}"
-    variants.append((label, lambda m=mode: make_niq(m)))
 for pm in args.ab_modes:
     pm_arg = None if pm == "default" else pm
     if args.d2:
@@ -191,15 +147,14 @@ def make_inputs(prim, B, key):
 
 def make_callable(surface, prim):
     """Build (jit + vmap)'d callable for the chosen primitive."""
-    params = getattr(surface, 'params', None)
     if prim == "forward":
-        f = jax.vmap(lambda x: surface(params, x))
+        f = jax.vmap(lambda x: surface(None, x))
     elif prim == "classify_box":
-        f = jax.vmap(lambda lo, hi: surface.classify_box(params, lo, hi))
+        f = jax.vmap(lambda lo, hi: surface.classify_box(None, lo, hi))
     elif prim == "empty_sphere":
-        f = jax.vmap(lambda x, tr: surface.empty_sphere(params, x, tr))
+        f = jax.vmap(lambda x, tr: surface.empty_sphere(None, x, tr))
     elif prim == "ray_step":
-        f = jax.vmap(lambda x, d, tr: surface.ray_step(params, x, d, tr))
+        f = jax.vmap(lambda x, d, tr: surface.ray_step(None, x, d, tr))
     return jax.jit(f)
 
 
@@ -224,10 +179,8 @@ for variant_label, factory in variants:
     print(f"\n=== variant: {variant_label} ===", flush=True)
     surface = factory()
     for prim in args.primitives:
-        # Some primitives might not be defined on a surface — skip.
-        method_name = {"forward": "__call__"}.get(prim, prim)
-        if not hasattr(surface, method_name) and prim != "forward":
-            print(f"  [{prim}]: skipped (no method on surface)")
+        if prim == "empty_sphere" and surface.autobounds_max_degree != 2:
+            print("  [empty_sphere]: requires a degree-two enclosure")
             continue
         try:
             cfn = make_callable(surface, prim)

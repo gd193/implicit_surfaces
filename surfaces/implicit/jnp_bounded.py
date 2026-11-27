@@ -54,6 +54,7 @@ class jnpboundedImplicit(ImplicitSurface):
         shrink_factor: float = 0.5,
         max_trust_region_size: float = float("inf"),
         min_trust_region_size: float = 1e-6,
+        precision_mode: str | None = None,
         **kwargs,
     ):
         """
@@ -90,6 +91,7 @@ class jnpboundedImplicit(ImplicitSurface):
             max_degree=self.autobounds_max_degree,
             composition_algorithm="softplus_cheap",
             composition_implementation=composition_implementation,
+            precision_mode=precision_mode,
         )
 
     def _derivative_builder(self, derivative_axes):
@@ -405,8 +407,7 @@ class jnpboundedImplicit(ImplicitSurface):
         """
         Largest provably-empty sphere around `x` within the trust region.
 
-        Returns (field_residual, safe_radius, next_trust_region_size) matching NIQ's
-        `empty_sphere` and `WoSIntegrator.step`'s contract:
+        Returns (field_residual, safe_radius, next_trust_region_size) for WoSIntegrator:
           * field_residual: f(x) − level_set
           * safe_radius: largest empty-sphere radius, clamped to TR/2
           * next_trust_region_size: TR · grow_factor when the polynomial-derived radius fills

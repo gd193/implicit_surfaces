@@ -78,8 +78,7 @@ class ImplicitSurface(abc.ABC):
             radius (jnp.ndarray)(,): radius of the largest provably-empty sphere
             next_trust_region_size (jnp.ndarray)(,): adaptive TR size for the *next* step.
                 Convention: grow when the empty sphere reached the TR boundary, shrink
-                otherwise; clipped to surface-specific [min_tr, max_tr]. Matches NIQ
-                cast_rays_iter step-size update so WoSIntegrator can consume it directly.
+                otherwise, clipped to surface-specific [min_tr, max_tr].
         """
         raise NotImplementedError("This method should be implemented by subclasses.")
     

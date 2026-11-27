@@ -7,25 +7,12 @@ For each (mode, region_dim, s) cell, sample N regions, classify each as
 POS/NEG/UNKNOWN, and report the fraction conclusively-signed. Bigger s with
 f >= threshold = tighter bound.
 
-Methods compared (subset selectable via --modes):
-  * niq:interval, niq:affine_fixed, niq:slope_interval,
-    niq:affine_truncate_8, niq:affine_all  — via niImplicitSurface
-  * autobound:d2  — via jnpboundedImplicit(max_degree=2, use_warp=True)
-  * autobound:d3  — same with max_degree=3 (opt-in via --d3)
-
-Network selection: pass `--network <basename>` and the script looks up
-  assets/models/<basename>.eqx                (for autobound surfaces)
-  assets/models/<basename>.npz                (for niq:* surfaces)
-
-Both files must exist (use scripts/convert_models.py if only one form is
-available). Activation must match what the .eqx was trained with —
-softplus by default; override with `--activation`.
-
 Usage:
   python scripts/benchmark_classify_quality.py
-  python scripts/benchmark_classify_quality.py --network bunny_softplus --modes interval affine_fixed
+  python scripts/benchmark_classify_quality.py --network bunny_softplus --ab_modes fp32 fp64
   python scripts/benchmark_classify_quality.py --d3 --n_regions 5000
 """
+from pathlib import Path
 import argparse
 import os
 import sys
@@ -37,42 +24,31 @@ import numpy as np
 if "fp64" in sys.argv:
     os.environ["JAX_ENABLE_X64"] = "True"
 import jax
-# Force fp32 matmul (mirror jnpboundedImplicit / niImplicitSurface — important
-# for the autobound polynomial constant to be correct under vmap; see
-# bench_raycast_clean.py for the full diagnostic).
+# Force fp32 matmul (mirror jnpboundedImplicit — important
+# for the autobound polynomial constant to be correct under vmap).
 jax.config.update("jax_default_matmul_precision", "highest")
 import jax.numpy as jnp
 _X64 = bool(jax.config.read("jax_enable_x64"))
 DTYPE = jnp.float64 if _X64 else jnp.float32
 
-sys.path.insert(0, '/system/user/volkmann/implicit_surfaces_project')
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
-import jnp_bounds.autobounds as jb
-from surfaces.implicit.ni import niImplicitSurface
+from scripts.eqx_model import load_eqx_mlp
 from surfaces.implicit.jnp_bounded import jnpboundedImplicit
 
 
 # ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------
-DEFAULT_MODES = [
-    "interval", "affine_fixed", "slope_interval",
-    "affine_truncate", "affine_all",
-]
 
 p = argparse.ArgumentParser()
 p.add_argument("--network", default="bunny_softplus",
-               help="basename; resolves to assets/models/<n>.eqx and "
-                    "assets/models/<n>.npz")
+               help="basename of the checkpoint in assets/models/<name>.eqx")
 p.add_argument("--eqx_path", default=None,
                help="explicit eqx path; overrides --network resolution")
-p.add_argument("--npz_path", default=None,
-               help="explicit niq npz path; overrides --network resolution")
 p.add_argument("--activation", default="softplus",
                help="MLP activation (jax.nn.* name); must match the .eqx file")
-p.add_argument("--modes", nargs="*", default=DEFAULT_MODES,
-               help="NIQ bound modes to include. Pass nothing (--modes) to skip "
-                    "NIQ entirely — useful for swish networks NIQ doesn't support.")
 p.add_argument("--d2", action=argparse.BooleanOptionalAction, default=True,
                help="include autobound deg-2 (warp=True)")
 p.add_argument("--d3", action=argparse.BooleanOptionalAction, default=False,
@@ -95,8 +71,6 @@ p.add_argument("--threshold", type=float, default=0.5)
 p.add_argument("--seed", type=int, default=0)
 p.add_argument("--chunk", type=int, default=8192,
                help="batch size for classify_box vmap; lower if OOM")
-p.add_argument("--affine_n_truncate", type=int, default=8)
-p.add_argument("--affine_truncate_policy", default="absolute")
 p.add_argument("--shape", default="bunny",
                help="paper_utils.results 'shape' field")
 p.add_argument("--depth", type=int, default=None,
@@ -108,16 +82,11 @@ p.add_argument("--loss", default="SDF",
 p.add_argument("--no_record", action="store_true",
                help="skip writing to paper_utils.results")
 args = p.parse_args()
+if not (args.d2 or args.d3):
+    p.error("select at least one degree with --d2 or --d3")
 
-ASSETS = "/system/user/volkmann/implicit_surfaces_project/assets"
+ASSETS = ROOT / "assets"
 EQX_PATH = args.eqx_path or f"{ASSETS}/models/{args.network}.eqx"
-NPZ_PATH = args.npz_path or f"{ASSETS}/models/{args.network}.npz"
-required = [EQX_PATH] + ([NPZ_PATH] if args.modes else [])
-for path in required:
-    if not os.path.exists(path):
-        print(f"ERROR: missing {path}; run scripts/convert_models.py first.")
-        sys.exit(2)
-
 print(f"JAX: {[d.platform for d in jax.devices()]}", flush=True)
 print(f"network={args.network}  activation={args.activation}  "
       f"n_regions={args.n_regions}  n_sizes={args.n_sizes}  "
@@ -127,75 +96,34 @@ print(f"network={args.network}  activation={args.activation}  "
 # ----------------------------------------------------------------------------
 # Generic eqx MLP loader (alternating W, b arrays; works for any depth)
 # ----------------------------------------------------------------------------
-def load_eqx_mlp(path, activation_name):
-    arrs = []
-    with open(path, "rb") as f:
-        while True:
-            try:
-                arrs.append(np.lib.format.read_array(f))
-            except (EOFError, ValueError):
-                break
-    if len(arrs) % 2 != 0:
-        raise ValueError(f"expected even number of arrays in {path}, got {len(arrs)}")
-    weights = [jnp.asarray(a, dtype=DTYPE) for a in arrs[0::2]]
-    biases  = [jnp.asarray(a, dtype=DTYPE) for a in arrs[1::2]]
-    act = getattr(jax.nn, activation_name)
-
-    def mlp(x):
-        h = x
-        for i in range(len(weights) - 1):
-            h = act(weights[i] @ h + biases[i])
-        return weights[-1] @ h + biases[-1]
-    return mlp, weights, biases
-
-
-mlp_fn, _W, _b = load_eqx_mlp(EQX_PATH, args.activation)
+mlp_fn, weights = load_eqx_mlp(EQX_PATH, args.activation, DTYPE)
 def fn_2arg(_p, x): return mlp_fn(x)
-print(f"loaded {EQX_PATH}: {len(_W)} layers, in={_W[0].shape[1]} out={_W[-1].shape[0]} "
-      f"hidden={tuple(W.shape[0] for W in _W[:-1])}", flush=True)
+print(f"loaded {EQX_PATH}: {len(weights)} layers, in={weights[0].shape[1]} out={weights[-1].shape[0]} "
+      f"hidden={tuple(W.shape[0] for W in weights[:-1])}", flush=True)
 
 # Infer depth/width from the eqx file if not provided.
 if args.depth is None:
-    args.depth = len(_W) - 1   # hidden layers = #weight matrices - 1 (output)
+    args.depth = len(weights) - 1   # hidden layers = #weight matrices - 1 (output)
 if args.width is None:
-    args.width = _W[0].shape[0] if len(_W) > 1 else _W[-1].shape[0]
+    args.width = weights[0].shape[0]
 
 
 # ----------------------------------------------------------------------------
 # Build classify_box callables per mode
 # ----------------------------------------------------------------------------
-def build_niq(mode):
-    kw = {}
-    if mode == "affine_truncate":
-        kw["affine_n_truncate"] = args.affine_n_truncate
-        kw["affine_truncate_policy"] = args.affine_truncate_policy
-    surf = niImplicitSurface(mode=mode, npz_path=NPZ_PATH, level_set=0.0, dim=3, **kw)
-    return surf
-
 def build_autobound(max_degree, precision_mode=None):
-    """precision_mode: None ('fp32 storage + fp32 compute' default), 'mixed'
-    ('fp32 storage + fp64 compute'), 'fp32', 'fp64'. See jb.taylor_bounds."""
-    surf = jnpboundedImplicit(autobounds_max_degree=max_degree, fn=fn_2arg,
-                               level_set=0.0, dim=3, use_warp=True)
-    surf.taylor_bounds = jb.taylor_bounds(
-        mlp_fn, max_degree=max_degree, use_warp=True,
-        precision_mode=precision_mode,
-    )
-    return surf
+    return jnpboundedImplicit(autobounds_max_degree=max_degree, fn=fn_2arg,
+                             level_set=0.0, dim=3, precision_mode=precision_mode,
+                             use_warp=jax.default_backend() == "gpu")
 
 
-methods = []                      # list[(label, surface, params)]
-for mode in args.modes:
-    label = f"niq:{mode}{'_'+str(args.affine_n_truncate) if mode=='affine_truncate' else ''}"
-    surf = build_niq(mode)
-    methods.append((label, surf, surf.params))
+methods = {}
 for pm in args.ab_modes:
-    pm_key = "default" if pm == "default" else pm
     pm_arg = None if pm == "default" else pm
     if args.d2:
-        methods.append((f"autobound:d2[{pm_key}]", build_autobound(2, pm_arg), None))
+        methods[f"autobound:d2[{pm}]"] = build_autobound(2, pm_arg)
     if args.d3:
-        methods.append((f"autobound:d3[{pm_key}]", build_autobound(3, pm_arg), None))
+        methods[f"autobound:d3[{pm}]"] = build_autobound(3, pm_arg)
 
 
 # ----------------------------------------------------------------------------
@@ -221,21 +149,7 @@ def _build_3d_classifier(surf):
     return fn
 
 
-def _build_1d_classifier_niq(surf):
-    """1D NIQ: classify ±s·d segment via _classify_general_box on (1,3) box_vec."""
-    @jax.jit
-    @jax.vmap
-    def fn(c, d, s):
-        # NIQ box_vec convention: shape (k,3) — half-extents along k axes.
-        box_vec = (s * d)[None, :]
-        niq_sign = surf._classify_general_box(surf.params, c, box_vec)
-        # Map NIQ {0:UNKNOWN, 1:POS, 2:NEG} → our {0:unknown, +1:pos, -1:neg}
-        return jnp.where(niq_sign == 1, jnp.int8(1),
-                jnp.where(niq_sign == 2, jnp.int8(-1), jnp.int8(0)))
-    return fn
-
-
-def _build_1d_classifier_ab(surf):
+def _build_1d_classifier(surf):
     """1D autobound: ray_step(±d, tr=2s) twice; classified iff min(t_pf, t_nf) >= s.
 
     Mirrors NIQ benchmark_quality._build_abroots_classifiers. The trust region is
@@ -254,16 +168,6 @@ def _build_1d_classifier_ab(surf):
                 jnp.where(fn_val_pf > 0, jnp.int8(1), jnp.int8(-1)),
                 jnp.int8(0))
     return fn
-
-
-def build_classifiers(surf):
-    """Return (classify_1d, classify_3d) for one surface."""
-    c3 = _build_3d_classifier(surf)
-    if isinstance(surf, niImplicitSurface):
-        c1 = _build_1d_classifier_niq(surf)
-    else:
-        c1 = _build_1d_classifier_ab(surf)
-    return c1, c3
 
 
 def chunked_apply_3d(cfn, centers, s_arr, chunk):
@@ -285,20 +189,19 @@ key = jax.random.PRNGKey(args.seed)
 
 # results[label][region_dim][s] -> fraction
 DIMS = sorted(set(args.region_dims))
-results = {label: {dim: {} for dim in DIMS} for (label, _, _) in methods}
+results = {label: {dim: {} for dim in DIMS} for label in methods}
 
 # Cache jit'd callables once per surface (capture by class).
 classifiers = {}
-for label, surf, _ in methods:
-    c1, c3 = build_classifiers(surf)
-    classifiers[label] = {1: c1, 3: c3}
+for label, surf in methods.items():
+    classifiers[label] = {1: _build_1d_classifier(surf), 3: _build_3d_classifier(surf)}
 
 t_total = time.time()
 for s in sizes:
     s_margin = float(s) * 1.01
     keep_max = max(args.data_bound - s_margin, 0.0)
     if keep_max <= 0.0:
-        for label, _, _ in methods:
+        for label in methods:
             for dim in DIMS:
                 results[label][dim][float(s)] = float("nan")
         continue
@@ -307,7 +210,7 @@ for s in sizes:
     s_arr   = jnp.full((args.n_regions,), float(s), dtype=DTYPE)
     dirs    = sample_unit_dirs(kd, args.n_regions) if 1 in DIMS else None
 
-    for label, _surf, _params in methods:
+    for label in methods:
         for dim in DIMS:
             try:
                 if dim == 3:
@@ -340,7 +243,7 @@ for dim in DIMS:
           f"classified  ({args.n_regions} regions per cell):")
     print(f"{'mode':>26}  {'half-width ↑':>14}")
     print("-" * 50)
-    for label, _, _ in methods:
+    for label in methods:
         s_keys = list(results[label][dim].keys())
         f_vals = list(results[label][dim].values())
         s_best = largest_s_above(s_keys, f_vals, args.threshold)
@@ -358,7 +261,7 @@ if not args.no_record:
     net = dict(depth=args.depth, width=args.width,
                activation=args.activation, loss=args.loss)
     n_recorded = 0
-    for label, _, _ in methods:
+    for label in methods:
         variant = _re.sub(r'[^a-z0-9]+', '_', label.lower()).strip('_')
         for dim in DIMS:
             s_keys = list(results[label][dim].keys())

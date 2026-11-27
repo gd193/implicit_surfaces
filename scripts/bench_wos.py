@@ -1,8 +1,6 @@
 """WoS benchmark — bunny_softplus interior, Δu=0 with Dirichlet g(x)=‖x‖² on f=0.
 
-Mirrors bench_raycast_clean.py's structure: same surface registry, same network
-selection, fp32 matmul forced via the surface modules. Each method runs through
-WoSIntegrator with its `empty_sphere`. Per method we report:
+The degree-two autobounded surface supplies its empty_sphere query to WoSIntegrator.
 
   * warm best/median ms (5 timed runs)
   * mean walker steps to absorption
@@ -13,25 +11,24 @@ Per-method output saved to outputs/wos_solutions/<method>/u.npz so a separate
 checker can compare any two runs after the fact.
 
 Usage:
-  bench_wos_clean.py
-  bench_wos_clean.py --variant autobound
-  bench_wos_clean.py --network bunny_softplus --n_test_points 256 --n_walkers 1024
+  python scripts/bench_wos.py
+  python scripts/bench_wos.py --network bunny_softplus --n_test_points 256 --n_walkers 1024
 """
-import argparse, os, re, subprocess, sys, time
+from pathlib import Path
+import argparse, os, re, sys, time
 
-sys.path.insert(0, '/system/user/volkmann/implicit_surfaces_project')
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 
 import numpy as np
 import jax, jax.numpy as jnp
 import jax.random as jr
-import jnp_bounds.autobounds as jb
 
 # Surface module imports also set jax_default_matmul_precision='highest'.
-from surfaces.implicit.ni import niImplicitSurface
+from scripts.eqx_model import load_eqx_mlp
 from surfaces.implicit.jnp_bounded import jnpboundedImplicit
 from sphereWalker import WoSIntegrator
 from utils.rejection_sampling import sample_points_batched
-from utils.paper_utils.results import record, make_id, record_failure
 
 print(f"JAX: {[d.platform for d in jax.devices()]}", flush=True)
 
@@ -39,7 +36,6 @@ print(f"JAX: {[d.platform for d in jax.devices()]}", flush=True)
 # ----------------------------------------------------------------------------
 # CLI
 # ----------------------------------------------------------------------------
-DEFAULT_MODES = ["interval", "affine_fixed", "slope_interval", "affine_truncate", "affine_all"]
 
 p = argparse.ArgumentParser()
 p.add_argument("--network", default="bunny_softplus")
@@ -54,12 +50,6 @@ p.add_argument("--loss", default="SDF",
                help="loss the network was trained with (for results metadata)")
 p.add_argument("--no_record", action="store_true",
                help="skip writing to paper_utils.results")
-p.add_argument("--variant", default=None,
-               help="substring filter on variant labels (comma-separated for multiple)")
-p.add_argument("--modes", nargs="+", default=DEFAULT_MODES,
-               help="NIQ bound modes to include")
-p.add_argument("--d2", action=argparse.BooleanOptionalAction, default=True)
-p.add_argument("--d3", action=argparse.BooleanOptionalAction, default=False)
 p.add_argument("--n_test_points", type=int, default=256)
 p.add_argument("--n_walkers", type=int, default=1024)
 p.add_argument("--n_walkers_high", type=int, default=4096)
@@ -79,15 +69,12 @@ p.add_argument("--n_timed", type=int, default=5)
 p.add_argument("--steps_between_refill", type=int, default=50)
 p.add_argument("--max_active_states", type=int, default=1_000_000)
 p.add_argument("--n_compactions", type=int, default=20)
-p.add_argument("--affine_n_truncate", type=int, default=8)
-p.add_argument("--affine_truncate_policy", default="absolute")
 args = p.parse_args()
 
 
-ASSETS = "/system/user/volkmann/implicit_surfaces_project/assets"
-OUTPUTS = "/system/user/volkmann/implicit_surfaces_project/outputs"
+ASSETS = ROOT / "assets"
+OUTPUTS = ROOT / "outputs"
 EQX_PATH = f"{ASSETS}/models/{args.network}.eqx"
-NPZ_PATH = f"{ASSETS}/models/{args.network}.npz"
 TEST_POINTS_DIR = f"{OUTPUTS}/wos_test_points"
 SOLUTION_DIR = f"{OUTPUTS}/wos_solutions"
 
@@ -97,10 +84,7 @@ def _slug(label: str) -> str:
 
 
 def gpu_peak_bytes():
-    """Peak GPU bytes in use since process start. Monotonic — does NOT reset
-    when JAX frees buffers. For accurate per-variant peak, run each variant
-    in a separate process (use --variant <one>). Mirrors NIQ's
-    `benchmark_wos.py:_peak_gb`."""
+    """Peak GPU bytes in use since process start."""
     try:
         return int(jax.devices()[0].memory_stats()['peak_bytes_in_use'])
     except Exception:
@@ -117,26 +101,7 @@ def gpu_in_use_bytes():
 # ----------------------------------------------------------------------------
 # MLP load (generic, mirrors quality bench)
 # ----------------------------------------------------------------------------
-def load_eqx_mlp(path, activation_name):
-    arrs = []
-    with open(path, "rb") as f:
-        while True:
-            try: arrs.append(np.lib.format.read_array(f))
-            except (EOFError, ValueError): break
-    if len(arrs) % 2 != 0:
-        raise ValueError(f"expected even number of arrays in {path}, got {len(arrs)}")
-    weights = [jnp.asarray(a, dtype=jnp.float32) for a in arrs[0::2]]
-    biases  = [jnp.asarray(a, dtype=jnp.float32) for a in arrs[1::2]]
-    act = getattr(jax.nn, activation_name)
-    def mlp(x):
-        h = x
-        for i in range(len(weights) - 1):
-            h = act(weights[i] @ h + biases[i])
-        return weights[-1] @ h + biases[-1]
-    return mlp
-
-
-mlp_fn = load_eqx_mlp(EQX_PATH, args.activation)
+mlp_fn, _ = load_eqx_mlp(EQX_PATH, args.activation, jnp.float32)
 def fn_2arg(_p, x): return mlp_fn(x)
 print(f"loaded {EQX_PATH}", flush=True)
 
@@ -188,43 +153,9 @@ def source_fn(x): return jnp.asarray(0.0)
 
 
 # ----------------------------------------------------------------------------
-# Surface factories
-# ----------------------------------------------------------------------------
-def make_niq(mode):
-    kw = {}
-    if mode == "affine_truncate":
-        kw["affine_n_truncate"] = args.affine_n_truncate
-        kw["affine_truncate_policy"] = args.affine_truncate_policy
-    return niImplicitSurface(mode=mode, npz_path=NPZ_PATH, level_set=args.isolevel, dim=3, **kw)
-
-def make_autobound(max_degree):
-    s = jnpboundedImplicit(autobounds_max_degree=max_degree, fn=fn_2arg,
-                            level_set=args.isolevel, dim=3, use_warp=True)
-    s.taylor_bounds = jb.taylor_bounds(mlp_fn, max_degree=max_degree, use_warp=True)
-    return s
-
-
-variants = []  # list[(label, factory, params_attr)]
-for mode in args.modes:
-    label = f"NIQ {mode}{f'({args.affine_n_truncate})' if mode=='affine_truncate' else ''}"
-    variants.append((label, lambda m=mode: make_niq(m), 'params'))
-if args.d2:
-    variants.append(("autobound deg-2 (warp=True)", lambda: make_autobound(2), None))
-if args.d3:
-    variants.append(("autobound deg-3 (warp=True)", lambda: make_autobound(3), None))
-
-if args.variant:
-    needles = [n.strip().lower() for n in args.variant.split(',') if n.strip()]
-    variants = [(l, f, p) for (l, f, p) in variants
-                if any(n in l.lower() for n in needles)]
-    if not variants:
-        print(f"No variants match {args.variant!r}"); sys.exit(1)
-
-
-# ----------------------------------------------------------------------------
 # Benchmark loop
 # ----------------------------------------------------------------------------
-def run_method(label, surface, params):
+def run_method(label, surface):
     integrator = WoSIntegrator(
         empty_sphere_fn=surface.empty_sphere,
         boundary_condition_fn=boundary_fn,
@@ -236,7 +167,7 @@ def run_method(label, surface, params):
 
     def integrate(n_walkers, key):
         return integrator.integrate_batch(
-            params=params,
+            params=None,
             initial_position_batch=test_points,
             rng_key=key,
             init_trust_region_size=args.init_tr,
@@ -255,7 +186,7 @@ def run_method(label, surface, params):
     print(f'  [pre-warm buckets — n_walkers / n_walkers_high]', flush=True)
     pre_warm_key = jr.fold_in(base_key, 10000)
     integrator.pre_warm_compaction_buckets(
-        params=params,
+        params=None,
         initial_position_batch=test_points,
         rng_key=pre_warm_key,
         init_trust_region_size=args.init_tr,
@@ -265,7 +196,7 @@ def run_method(label, surface, params):
         n_compactions=args.n_compactions,
     )
     integrator.pre_warm_compaction_buckets(
-        params=params,
+        params=None,
         initial_position_batch=test_points,
         rng_key=jr.fold_in(base_key, 10001),
         init_trust_region_size=args.init_tr,
@@ -328,9 +259,10 @@ def run_method(label, surface, params):
 
     # Record to paper_utils.results JSONL.
     if not args.no_record:
+        from utils.paper_utils.results import record, make_id
         net = dict(depth=args.depth, width=args.width,
                    activation=args.activation, loss=args.loss)
-        variant_id = _slug(label).replace("warp_true", "warp")
+        variant_id = _slug(label)
         try:
             record({
                 "id": make_id(args.shape, net, variant_id, "wos", seed=args.seed),
@@ -366,13 +298,8 @@ def run_method(label, surface, params):
     print(f'  saved → {method_dir}/u.npz', flush=True)
 
 
-for label, factory, params_attr in variants:
-    print(f'\n[{label}]', flush=True)
-    try:
-        surface = factory()
-        params = getattr(surface, params_attr) if params_attr else None
-        run_method(label, surface, params)
-    except Exception as e:
-        import traceback
-        print(f'  FAILED: {type(e).__name__}: {e}', flush=True)
-        traceback.print_exc()
+surface = jnpboundedImplicit(autobounds_max_degree=2, fn=fn_2arg, level_set=args.isolevel,
+                             dim=3, use_warp=jax.default_backend() == "gpu")
+label = f"autobound deg-2 ({surface.range_implementation})"
+print(f"\n[{label}]", flush=True)
+run_method(label, surface)

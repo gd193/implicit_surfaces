@@ -13,7 +13,6 @@ from sphereWalker import WoSIntegrator
 from sphereWalker.types import WalkerTermination as WT
 from surfaces.implicit.harmonic import poissonSurface
 from surfaces.implicit.lipschitz import lipschitzImplicit
-from surfaces.implicit.ni import niImplicitSurface
 from surfaces.implicit.primitives import sphere_sdf
 from utils.sampling_primitives import (
     sample_uniform_ray_bbox_2d,
@@ -140,10 +139,6 @@ def test_classify_box_rejects_corner_clipping_plane(shrink):
     assert int(surface.classify_box(params, lower, upper)) == 0
     # Well clear of the box: certified.
     assert int(surface.classify_box({"d": jnp.float32(2.0 * half_diag)}, lower, upper)) == -1
-
-def test_ni_implicit_surface_rejects_nonzero_level_set():
-    with pytest.raises(ValueError, match="level_set=0.0"):
-        niImplicitSurface(mode="interval", npz_path="unused.npz", level_set=0.5)
 
 
 def test_uniform_ray_bbox_samplers_finite_and_on_box():
